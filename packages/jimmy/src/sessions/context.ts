@@ -21,7 +21,7 @@ export function buildContext(opts: {
 
   // ── Identity ──────────────────────────────────────────────
   if (opts.employee) {
-    sections.push(opts.employee.persona);
+    sections.push(buildEmployeeIdentity(opts.employee));
   } else {
     sections.push(buildIdentity());
   }
@@ -70,6 +70,36 @@ export function buildContext(opts: {
 // ═══════════════════════════════════════════════════════════════
 // Section builders
 // ═══════════════════════════════════════════════════════════════
+
+function buildEmployeeIdentity(employee: Employee): string {
+  return `# You are ${employee.displayName}
+
+You are an AI employee in the Jimmy gateway system.
+
+## Your persona
+${employee.persona}
+
+## Your role
+- **Name**: ${employee.name}
+- **Display name**: ${employee.displayName}
+- **Department**: ${employee.department}
+- **Rank**: ${employee.rank}
+- **Engine**: ${employee.engine}
+- **Model**: ${employee.model}
+
+## System context
+You are part of the Jimmy AI gateway — a system that orchestrates AI workers. You have access to the filesystem, can run commands, call APIs, and send messages via connectors. Your working directory is \`~/.jimmy\` (${JIMMY_HOME}).
+
+You can:
+- Read and write files in the Jimmy home directory
+- Run shell commands
+- Call the Jimmy gateway API to interact with other parts of the system
+- Send messages via connectors (Slack, etc.)
+- Access skills, knowledge base, and documentation
+- Collaborate with other employees by mentioning them or creating sessions
+
+Be proactive, take initiative, and deliver results. You're not a chatbot — you're a worker.`;
+}
 
 function buildIdentity(): string {
   return `# You are Jimmy
@@ -228,15 +258,15 @@ function buildConnectorContext(connectors: string[]): string {
   lines.push(`You can send messages and interact with external services via the Jimmy gateway API.`);
   lines.push(`Use bash with curl to call these endpoints:\n`);
 
-  if (connectors.includes("slack")) {
-    lines.push(`### Slack`);
-    lines.push(`- **Send message**: \`curl -X POST http://127.0.0.1:7777/api/connectors/slack/send -H 'Content-Type: application/json' -d '{"channel":"CHANNEL_ID","text":"message"}'\``);
+  for (const name of connectors) {
+    lines.push(`### ${name}`);
+    lines.push(`- **Send message**: \`curl -X POST http://127.0.0.1:7777/api/connectors/${name}/send -H 'Content-Type: application/json' -d '{"channel":"CHANNEL_ID","text":"message"}'\``);
     lines.push(`- **Send threaded reply**: add \`"thread":"THREAD_TS"\` to the JSON body`);
-    lines.push(`- Channel IDs can be found in \`~/.jimmy/config.yaml\` or by checking Slack`);
-    lines.push(`- You can proactively send messages to Slack without being asked — e.g., to notify about completed tasks, errors, or status updates`);
+    lines.push(`- You can proactively send messages without being asked — e.g., to notify about completed tasks, errors, or status updates`);
   }
 
-  lines.push(`\n- **List connectors**: \`curl http://127.0.0.1:7777/api/connectors\``);
+  lines.push(`\n- **List all connectors**: \`curl http://127.0.0.1:7777/api/connectors\``);
+  lines.push(`- Channel IDs and connector config can be found in \`~/.jimmy/config.yaml\``);
   return lines.join("\n");
 }
 
