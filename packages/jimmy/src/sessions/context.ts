@@ -61,6 +61,10 @@ export function buildContext(opts: {
     sections.push(buildConnectorContext(opts.connectors));
   }
 
+  // ── Local environment ────────────────────────────────────
+  const envCtx = buildEnvironmentContext();
+  if (envCtx) sections.push(envCtx);
+
   // ── Gateway API reference ─────────────────────────────────
   sections.push(buildApiReference());
 
@@ -267,6 +271,55 @@ function buildConnectorContext(connectors: string[]): string {
 
   lines.push(`\n- **List all connectors**: \`curl http://127.0.0.1:7777/api/connectors\``);
   lines.push(`- Channel IDs and connector config can be found in \`~/.jimmy/config.yaml\``);
+  return lines.join("\n");
+}
+
+function buildEnvironmentContext(): string | null {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const lines: string[] = [`## Local environment`];
+  let hasContent = false;
+
+  // Scan for known tools/platforms in home directory
+  const toolDirs: { dir: string; label: string; description: string }[] = [
+    { dir: ".openclaw", label: "OpenClaw", description: "AI agent platform (agents, cron, memory, hooks, credentials)" },
+    { dir: ".claude", label: "Claude Code", description: "Claude Code CLI config and projects" },
+    { dir: ".codex", label: "Codex", description: "OpenAI Codex CLI config" },
+  ];
+
+  for (const tool of toolDirs) {
+    const toolPath = path.join(home, tool.dir);
+    try {
+      const stat = fs.statSync(toolPath);
+      if (stat.isDirectory()) {
+        const contents = fs.readdirSync(toolPath).filter(f => !f.startsWith("."));
+        lines.push(`- **${tool.label}** (\`~/${tool.dir}/\`): ${tool.description}`);
+        if (contents.length > 0) {
+          lines.push(`  Contents: ${contents.slice(0, 15).join(", ")}${contents.length > 15 ? `, ... (${contents.length} total)` : ""}`);
+        }
+        hasContent = true;
+      }
+    } catch {
+      // doesn't exist
+    }
+  }
+
+  // Scan ~/Projects for user's codebases
+  const projectsDir = path.join(home, "Projects");
+  try {
+    const projects = fs.readdirSync(projectsDir).filter(f => {
+      try { return fs.statSync(path.join(projectsDir, f)).isDirectory(); } catch { return false; }
+    });
+    if (projects.length > 0) {
+      lines.push(`- **Projects** (\`~/Projects/\`): ${projects.join(", ")}`);
+      hasContent = true;
+    }
+  } catch {
+    // no Projects dir
+  }
+
+  if (!hasContent) return null;
+
+  lines.push(`\nWhen the user asks about tools or systems on their machine, check these directories first before saying you don't know. Be resourceful — explore the filesystem.`);
   return lines.join("\n");
 }
 
