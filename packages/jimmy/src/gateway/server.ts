@@ -139,7 +139,8 @@ export async function startGateway(
     getConfig: () => currentConfig,
   };
 
-  // Resolve web UI directory (may not exist yet)
+  // Resolve web UI directory — bundled into dist/web/ by postbuild script
+  // At runtime __dirname is dist/src/gateway/, so ../../web resolves to dist/web/
   const webDir = path.resolve(__dirname, "..", "..", "web");
 
   // Create HTTP server
@@ -165,8 +166,13 @@ export async function startGateway(
 
     // Static files for web UI
     if (!serveStatic(req, res, webDir)) {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Not found" }));
+      if (url === "/" || url === "/index.html") {
+        res.writeHead(503, { "Content-Type": "text/html" });
+        res.end("<html><body><h1>Web UI not built</h1><p>Run <code>pnpm build</code> from the project root to build the web UI.</p></body></html>");
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not found" }));
+      }
     }
   });
 

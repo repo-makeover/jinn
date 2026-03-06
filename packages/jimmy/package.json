@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "postbuild": "cp -r ../web/out dist/web || true",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
