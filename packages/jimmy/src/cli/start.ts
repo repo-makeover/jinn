@@ -3,7 +3,7 @@ import { JINN_HOME } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
 import { startForeground, startDaemon } from "../gateway/lifecycle.js";
 
-export async function runStart(opts: { daemon?: boolean }): Promise<void> {
+export async function runStart(opts: { daemon?: boolean; port?: number }): Promise<void> {
   if (!fs.existsSync(JINN_HOME)) {
     console.error(
       `Error: ${JINN_HOME} does not exist. Run "jinn setup" first.`
@@ -12,6 +12,11 @@ export async function runStart(opts: { daemon?: boolean }): Promise<void> {
   }
 
   const config = loadConfig();
+
+  // Allow CLI --port to override config
+  if (opts.port) {
+    config.gateway.port = opts.port;
+  }
 
   if (opts.daemon) {
     startDaemon(config);

@@ -32,9 +32,10 @@ program
   .command("start")
   .description("Start the gateway daemon")
   .option("--daemon", "Run in background")
+  .option("-p, --port <port>", "Override the gateway port from config")
   .action(async (opts) => {
     const { runStart } = await import("../src/cli/start.js");
-    await runStart(opts);
+    await runStart({ daemon: opts.daemon, port: opts.port ? parseInt(opts.port, 10) : undefined });
   });
 
 program

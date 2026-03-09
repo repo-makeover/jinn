@@ -287,7 +287,18 @@ export async function startGateway(
   const port = config.gateway.port || 7777;
   const host = config.gateway.host || "127.0.0.1";
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        const msg = `Port ${port} is already in use.`;
+        logger.error(msg);
+        console.error(`\nError: ${msg}`);
+        console.error(`\nTry: jinn start -p ${port + 1}`);
+        console.error(`Or update the port in config.yaml\n`);
+        process.exit(1);
+      }
+      reject(err);
+    });
     server.listen(port, host, () => {
       logger.info(`${gatewayName} gateway listening on http://${host}:${port} (boot ${bootId})`);
       resolve();

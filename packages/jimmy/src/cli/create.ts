@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   loadInstances,
   saveInstances,
   nextAvailablePort,
   type Instance,
 } from "./instances.js";
-import { TEMPLATE_DIR } from "../shared/paths.js";
 
 const GREEN = "\x1b[32m";
 const DIM = "\x1b[2m";
@@ -42,18 +42,20 @@ export async function runCreate(name: string, port?: number): Promise<void> {
     process.exit(1);
   }
 
-  // Set env so that when we import setup, paths resolve correctly
-  process.env.JINN_HOME = home;
-  process.env.JINN_INSTANCE = name;
+  // Run setup in a subprocess with JINN_HOME set so paths.ts resolves correctly.
+  // This avoids Node module caching issues — paths.ts evaluates fresh in the child.
+  const jinnBin = process.argv[1];
+  try {
+    execFileSync(process.execPath, [jinnBin, "setup"], {
+      env: { ...process.env, JINN_HOME: home, JINN_INSTANCE: name },
+      stdio: "inherit",
+    });
+  } catch {
+    console.error(`${RED}Error:${RESET} Failed to run setup for instance "${name}".`);
+    process.exit(1);
+  }
 
-  // Run setup for this instance
-  const { runSetup } = await import("./setup.js");
-
-  // We need to patch the config to use the assigned port and instance name
-  // First run setup to create the directory structure
-  await runSetup();
-
-  // Now patch the config with the correct port and portal name
+  // Patch the config with the correct port and portal name
   const configPath = path.join(home, "config.yaml");
   if (fs.existsSync(configPath)) {
     let config = fs.readFileSync(configPath, "utf-8");
