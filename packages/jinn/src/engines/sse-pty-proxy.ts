@@ -115,11 +115,14 @@ function isRetriableUpstreamError(err: NodeJS.ErrnoException): boolean {
  * We distinguish the main agent from sub-agents by the request's `system` prompt:
  * Claude Code keeps the top-level agent's system prompt byte-stable across the whole
  * session (required for prompt-cache hits), while each sub-agent carries its own
- * distinct system prompt. We fingerprint the first request's system as "main";
- * every other system is a sub-agent. Sub-agent events are still teed, but TAGGED
- * with a stable per-sub-agent id (from its system fp + task prompt) via `StreamCtx`,
- * so the chat pane routes them into a collapsible card instead of the main
- * transcript. Fail-open: an unparseable body / missing system prompt => main.
+ * distinct system prompt. We fingerprint the first TOOL-BEARING request's system
+ * as "main"; every other tool-bearing system is a sub-agent. Auxiliary requests
+ * (no tools — e.g. haiku topic/title detection, quota checks) are ignored entirely
+ * so they can neither poison the main fingerprint nor spawn a card. Sub-agent
+ * events are still teed, but TAGGED with a stable per-sub-agent id (from its system
+ * fp + task prompt) via `StreamCtx`, so the chat pane routes them into a collapsible
+ * card instead of the main transcript. Fail-open: unparseable body / missing
+ * system / no tools => main (untagged).
  */
 export class SsePtyProxy {
   private server: http.Server;
@@ -268,10 +271,17 @@ export class SsePtyProxy {
    *  with a stable id (system fp + first user message) + a short label (the task).
    *  Fail-open: unparseable body / no system prompt => {} (treated as main). */
   private classifyRequest(body: Buffer): StreamCtx {
-    let json: { system?: unknown; messages?: unknown } | null = null;
-    try { json = JSON.parse(body.toString("utf-8")) as { system?: unknown; messages?: unknown }; }
+    let json: { system?: unknown; messages?: unknown; tools?: unknown } | null = null;
+    try { json = JSON.parse(body.toString("utf-8")) as { system?: unknown; messages?: unknown; tools?: unknown }; }
     catch { return {}; }
     if (!json || json.system == null) return {};                 // can't classify → main
+    // Only genuine AGENT turns (main agent + Task sub-agents) carry a tool set.
+    // Claude Code also fires AUXILIARY requests through this same proxy — topic/
+    // title detection on haiku, quota checks — which have no tools and a small,
+    // varying system. Those must never set the main fingerprint (a poisoned
+    // baseline tags every real turn as a "sub-agent" → a card per message/tool
+    // call) nor be tagged themselves. Skip them entirely.
+    if (!Array.isArray(json.tools) || json.tools.length === 0) return {};
     const fp = createHash("sha1").update(stableSystemSignature(json.system)).digest("hex");
     if (this.mainSystemFp == null) { this.mainSystemFp = fp; return {}; } // first = main
     if (fp === this.mainSystemFp) return {};                     // main agent
