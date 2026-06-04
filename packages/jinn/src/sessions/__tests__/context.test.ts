@@ -122,15 +122,40 @@ describe("buildContext — config awareness", () => {
 });
 
 describe("buildContext — self-evolution is omitted when configured", () => {
-  // In this environment ~/.jinn/knowledge/user-profile.md is populated (>50 chars),
-  // so buildEvolutionContext returns null → no onboarding block in steady state.
-  it("does not emit the onboarding self-evolution block for a configured install", () => {
-    const out = buildContext({ ...baseOpts });
+  // Hermetic: point JINN_HOME at a temp dir WITH a populated user-profile.md and
+  // re-import the module graph, so the result is deterministic regardless of the
+  // runner's real ~/.jinn (a dev box has a profile; CI does not). With the profile
+  // >=50 chars, buildEvolutionContext returns null → no onboarding block.
+  let tmpHome: string;
+  const prevHome = process.env.JINN_HOME;
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-ctx-cfg-"));
+    fs.mkdirSync(path.join(tmpHome, "knowledge"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, "knowledge", "user-profile.md"),
+      "# the operator\nSolo indie developer running several apps. This profile is well past fifty chars.",
+    );
+    process.env.JINN_HOME = tmpHome;
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.JINN_HOME;
+    else process.env.JINN_HOME = prevHome;
+    vi.resetModules();
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("does not emit the onboarding self-evolution block for a configured install", async () => {
+    const { buildContext: freshBuild } = await import("../context.js");
+    const out = freshBuild({ ...baseOpts });
     expect(out).not.toContain("ONBOARDING MODE");
   });
 
-  it("never emits self-evolution in employee mode", () => {
-    const out = buildContext({ ...baseOpts, employee: minimalEmployee });
+  it("never emits self-evolution in employee mode", async () => {
+    const { buildContext: freshBuild } = await import("../context.js");
+    const out = freshBuild({ ...baseOpts, employee: minimalEmployee });
     expect(out).not.toContain("## Self-evolution");
     expect(out).not.toContain("ONBOARDING MODE");
   });
