@@ -62,6 +62,39 @@ export function startDaemon(config: JinnConfig): void {
   child.unref();
 }
 
+/**
+ * Restart the gateway from a DETACHED, reparented helper process.
+ *
+ * The whole point: a `jinn stop && jinn start` run from *inside* a gateway
+ * session fails because `stop` kills the gateway, whose shutdown kills all PTYs
+ * — including the very session running the command — so `start` never executes.
+ * This forks a helper (restart-entry.js) that is detached + unref'd + disconnected,
+ * so it is reparented to launchd/init and SURVIVES the gateway's killAll(). The
+ * helper does stop → waitForPortFree → startDaemon out of band. The returning
+ * gateway then resumes the interrupted session.
+ */
+export function restartDetached(): void {
+  const __filename = fileURLToPath(import.meta.url);
+  const candidateEntryScripts = [
+    path.resolve(path.dirname(__filename), "restart-entry.js"),
+    path.resolve(path.dirname(__filename), "..", "..", "dist", "src", "gateway", "restart-entry.js"),
+  ];
+  const entryScript = candidateEntryScripts.find((p) => fs.existsSync(p)) ?? candidateEntryScripts[0];
+
+  const child = fork(entryScript, [], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, JINN_HOME },
+  });
+
+  if (child.pid) {
+    logger.info(`Gateway restart helper started with PID ${child.pid}`);
+  }
+
+  child.disconnect();
+  child.unref();
+}
+
 export function stop(port?: number): boolean {
   // Try PID file first
   if (fs.existsSync(PID_FILE)) {
@@ -138,6 +171,22 @@ function findPidOnPort(port: number): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Poll until nothing is listening on `port`, or `timeoutMs` elapses.
+ * Returns true if the port became free, false on timeout (caller should start
+ * anyway — startGateway will surface EADDRINUSE if it's still bound). This is
+ * the race-killer: it prevents a fresh daemon from racing the old one's
+ * graceful shutdown (up to 5s) into an EADDRINUSE crash.
+ */
+export async function waitForPortFree(port: number, timeoutMs = 10_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (findPidOnPort(port) === null) return true;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
 }
 
 export interface GatewayStatus {

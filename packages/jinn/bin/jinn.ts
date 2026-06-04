@@ -49,6 +49,14 @@ program
   });
 
 program
+  .command("restart")
+  .description("Restart the gateway (detached — safe to run from inside a session)")
+  .action(async () => {
+    const { runRestart } = await import("../src/cli/restart.js");
+    await runRestart();
+  });
+
+program
   .command("status")
   .description("Show gateway status")
   .action(async () => {
