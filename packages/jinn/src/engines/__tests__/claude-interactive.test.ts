@@ -7,7 +7,8 @@ import { describe, it, expect, vi } from "vitest";
 // focused and CI-portable.
 vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 
-import { TurnResolver } from "../claude-interactive.js";
+import { TurnResolver, buildInteractiveArgs } from "../claude-interactive.js";
+import { MAIN_AGENT_SENTINEL } from "../sse-pty-proxy.js";
 
 describe("TurnResolver", () => {
   it("resolves only after BOTH SessionStart and Stop", async () => {
@@ -56,5 +57,32 @@ describe("TurnResolver", () => {
     expect(v.error).toMatch(/rate_limit/);
     expect(v.numTurns).toBe(1);
     expect(r.stopFailure?.error).toBe("rate_limit");
+  });
+});
+
+describe("buildInteractiveArgs — system prompt + sentinel via CLI flag", () => {
+  // Regression guard: the claude CLI ignores the settings-file `appendSystemPrompt`
+  // KEY (≥2.1.x), so the persona + MAIN_AGENT_SENTINEL MUST go via the
+  // --append-system-prompt FLAG, or the SSE proxy never tees and live streaming dies.
+  const flagValue = (args: string[]): string | undefined => {
+    const i = args.indexOf("--append-system-prompt");
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+
+  it("emits --append-system-prompt carrying the persona AND the sentinel", () => {
+    const args = buildInteractiveArgs({
+      prompt: "hi",
+      settingsPath: "/tmp/s.json",
+      appendSystemPrompt: `You are Jinn's COO.\n\n${MAIN_AGENT_SENTINEL}`,
+    });
+    const v = flagValue(args);
+    expect(v).toBeDefined();
+    expect(v).toContain("You are Jinn's COO.");
+    expect(v).toContain(MAIN_AGENT_SENTINEL);
+  });
+
+  it("omits the flag when no appendSystemPrompt is given", () => {
+    const args = buildInteractiveArgs({ prompt: "hi", settingsPath: "/tmp/s.json" });
+    expect(args).not.toContain("--append-system-prompt");
   });
 });

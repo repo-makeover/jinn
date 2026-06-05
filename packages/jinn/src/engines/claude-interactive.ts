@@ -21,6 +21,11 @@ interface InteractiveArgsOpts {
   mcpConfigPath?: string;
   cliFlags?: string[];
   attachments?: string[];
+  /** Gateway system prompt (persona/org context) + main-agent sentinel, passed via
+   *  the CLI `--append-system-prompt` flag. The settings-file `appendSystemPrompt`
+   *  KEY is ignored by claude CLI ≥2.1.x, so this flag is the only path that
+   *  actually lands it in the request `system` (and thus lets the SSE proxy tee). */
+  appendSystemPrompt?: string;
 }
 
 interface TranscriptUsage { inputTokens: number; outputTokens: number; cacheTokens: number; assistantTurns: number; }
@@ -104,7 +109,7 @@ function rateLimitFromStopFailure(payload: HookPayload | undefined): EngineRateL
   return { status: "rejected", rateLimitType: "interactive_detected" };
 }
 
-function buildInteractiveArgs(o: InteractiveArgsOpts): string[] {
+export function buildInteractiveArgs(o: InteractiveArgsOpts): string[] {
   const args: string[] = [];
   if (o.resumeSessionId) args.push("--resume", o.resumeSessionId);
 
@@ -120,6 +125,7 @@ function buildInteractiveArgs(o: InteractiveArgsOpts): string[] {
   args.push("--dangerously-skip-permissions");
   args.push("--disallowedTools", "AskUserQuestion", "ExitPlanMode");
   args.push("--settings", o.settingsPath);
+  if (o.appendSystemPrompt) args.push("--append-system-prompt", o.appendSystemPrompt);
   if (o.cliFlags?.length) args.push(...o.cliFlags);
   if (o.mcpConfigPath) args.push("--mcp-config", o.mcpConfigPath);
   return args;
@@ -295,7 +301,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
   /** Model/effort the live PTY was spawned with, per session. `--model`/`--effort`
    *  apply only at spawn, so a mid-chat switch must cold-respawn rather than reuse
    *  the warm PTY (which would keep running the old model). */
-  private spawnParams = new Map<string, { model?: string; effortLevel?: string }>();
+  private spawnParams = new Map<string, { model?: string; effortLevel?: string; appendApplied?: boolean }>();
 
   constructor(
     private lifecycle: PtyLifecycleManager,
@@ -319,8 +325,16 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     if (warm) {
       const prev = this.spawnParams.get(jinnSessionId);
       const norm = (v?: string) => (!v || v === "default" ? "" : v);
-      if (prev && (norm(opts.model) !== norm(prev.model) || norm(opts.effortLevel) !== norm(prev.effortLevel))) {
-        logger.info(`InteractiveClaudeEngine: model/effort changed for ${jinnSessionId} (model ${prev.model ?? "default"}→${opts.model ?? "default"}, effort ${prev.effortLevel ?? "default"}→${opts.effortLevel ?? "default"}) — cold respawn`);
+      const modelOrEffortChanged =
+        !!prev && (norm(opts.model) !== norm(prev.model) || norm(opts.effortLevel) !== norm(prev.effortLevel));
+      // Idle-spawned PTYs (terminal view) are born WITHOUT --append-system-prompt, so
+      // they carry neither the persona/org context nor the main-agent sentinel. Force a
+      // cold respawn on the first real turn so it runs on-persona AND streams to the
+      // chat pane (the sentinel is what makes the SSE proxy tee). --resume preserves
+      // the conversation.
+      const missingPrompt = !prev || prev.appendApplied !== true;
+      if (modelOrEffortChanged || missingPrompt) {
+        logger.info(`InteractiveClaudeEngine: cold respawn for ${jinnSessionId} (${modelOrEffortChanged ? "model/effort changed" : "warm PTY missing --append-system-prompt"})`);
         this.lifecycle.releaseSession(jinnSessionId);
         warm = undefined;
       }
@@ -330,15 +344,12 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     // releaseSession() fires onCleanup → cleanupSessionSettings(), which DELETES this
     // exact file. Writing it earlier meant the model/effort cold-respawn spawned
     // `claude --settings <file>` against a file we'd just unlinked → the CLI/xterm
-    // view showed "Settings file not found". Appends the main-agent sentinel so the
-    // SSE proxy tees ONLY this top-level agent's turns (sub-agents get Claude Code's
-    // own system prompt, no sentinel) — see SsePtyProxy.shouldTeeToUi.
+    // view showed "Settings file not found". The settings file carries HOOKS only; the
+    // system prompt + main-agent sentinel go via the --append-system-prompt CLI flag at
+    // spawn() (the settings-file appendSystemPrompt KEY is ignored by claude ≥2.1.x).
     const settingsPath = writeSessionSettings(CLAUDE_SETTINGS_DIR, jinnSessionId, {
       sessionId: jinnSessionId,
       relayScript: HOOK_RELAY_SCRIPT,
-      appendSystemPrompt: opts.systemPrompt
-        ? `${opts.systemPrompt}\n\n${MAIN_AGENT_SENTINEL}`
-        : MAIN_AGENT_SENTINEL,
     });
     const resolver = new TurnResolver({
       fallbackSessionId: opts.resumeSessionId,
@@ -580,6 +591,12 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       mcpConfigPath: opts.mcpConfigPath,
       cliFlags: opts.cliFlags,
       attachments: opts.attachments,
+      // Persona/org context + main-agent sentinel via the CLI flag (the settings-file
+      // appendSystemPrompt KEY is ignored by claude ≥2.1.x). The sentinel lets the SSE
+      // proxy tee this turn's stream to the chat pane; sub-agents have no sentinel.
+      appendSystemPrompt: opts.systemPrompt
+        ? `${opts.systemPrompt}\n\n${MAIN_AGENT_SENTINEL}`
+        : MAIN_AGENT_SENTINEL,
     });
     const { proxy, port } = await this.startProxy(jinnSessionId);
     const env = this.buildPtyEnv(port || undefined);
@@ -593,7 +610,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       cwd: opts.cwd || JINN_HOME,
       env,
     });
-    this.spawnParams.set(jinnSessionId, { model: opts.model, effortLevel: opts.effortLevel });
+    this.spawnParams.set(jinnSessionId, { model: opts.model, effortLevel: opts.effortLevel, appendApplied: true });
     return this.wireProcToStream(jinnSessionId, proc, port ? proxy : undefined);
   }
 
@@ -648,7 +665,9 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
           env,
         });
         const handle = this.wireProcToStream(jinnSessionId, proc, port ? proxy : undefined);
-        this.spawnParams.set(jinnSessionId, { model: opts.model, effortLevel: undefined });
+        // Idle spawn carries no --append-system-prompt (the view-only PTY); mark it so
+        // the first real turn through run() cold-respawns with the persona + sentinel.
+        this.spawnParams.set(jinnSessionId, { model: opts.model, effortLevel: undefined, appendApplied: false });
         this.lifecycle.adopt(jinnSessionId, handle);
       } catch (err) {
         logger.warn(`ensureIdleSpawn failed for session ${jinnSessionId}: ${err instanceof Error ? err.message : String(err)}`);
