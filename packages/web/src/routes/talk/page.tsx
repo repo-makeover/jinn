@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils"
 import { useTheme } from "@/routes/providers"
 import { Constellation } from "./constellation"
 import { Transcript } from "./transcript"
+import { CardStack } from "./cards/card-stack"
 import { useTalk } from "./use-talk"
 
 export default function TalkPage() {
@@ -77,6 +78,21 @@ export default function TalkPage() {
 
       {/* The constellation fills the surface: orchestrator + COO satellites */}
       <Constellation state={talk.state} level={talk.level} children={talk.children} />
+
+      {/* Detail cards — a lower band that sits below the orb centre and above the
+          mic so it never covers the avatar or the control on mobile. The deck is
+          pointer-events:none (links re-enable themselves); cards drift in/out. */}
+      {talk.cards.length > 0 && (
+        <div
+          className="pointer-events-none absolute inset-x-0 z-20 flex items-end justify-center overflow-hidden px-4"
+          style={{
+            bottom: "calc(max(env(safe-area-inset-bottom), 22px) + 96px)",
+            maxHeight: "46dvh",
+          }}
+        >
+          <CardStack cards={talk.cards} />
+        </div>
+      )}
 
       {/* Bottom control: a single big mic button + status hint */}
       <div

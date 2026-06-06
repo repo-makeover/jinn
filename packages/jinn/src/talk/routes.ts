@@ -15,6 +15,8 @@
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import type { ApiContext } from "../gateway/api.js";
 import { createSession, getSessionBySessionKey } from "../sessions/registry.js";
+import { validateCard } from "./card-validate.js";
+import { TALK_EVENTS } from "./protocol.js";
 import { getTalkTts } from "./tts-stream.js";
 
 /** Stable session key for the single hands-free orchestrator surface. */
@@ -93,6 +95,97 @@ export async function handleTalkApi(
           });
         });
       json(res, { status: "downloading" });
+      return true;
+    }
+
+    // ── Cards surface ───────────────────────────────────────────────────
+    // The orchestrator (or any process acting on its behalf) pushes structured
+    // content to the /talk UI by POSTing cards here. Each route validates the
+    // untrusted body, then broadcasts the canonical talk:card* WS event so every
+    // connected client mirrors the change. Cards are addressed by sessionId
+    // (which talk surface) and, for update/dismiss, by cardId.
+
+    // POST /api/talk/card — push a new card onto the surface.
+    if (method === "POST" && pathname === "/api/talk/card") {
+      const parsed = await readJsonBody(req, res);
+      if (!parsed.ok) return true;
+      const body = (parsed.body ?? {}) as { sessionId?: unknown; card?: unknown };
+      if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+        badRequest(res, "sessionId must be a non-empty string");
+        return true;
+      }
+      const validated = validateCard(body.card);
+      if (!validated.ok) {
+        badRequest(res, validated.error);
+        return true;
+      }
+      context.emit(TALK_EVENTS.card, { sessionId: body.sessionId, card: validated.card });
+      json(res, { ok: true });
+      return true;
+    }
+
+    // POST /api/talk/card/update — patch an existing card by id.
+    if (method === "POST" && pathname === "/api/talk/card/update") {
+      const parsed = await readJsonBody(req, res);
+      if (!parsed.ok) return true;
+      const body = (parsed.body ?? {}) as {
+        sessionId?: unknown;
+        cardId?: unknown;
+        patch?: unknown;
+      };
+      if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+        badRequest(res, "sessionId must be a non-empty string");
+        return true;
+      }
+      if (typeof body.cardId !== "string" || body.cardId.length === 0) {
+        badRequest(res, "cardId must be a non-empty string");
+        return true;
+      }
+      if (typeof body.patch !== "object" || body.patch === null || Array.isArray(body.patch)) {
+        badRequest(res, "patch must be a non-null object");
+        return true;
+      }
+      context.emit(TALK_EVENTS.cardUpdate, {
+        sessionId: body.sessionId,
+        cardId: body.cardId,
+        patch: body.patch,
+      });
+      json(res, { ok: true });
+      return true;
+    }
+
+    // POST /api/talk/card/dismiss — remove a single card by id.
+    if (method === "POST" && pathname === "/api/talk/card/dismiss") {
+      const parsed = await readJsonBody(req, res);
+      if (!parsed.ok) return true;
+      const body = (parsed.body ?? {}) as { sessionId?: unknown; cardId?: unknown };
+      if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+        badRequest(res, "sessionId must be a non-empty string");
+        return true;
+      }
+      if (typeof body.cardId !== "string" || body.cardId.length === 0) {
+        badRequest(res, "cardId must be a non-empty string");
+        return true;
+      }
+      context.emit(TALK_EVENTS.cardDismiss, {
+        sessionId: body.sessionId,
+        cardId: body.cardId,
+      });
+      json(res, { ok: true });
+      return true;
+    }
+
+    // POST /api/talk/card/clear — wipe all cards for a surface.
+    if (method === "POST" && pathname === "/api/talk/card/clear") {
+      const parsed = await readJsonBody(req, res);
+      if (!parsed.ok) return true;
+      const body = (parsed.body ?? {}) as { sessionId?: unknown };
+      if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+        badRequest(res, "sessionId must be a non-empty string");
+        return true;
+      }
+      context.emit(TALK_EVENTS.cardClear, { sessionId: body.sessionId });
+      json(res, { ok: true });
       return true;
     }
 

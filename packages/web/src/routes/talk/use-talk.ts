@@ -22,11 +22,17 @@ import {
   TALK_EVENTS,
   type TalkAudioEvent,
   type TalkFocusEvent,
+  type TalkCardEvent,
+  type TalkCardUpdateEvent,
+  type TalkCardDismissEvent,
   type SessionDeltaEvent,
   type SessionCompletedEvent,
 } from "./protocol"
 import type { TranscriptEntry } from "./transcript"
-import type { AvatarState } from "./types"
+import type { AvatarState, Card } from "./types"
+
+/** Most recent cards kept on the surface at once (older ones drift out). */
+const MAX_CARDS = 4
 
 export type TtsStatus =
   | { kind: "idle" }
@@ -47,6 +53,8 @@ export interface UseTalkReturn {
   entries: TranscriptEntry[]
   /** Active COO child sessions (satellite orbs around the orchestrator). */
   children: TalkChild[]
+  /** Detail cards the orchestrator pushed for the current answer(s). */
+  cards: Card[]
   /** 0..1 while listening/speaking (server audio), undefined → orb self-animates. */
   level: number | undefined
   connected: boolean
@@ -63,6 +71,7 @@ export function useTalk(): UseTalkReturn {
   const [state, setState] = useState<AvatarState>("idle")
   const [entries, setEntries] = useState<TranscriptEntry[]>([])
   const [children, setChildren] = useState<TalkChild[]>([])
+  const [cards, setCards] = useState<Card[]>([])
   const [level, setLevel] = useState<number | undefined>(undefined)
   const [ttsStatus, setTtsStatus] = useState<TtsStatus>({ kind: "idle" })
 
@@ -169,6 +178,32 @@ export function useTalk(): UseTalkReturn {
     childRemovalTimers.current.set(id, t)
   }, [])
 
+  // ---- Detail-card surface (orchestrator pushes via POST /api/talk/card) ----
+  // talk:card upserts by id (re-posting the same id updates it in place);
+  // talk:card:update patches one card; :dismiss drops one; :clear wipes all.
+  const upsertCard = useCallback((card: Card) => {
+    setCards((prev) => {
+      const i = prev.findIndex((c) => c.id === card.id)
+      if (i !== -1) {
+        const next = prev.slice()
+        next[i] = card
+        return next
+      }
+      const next = [...prev, card]
+      return next.length > MAX_CARDS ? next.slice(next.length - MAX_CARDS) : next
+    })
+  }, [])
+
+  const patchCard = useCallback((id: string, patch: Partial<Card>) => {
+    setCards((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...patch } as Card) : c)))
+  }, [])
+
+  const dismissCard = useCallback((id: string) => {
+    setCards((prev) => prev.filter((c) => c.id !== id))
+  }, [])
+
+  const clearCards = useCallback(() => setCards([]), [])
+
   // ---- WS subscription -----------------------------------------------------
   useEffect(() => {
     const player = playerRef.current!
@@ -249,6 +284,27 @@ export function useTalk(): UseTalkReturn {
           startLevelLoop("output")
           break
         }
+        case TALK_EVENTS.card: {
+          if (!isOrch) break
+          upsertCard((payload as TalkCardEvent).card)
+          break
+        }
+        case TALK_EVENTS.cardUpdate: {
+          if (!isOrch) break
+          const ev = payload as TalkCardUpdateEvent
+          patchCard(ev.cardId, ev.patch)
+          break
+        }
+        case TALK_EVENTS.cardDismiss: {
+          if (!isOrch) break
+          dismissCard((payload as TalkCardDismissEvent).cardId)
+          break
+        }
+        case TALK_EVENTS.cardClear: {
+          if (!isOrch) break
+          clearCards()
+          break
+        }
         case "session:completed": {
           void (payload as SessionCompletedEvent)
           if (isOrch) {
@@ -265,7 +321,7 @@ export function useTalk(): UseTalkReturn {
     })
 
     return () => { unsub() }
-  }, [gateway, appendAssistantText, upsertChild, scheduleChildRemoval, startLevelLoop, stopLevelLoop])
+  }, [gateway, appendAssistantText, upsertChild, scheduleChildRemoval, startLevelLoop, stopLevelLoop, upsertCard, patchCard, dismissCard, clearCards])
 
   // ---- Bootstrap orchestrator + probe TTS ----------------------------------
   useEffect(() => {
@@ -337,13 +393,13 @@ export function useTalk(): UseTalkReturn {
 
   return useMemo(
     () => ({
-      state, entries, children, level,
+      state, entries, children, cards, level,
       connected: gateway.connected,
       listening,
       sttAvailable: stt.available,
       ttsStatus,
       startListening, stop,
     }),
-    [state, entries, children, level, gateway.connected, listening, stt.available, ttsStatus, startListening, stop],
+    [state, entries, children, cards, level, gateway.connected, listening, stt.available, ttsStatus, startListening, stop],
   )
 }
