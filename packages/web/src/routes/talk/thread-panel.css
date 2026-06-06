@@ -163,6 +163,11 @@
   transition: color 160ms ease, background 160ms ease;
 }
 .tp__icon:hover { color: var(--text-secondary); background: var(--fill-secondary); }
+/* Routing-target toggle: lit in the channel hue when this thread is the target. */
+.tp__icon[data-active="true"] {
+  color: hsl(var(--tp-hue) 70% 58%);
+  background: color-mix(in srgb, hsl(var(--tp-hue) 70% 55%) 16%, transparent);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .tp__chev { transition: none; }

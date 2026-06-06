@@ -6,7 +6,7 @@
  * drives the loop (tap to talk, tap to send). TTS is browser SpeechSynthesis by
  * default, so it speaks aloud on the phone with no server deps.
  */
-import { useCallback } from "react"
+import { useCallback, useState } from "react"
 import { Link } from "react-router-dom"
 import { ArrowLeft, Mic, Square, Sun, Moon } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -15,11 +15,14 @@ import { Constellation } from "./constellation"
 import { Transcript } from "./transcript"
 import { CardStack } from "./cards/card-stack"
 import { ThreadPanel } from "./thread-panel"
+import { ChildSessionModal } from "./child-session-modal"
 import { useTalk } from "./use-talk"
 
 export default function TalkPage() {
   const { theme, setTheme } = useTheme()
   const talk = useTalk()
+  // Which COO child session's chat the modal is showing (null → closed).
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null)
 
   const isRecording = talk.listening
 
@@ -78,7 +81,12 @@ export default function TalkPage() {
       </div>
 
       {/* The constellation fills the surface: orchestrator + COO satellites */}
-      <Constellation state={talk.state} level={talk.level} threads={talk.threads} />
+      <Constellation
+        state={talk.state}
+        level={talk.level}
+        threads={talk.threads}
+        onOpenSession={setChatSessionId}
+      />
 
       {/* COO thread panel — visibility + manual switch/rename/dismiss. Top-left,
           below the bar, so it never fights the orb, mic, or cards. */}
@@ -92,6 +100,7 @@ export default function TalkPage() {
           onSelect={talk.selectThread}
           onRename={talk.renameThread}
           onDismiss={talk.dismissThread}
+          onOpenSession={setChatSessionId}
         />
       </div>
 
@@ -129,6 +138,13 @@ export default function TalkPage() {
           {isRecording ? <Square size={22} className="fill-current" /> : <Mic size={26} />}
         </button>
       </div>
+
+      {/* Read-only chat popup for a tapped COO child session (chip or orb). */}
+      <ChildSessionModal
+        sessionId={chatSessionId}
+        open={!!chatSessionId}
+        onClose={() => setChatSessionId(null)}
+      />
     </div>
   )
 }

@@ -9,7 +9,7 @@
  * light + dark, and sits top-left so it never fights the orb, mic, or cards.
  */
 import { useState } from "react"
-import { Plus, X, Pencil, ChevronDown, Layers } from "lucide-react"
+import { Plus, X, Pencil, ChevronDown, Layers, Target } from "lucide-react"
 import type { TalkThread } from "./use-talk"
 import "./thread-panel.css"
 
@@ -20,9 +20,11 @@ export interface ThreadPanelProps {
   onSelect: (id: string | null) => void
   onRename: (id: string, label: string) => void
   onDismiss: (id: string) => void
+  /** Open the read-only chat popup for a COO child session (chip = its id). */
+  onOpenSession: (id: string) => void
 }
 
-export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDismiss }: ThreadPanelProps) {
+export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDismiss, onOpenSession }: ThreadPanelProps) {
   const [open, setOpen] = useState(true)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState("")
@@ -85,9 +87,9 @@ export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDis
                 ) : (
                   <button
                     className="tp__label"
-                    onClick={() => onSelect(selected ? null : t.id)}
-                    onDoubleClick={() => startEdit(t)}
-                    title={selected ? "Routing here — tap to unset" : "Route next message here"}
+                    onClick={() => onOpenSession(t.id)}
+                    aria-label={`Open conversation: ${t.label}`}
+                    title="Open conversation"
                   >
                     {t.label}
                   </button>
@@ -97,6 +99,16 @@ export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDis
                   {running ? "Running" : "Done"}
                 </span>
 
+                <button
+                  className="tp__icon"
+                  data-active={selected}
+                  aria-label={selected ? "Stop routing here" : "Route next message here"}
+                  aria-pressed={selected}
+                  title={selected ? "Routing here — tap to unset" : "Route next message here"}
+                  onClick={() => onSelect(selected ? null : t.id)}
+                >
+                  <Target size={13} />
+                </button>
                 <button className="tp__icon" aria-label="Rename thread" onClick={() => startEdit(t)}>
                   <Pencil size={12} />
                 </button>

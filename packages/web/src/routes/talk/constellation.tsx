@@ -7,7 +7,7 @@
  * results returning (child → main). Children spread out as their count grows and
  * fade out shortly after they finish.
  */
-import { useLayoutEffect, useRef, useState } from "react"
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react"
 import { AuraAvatar } from "./aura-avatar"
 import type { AvatarState } from "./types"
 import type { TalkThread } from "./use-talk"
@@ -17,11 +17,13 @@ interface ConstellationProps {
   state: AvatarState
   level: number | undefined
   threads: TalkThread[]
+  /** Open the read-only chat popup for a satellite (COO child) session. */
+  onOpenSession?: (id: string) => void
 }
 
 interface Pt { x: number; y: number }
 
-export function Constellation({ state, level, threads }: ConstellationProps) {
+export function Constellation({ state, level, threads, onOpenSession }: ConstellationProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [dims, setDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
   // Track which child ids have already mounted, so only NEW ones pop in.
@@ -115,16 +117,33 @@ export function Constellation({ state, level, threads }: ConstellationProps) {
         const isNew = !mountedRef.current.has(c.id)
         if (isNew) mountedRef.current.add(c.id)
         const isFocused = c.id === activeId
+        const clickable = !!onOpenSession
+        const openLabel = `Open conversation: ${c.label || "thread"}`
         return (
           <div
             key={c.id}
-            className={`cst-orb ${isNew ? "cst-orb-enter" : ""}`}
+            className={`cst-orb ${isNew ? "cst-orb-enter" : ""}${clickable ? " cst-orb-clickable" : ""}`}
             style={{
               left: center.x,
               top: center.y,
               zIndex: isFocused ? 4 : 3,
               opacity: isFocused ? 1 : c.state === "idle" ? 0.4 : 0.6,
             }}
+            {...(clickable
+              ? {
+                  role: "button",
+                  tabIndex: 0,
+                  "aria-label": openLabel,
+                  title: openLabel,
+                  onClick: () => onOpenSession?.(c.id),
+                  onKeyDown: (e: KeyboardEvent) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      onOpenSession?.(c.id)
+                    }
+                  },
+                }
+              : {})}
           >
             {/* Inner scaler: the focused satellite swells, the others recede —
                 a transform-only highlight that never re-inits the orb canvas. */}
