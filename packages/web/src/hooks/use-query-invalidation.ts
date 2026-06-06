@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useGateway } from '@/hooks/use-gateway'
 import { queryKeys } from '@/lib/query-keys'
+import { removeFromSessionsCache } from '@/hooks/use-sessions'
 
 /**
  * Subscribes to WebSocket events and invalidates React Query caches.
@@ -28,9 +29,17 @@ export function useQueryInvalidation() {
             qc.invalidateQueries({ queryKey: queryKeys.sessions.detail(p.sessionId as string) })
           }
           break
+        case 'session:deleted':
+          // Drop it from the merged list now; merge-on-refetch would otherwise
+          // keep it as a previously-loaded extra.
+          if (p?.sessionId) removeFromSessionsCache(qc, [p.sessionId as string])
+          pendingRef.current.add('sessions')
+          if (p?.sessionId) {
+            qc.invalidateQueries({ queryKey: queryKeys.sessions.detail(p.sessionId as string) })
+          }
+          break
         case 'session:completed':
         case 'session:error':
-        case 'session:deleted':
           pendingRef.current.add('sessions')
           if (p?.sessionId) {
             qc.invalidateQueries({ queryKey: queryKeys.sessions.detail(p.sessionId as string) })
