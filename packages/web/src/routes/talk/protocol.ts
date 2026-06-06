@@ -22,6 +22,7 @@ export const TALK_EVENTS = {
   cardClear: "talk:card:clear",
   task: "talk:task",
   focus: "talk:focus",
+  threadLabel: "talk:thread:label",
   turnDone: "talk:turn:done",
   ttsDownloadProgress: "talk:tts:download:progress",
   ttsDownloadComplete: "talk:tts:download:complete",
@@ -55,6 +56,8 @@ export interface TalkTaskEvent { sessionId: string; task: WireTask }
 export interface TalkTurnDoneEvent { sessionId: string; ok: boolean; error?: string }
 /** Which COO child the orchestrator is delegating to / narrating (Path 1). */
 export interface TalkFocusEvent { cooId: string; label: string; parentId: string }
+/** Orchestrator sets/refines a COO thread's topic label. */
+export interface TalkThreadLabelEvent { sessionId: string; threadId: string; label: string }
 
 /**
  * Core gateway stream events the Talk loop also consumes (Path 1). The voice

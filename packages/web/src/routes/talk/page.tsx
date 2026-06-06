@@ -14,6 +14,7 @@ import { useTheme } from "@/routes/providers"
 import { Constellation } from "./constellation"
 import { Transcript } from "./transcript"
 import { CardStack } from "./cards/card-stack"
+import { ThreadPanel } from "./thread-panel"
 import { useTalk } from "./use-talk"
 
 export default function TalkPage() {
@@ -77,7 +78,22 @@ export default function TalkPage() {
       </div>
 
       {/* The constellation fills the surface: orchestrator + COO satellites */}
-      <Constellation state={talk.state} level={talk.level} children={talk.children} />
+      <Constellation state={talk.state} level={talk.level} threads={talk.threads} />
+
+      {/* COO thread panel — visibility + manual switch/rename/dismiss. Top-left,
+          below the bar, so it never fights the orb, mic, or cards. */}
+      <div
+        className="absolute left-3 z-20"
+        style={{ top: "calc(max(env(safe-area-inset-top), 14px) + 46px)" }}
+      >
+        <ThreadPanel
+          threads={talk.threads}
+          targetThreadId={talk.targetThreadId}
+          onSelect={talk.selectThread}
+          onRename={talk.renameThread}
+          onDismiss={talk.dismissThread}
+        />
+      </div>
 
       {/* Detail cards — a lower band that sits below the orb centre and above the
           mic so it never covers the avatar or the control on mobile. The deck is

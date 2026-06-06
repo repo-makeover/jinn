@@ -22,6 +22,7 @@ import {
   TALK_EVENTS,
   type TalkAudioEvent,
   type TalkFocusEvent,
+  type TalkThreadLabelEvent,
   type TalkCardEvent,
   type TalkCardUpdateEvent,
   type TalkCardDismissEvent,
@@ -32,6 +33,9 @@ import type { TranscriptEntry } from "./transcript"
 import type { AvatarState, Card } from "./types"
 import { VadEndpointer, VAD_DEFAULTS, BARGE_IN_DEFAULTS } from "./vad"
 import { MicEnergyMonitor } from "./mic-energy"
+import { threadReducer, type TalkThread, type ThreadAction } from "./thread-store"
+
+export type { TalkThread } from "./thread-store"
 
 /** Most recent cards kept on the surface at once (older ones drift out). */
 const MAX_CARDS = 4
@@ -40,6 +44,8 @@ const MAX_CARDS = 4
 const HANDS_FREE_KEY = "talk-hands-free"
 /** Gap after AURA stops speaking before the mic auto-reopens (hands-free). */
 const AUTO_REOPEN_DELAY_MS = 450
+/** How long a finished COO thread keeps orbiting (as a satellite) before parking. */
+const THREAD_PARK_MS = 4500
 
 export type TtsStatus =
   | { kind: "idle" }
@@ -47,19 +53,13 @@ export type TtsStatus =
   | { kind: "ready" }
   | { kind: "error"; message: string }
 
-/** A COO child session the orchestrator is working with (a satellite orb). */
-export interface TalkChild {
-  id: string
-  label: string
-  /** "thinking" while running, "idle"/"speaking" briefly on completion before it fades. */
-  state: AvatarState
-}
-
 export interface UseTalkReturn {
   state: AvatarState
   entries: TranscriptEntry[]
-  /** Active COO child sessions (satellite orbs around the orchestrator). */
-  children: TalkChild[]
+  /** Persistent COO threads (satellite orbs + the thread panel). */
+  threads: TalkThread[]
+  /** The thread the next dispatch is routed to continue (null → new thread). */
+  targetThreadId: string | null
   /** Detail cards the orchestrator pushed for the current answer(s). */
   cards: Card[]
   /** 0..1 while listening/speaking (server audio), undefined → orb self-animates. */
@@ -71,6 +71,12 @@ export interface UseTalkReturn {
   /** Hands-free (continuous) mode: VAD auto-send + barge-in + auto-reopen. */
   handsFree: boolean
   toggleHandsFree: () => void
+  /** Route the next dispatch to continue an existing thread (null → new). */
+  selectThread: (id: string | null) => void
+  /** Rename a thread's topic label (UI-only). */
+  renameThread: (id: string, label: string) => void
+  /** Remove a thread chip (does not kill the gateway session). */
+  dismissThread: (id: string) => void
   startListening: () => void
   stop: () => void
 }
@@ -80,7 +86,8 @@ export function useTalk(): UseTalkReturn {
 
   const [state, setState] = useState<AvatarState>("idle")
   const [entries, setEntries] = useState<TranscriptEntry[]>([])
-  const [children, setChildren] = useState<TalkChild[]>([])
+  const [threads, setThreads] = useState<TalkThread[]>([])
+  const [targetThreadId, setTargetThreadId] = useState<string | null>(null)
   const [cards, setCards] = useState<Card[]>([])
   const [level, setLevel] = useState<number | undefined>(undefined)
   const [ttsStatus, setTtsStatus] = useState<TtsStatus>({ kind: "idle" })
@@ -124,9 +131,18 @@ export function useTalk(): UseTalkReturn {
   const turnCounterRef = useRef(0)
   // Did the gateway stream Kokoro audio this turn? If so we DON'T also Web-Speak.
   const audioThisTurnRef = useRef(false)
-  // Known child session ids so we can route their stream events.
-  const childIdsRef = useRef<Set<string>>(new Set())
-  const childRemovalTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // Known COO thread (child) session ids so we can route their stream events.
+  // Synced from `threads` each render AND added immediately on focus (so a child
+  // delta arriving the same tick as focus still routes).
+  const threadIdsRef = useRef<Set<string>>(new Set())
+  threadIdsRef.current = new Set(threads.map((t) => t.id))
+  // Pending park timers (finished thread keeps orbiting briefly, then parks).
+  const parkTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // Live mirrors for WS-callback / send closures.
+  const threadsRef = useRef<TalkThread[]>(threads)
+  threadsRef.current = threads
+  const targetThreadIdRef = useRef<string | null>(targetThreadId)
+  targetThreadIdRef.current = targetThreadId
 
   const stt = useStt()
   const sttRef = useRef(stt)
@@ -198,27 +214,35 @@ export function useTalk(): UseTalkReturn {
     })
   }, [])
 
-  // ---- Child (satellite) bookkeeping ---------------------------------------
-  const upsertChild = useCallback((id: string, label: string, st: AvatarState) => {
-    setChildren((prev) => {
-      const i = prev.findIndex((c) => c.id === id)
-      if (i === -1) return [...prev, { id, label, state: st }]
-      const next = prev.slice()
-      next[i] = { ...next[i], label: label || next[i].label, state: st }
-      return next
-    })
+  // ---- COO thread bookkeeping ----------------------------------------------
+  // Threads persist (the panel + switching surface). A finished thread keeps
+  // orbiting as a satellite for THREAD_PARK_MS, then parks (drops from the orb
+  // constellation but STAYS in the thread list).
+  const dispatchThread = useCallback((a: ThreadAction) => {
+    setThreads((prev) => threadReducer(prev, a))
   }, [])
 
-  const scheduleChildRemoval = useCallback((id: string) => {
-    const existing = childRemovalTimers.current.get(id)
+  const schedulePark = useCallback((id: string) => {
+    const existing = parkTimers.current.get(id)
     if (existing) clearTimeout(existing)
     const t = setTimeout(() => {
-      setChildren((prev) => prev.filter((c) => c.id !== id))
-      childIdsRef.current.delete(id)
-      childRemovalTimers.current.delete(id)
-    }, 4500)
-    childRemovalTimers.current.set(id, t)
+      parkTimers.current.delete(id)
+      setThreads((prev) => threadReducer(prev, { type: "park", id }))
+    }, THREAD_PARK_MS)
+    parkTimers.current.set(id, t)
   }, [])
+
+  // ---- Thread controls (panel) ---------------------------------------------
+  const selectThread = useCallback((id: string | null) => setTargetThreadId(id), [])
+  const renameThread = useCallback((id: string, label: string) => {
+    if (label.trim()) dispatchThread({ type: "label", id, label })
+  }, [dispatchThread])
+  const dismissThread = useCallback((id: string) => {
+    const tmr = parkTimers.current.get(id)
+    if (tmr) { clearTimeout(tmr); parkTimers.current.delete(id) }
+    dispatchThread({ type: "dismiss", id })
+    setTargetThreadId((cur) => (cur === id ? null : cur))
+  }, [dispatchThread])
 
   // ---- Detail-card surface (orchestrator pushes via POST /api/talk/card) ----
   // talk:card upserts by id (re-posting the same id updates it in place);
@@ -308,17 +332,25 @@ export function useTalk(): UseTalkReturn {
       if (event === TALK_EVENTS.focus) {
         const ev = payload as TalkFocusEvent
         if (ev.parentId === orchestratorIdRef.current) {
-          childIdsRef.current.add(ev.cooId)
-          const t = childRemovalTimers.current.get(ev.cooId)
-          if (t) { clearTimeout(t); childRemovalTimers.current.delete(ev.cooId) }
-          upsertChild(ev.cooId, ev.label, "thinking")
+          threadIdsRef.current.add(ev.cooId) // route this child's stream immediately
+          const t = parkTimers.current.get(ev.cooId)
+          if (t) { clearTimeout(t); parkTimers.current.delete(ev.cooId) }
+          dispatchThread({ type: "focus", id: ev.cooId, label: ev.label, ts: Date.now() })
+        }
+        return
+      }
+
+      if (event === TALK_EVENTS.threadLabel) {
+        const ev = payload as TalkThreadLabelEvent
+        if (ev.sessionId === orchestratorIdRef.current) {
+          dispatchThread({ type: "label", id: ev.threadId, label: ev.label })
         }
         return
       }
 
       const s = sid(payload)
       const isOrch = s === orchestratorIdRef.current
-      const isChild = s !== undefined && childIdsRef.current.has(s)
+      const isChild = s !== undefined && threadIdsRef.current.has(s)
 
       switch (event) {
         case "session:delta": {
@@ -329,7 +361,7 @@ export function useTalk(): UseTalkReturn {
               setState((st) => (st === "speaking" ? st : "thinking"))
             }
           } else if (isChild && s) {
-            upsertChild(s, "", "thinking") // keep it alive/working
+            dispatchThread({ type: "activity", id: s, ts: Date.now() }) // keep alive/working
           }
           break
         }
@@ -370,8 +402,8 @@ export function useTalk(): UseTalkReturn {
             asstIdRef.current = null
             speakReplyIfNeeded()
           } else if (isChild && s) {
-            upsertChild(s, "", "idle")
-            scheduleChildRemoval(s)
+            dispatchThread({ type: "done", id: s, ts: Date.now() })
+            schedulePark(s)
           }
           break
         }
@@ -379,7 +411,7 @@ export function useTalk(): UseTalkReturn {
     })
 
     return () => { unsub() }
-  }, [gateway, appendAssistantText, upsertChild, scheduleChildRemoval, startLevelLoop, stopLevelLoop, upsertCard, patchCard, dismissCard, clearCards, scheduleAutoListen])
+  }, [gateway, appendAssistantText, dispatchThread, schedulePark, startLevelLoop, stopLevelLoop, upsertCard, patchCard, dismissCard, clearCards, scheduleAutoListen])
 
   // ---- Bootstrap orchestrator + probe TTS ----------------------------------
   useEffect(() => {
@@ -427,8 +459,17 @@ export function useTalk(): UseTalkReturn {
       const orch = orchestratorIdRef.current
       if (text && text.trim() && orch) {
         setEntries((prev) => [...prev, { id: `u${Date.now()}`, role: "user", text }])
+        // Switch override: if a thread is selected, prepend a machine route hint so
+        // the orchestrator CONTINUES that COO session instead of spawning a new one.
+        // The transcript keeps the clean text; only the engine sees the hint.
+        const target = targetThreadIdRef.current
+          ? threadsRef.current.find((t) => t.id === targetThreadIdRef.current)
+          : null
+        const outbound = target
+          ? `[Route this to the existing "${target.label}" COO thread: session ${target.id}. Continue that thread instead of spawning a new one.]\n${text}`
+          : text
         try {
-          await api.sendMessage(orch, { message: text })
+          await api.sendMessage(orch, { message: outbound })
         } catch {
           setState("idle"); stopLevelLoop()
         }
@@ -494,8 +535,8 @@ export function useTalk(): UseTalkReturn {
     return () => {
       if (levelRafRef.current) cancelAnimationFrame(levelRafRef.current)
       if (autoListenTimerRef.current) clearTimeout(autoListenTimerRef.current)
-      for (const t of childRemovalTimers.current.values()) clearTimeout(t)
-      childRemovalTimers.current.clear()
+      for (const t of parkTimers.current.values()) clearTimeout(t)
+      parkTimers.current.clear()
       try { speakRef.current.cancel() } catch { /* noop */ }
       playerRef.current?.dispose()
       playerRef.current = null
@@ -506,14 +547,15 @@ export function useTalk(): UseTalkReturn {
 
   return useMemo(
     () => ({
-      state, entries, children, cards, level,
+      state, entries, threads, targetThreadId, cards, level,
       connected: gateway.connected,
       listening,
       sttAvailable: stt.available,
       ttsStatus,
       handsFree, toggleHandsFree,
+      selectThread, renameThread, dismissThread,
       startListening, stop,
     }),
-    [state, entries, children, cards, level, gateway.connected, listening, stt.available, ttsStatus, handsFree, toggleHandsFree, startListening, stop],
+    [state, entries, threads, targetThreadId, cards, level, gateway.connected, listening, stt.available, ttsStatus, handsFree, toggleHandsFree, selectThread, renameThread, dismissThread, startListening, stop],
   )
 }

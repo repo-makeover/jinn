@@ -65,6 +65,7 @@ export const TALK_EVENTS = {
   cardClear: "talk:card:clear",
   task: "talk:task",
   focus: "talk:focus",
+  threadLabel: "talk:thread:label",
   turnDone: "talk:turn:done",
   ttsDownloadProgress: "talk:tts:download:progress",
   ttsDownloadComplete: "talk:tts:download:complete",
@@ -126,4 +127,15 @@ export interface TalkFocusEvent {
   label: string
   /** The orchestrator session that owns this COO child. */
   parentId: string
+}
+
+/**
+ * The orchestrator (or a process on its behalf) sets/refines a COO thread's
+ * topic label. `sessionId` is the orchestrator (talk) surface; `threadId` is the
+ * COO child session id. POST /api/talk/thread/label emits this.
+ */
+export interface TalkThreadLabelEvent {
+  sessionId: string
+  threadId: string
+  label: string
 }

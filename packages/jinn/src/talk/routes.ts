@@ -189,6 +189,35 @@ export async function handleTalkApi(
       return true;
     }
 
+    // POST /api/talk/thread/label — set/refine a COO thread's topic label.
+    // The orchestrator calls this so a thread shows a clean human topic in the
+    // thread panel instead of the raw dispatch text. sessionId = the talk surface,
+    // threadId = the COO child session id.
+    if (method === "POST" && pathname === "/api/talk/thread/label") {
+      const parsed = await readJsonBody(req, res);
+      if (!parsed.ok) return true;
+      const body = (parsed.body ?? {}) as { sessionId?: unknown; threadId?: unknown; label?: unknown };
+      if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+        badRequest(res, "sessionId must be a non-empty string");
+        return true;
+      }
+      if (typeof body.threadId !== "string" || body.threadId.length === 0) {
+        badRequest(res, "threadId must be a non-empty string");
+        return true;
+      }
+      if (typeof body.label !== "string" || body.label.trim().length === 0) {
+        badRequest(res, "label must be a non-empty string");
+        return true;
+      }
+      context.emit(TALK_EVENTS.threadLabel, {
+        sessionId: body.sessionId,
+        threadId: body.threadId,
+        label: body.label.trim(),
+      });
+      json(res, { ok: true });
+      return true;
+    }
+
     // Unknown /api/talk/* path — let api.ts fall through to its 404.
     return false;
   } catch (err) {

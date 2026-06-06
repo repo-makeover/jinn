@@ -885,6 +885,17 @@ export async function handleApiRequest(
       const prompt = body.message || body.prompt;
       if (!prompt) return badRequest(res, "message is required");
 
+      // Voice mode: when the orchestrator CONTINUES an existing COO child (a
+      // thread switch/reuse), re-signal focus so the Talk UI relights that
+      // satellite + morphs the main orb to its channel — mirroring the
+      // talk:focus emitted on new-session spawn in POST /api/sessions.
+      if (session.parentSessionId) {
+        const talkParent = getSession(session.parentSessionId);
+        if (talkParent?.source === "talk") {
+          context.emit("talk:focus", { cooId: session.id, label: session.title || "", parentId: talkParent.id });
+        }
+      }
+
       // Allow internal callers (e.g. child session callbacks) to specify a non-user role
       const messageRole: string = body.role === "notification" ? "notification" : "user";
       const isNotification = messageRole === "notification";
