@@ -1,6 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactElement } from 'react'
 import type { EnginesResponse } from '@/lib/api'
+
+// ModelSelectorRow calls useQueryClient() (for refreshModels), so renders must
+// be wrapped in a QueryClientProvider — otherwise the hook throws on mount.
+function renderRow(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+}
 
 const REG: EnginesResponse = {
   default: 'claude',
@@ -29,19 +38,19 @@ import { ModelSelectorRow } from '../model-selector-row'
 
 describe('ModelSelectorRow', () => {
   it('new-chat mode: Engine is an editable dropdown button', () => {
-    render(<ModelSelectorRow mode="new" value={{}} onChange={() => {}} />)
+    renderRow(<ModelSelectorRow mode="new" value={{}} onChange={() => {}} />)
     expect(screen.getByRole('button', { name: 'Engine' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Model' })).toBeTruthy()
   })
 
   it('shows the engine + model labels from the registry', () => {
-    render(<ModelSelectorRow mode="new" value={{ engine: 'claude', model: 'opus' }} onChange={() => {}} />)
+    renderRow(<ModelSelectorRow mode="new" value={{ engine: 'claude', model: 'opus' }} onChange={() => {}} />)
     expect(screen.getByText('Claude')).toBeTruthy()
     expect(screen.getByText('Opus 4.8')).toBeTruthy()
   })
 
   it('existing-chat mode: Engine is a locked trigger (explainer popover), not an engine list; model stays editable', () => {
-    render(<ModelSelectorRow mode="existing" value={{ engine: 'claude', model: 'opus' }} onChange={() => {}} />)
+    renderRow(<ModelSelectorRow mode="existing" value={{ engine: 'claude', model: 'opus' }} onChange={() => {}} />)
     // The locked engine is a clickable trigger labelled "Engine (locked)", not a plain "Engine" dropdown.
     expect(screen.queryByRole('button', { name: 'Engine' })).toBeNull()
     expect(screen.getByRole('button', { name: /engine \(locked\)/i })).toBeTruthy()
@@ -49,17 +58,17 @@ describe('ModelSelectorRow', () => {
   })
 
   it('shows an Effort control for effort-capable models', () => {
-    render(<ModelSelectorRow mode="new" value={{ engine: 'claude', model: 'opus', effortLevel: 'high' }} onChange={() => {}} />)
+    renderRow(<ModelSelectorRow mode="new" value={{ engine: 'claude', model: 'opus', effortLevel: 'high' }} onChange={() => {}} />)
     expect(screen.getByRole('button', { name: 'Effort' })).toBeTruthy()
   })
 
   it('hides Effort entirely for effort-less engines (antigravity)', () => {
-    render(<ModelSelectorRow mode="new" value={{ engine: 'antigravity', model: 'gemini-3-flash-preview' }} onChange={() => {}} />)
+    renderRow(<ModelSelectorRow mode="new" value={{ engine: 'antigravity', model: 'gemini-3-flash-preview' }} onChange={() => {}} />)
     expect(screen.queryByRole('button', { name: 'Effort' })).toBeNull()
   })
 
   it('shows the "applies next message" note in existing mode when pending', () => {
-    render(<ModelSelectorRow mode="existing" value={{ engine: 'claude', model: 'opus' }} onChange={() => {}} pendingNote />)
+    renderRow(<ModelSelectorRow mode="existing" value={{ engine: 'claude', model: 'opus' }} onChange={() => {}} pendingNote />)
     expect(screen.getByText(/applies next message/i)).toBeTruthy()
   })
 })
