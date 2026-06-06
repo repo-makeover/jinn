@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { usePageVisibility } from "../hooks/use-page-visibility";
 import { dlog } from "../lib/debug-log";
+import { nextReconnectDelay } from "../lib/ws-backoff";
 
 /**
  * Theme-aware xterm color palettes. The app exposes exactly two visual themes
@@ -105,12 +106,22 @@ function getPtyWsUrl(sessionId: string): string {
  * by chat-pane), which uploads attachments + POSTs to /api/sessions/:id/message with
  * `mode: "interactive"`. The API routes that to the interactive engine which injects the
  * prompt into this same warm PTY via bracketed-paste, so the user sees it appear in xterm.
+ *
+ * Resilience: the socket reconnects with backoff on close/error WITHOUT disposing the
+ * xterm Terminal — the daemon replays the PTY scrollback on every fresh connection
+ * (see pty-ws.ts), so we just reset the terminal and let the replay repaint it. Returning
+ * to the tab after a sleep/background also recovers a half-open socket (see the visibility
+ * effect). Only a sessionId change (or unmount) tears the Terminal down.
  */
 export function CliTerminal({ sessionId }: { sessionId: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // Lets the visibility effect (a separate effect) recover a dead socket without
+  // leaking the per-session connect closure out of the main effect.
+  const reconnectRef = useRef<(() => void) | null>(null);
   const visible = usePageVisibility();
   const [hasOutput, setHasOutput] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   // Mirror of `hasOutput` for use inside the WS onmessage closure, which is
   // created once per session and would otherwise see a stale `false`.
   const hasOutputRef = useRef(false);
@@ -149,9 +160,6 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
     // ResizeObserver tick) fits at real dimensions and emits the resize then.
 
     const wsUrl = getPtyWsUrl(sessionId);
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
 
     // iOS Safari renders certain monochrome TUI glyphs (⏺ U+23FA, ⏵ U+23F5, etc.)
     // as colour emoji when the font lacks a text glyph. Appending U+FE0E (text
@@ -162,7 +170,7 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
     const decoder = new TextDecoder("utf-8");
     const forceTextGlyphs = (s: string) => s.replace(TEXT_PRESENT_GLYPHS, (m) => m + "︎");
 
-    ws.onmessage = (e) => {
+    const onWsMessage = (e: MessageEvent) => {
       // Text frames carry JSON control messages from the daemon. The PTY
       // can respawn within the same session (e.g. KEEP ALIVE → daemon
       // restarts claude); when it does, the daemon emits {"type":"reset"}
@@ -188,17 +196,83 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
       }
     };
 
-    ws.onopen = () => {
-      dlog("xterm", `ws.onopen wrapper=${containerRef.current?.getBoundingClientRect().width.toFixed(0) ?? "?"}x${containerRef.current?.getBoundingClientRect().height.toFixed(0) ?? "?"}`);
-      // Initial viewing report — backend ref-counts viewers and uses this to
-      // keep the PTY warm (or auto-respawn on return if it was reaped).
-      ws.send(JSON.stringify({ type: "viewing", viewing: document.visibilityState === "visible" }));
-      // Defer the resize message until after fit runs at real dimensions —
-      // see scheduleFit below.
-      scheduleFit();
+    // --- Reconnect machinery -------------------------------------------------
+    // The Terminal instance outlives individual sockets; only the WebSocket is
+    // recreated on a drop. The daemon replays scrollback on every connection, so
+    // a reconnect resets the terminal and lets the replay repaint the live view.
+    let closed = false;
+    let attempt = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = (isReconnect: boolean) => {
+      if (closed) return;
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+      wsRef.current = ws;
+
+      ws.onmessage = onWsMessage;
+
+      ws.onopen = () => {
+        if (wsRef.current !== ws) return;
+        attempt = 0;
+        setReconnecting(false);
+        dlog("xterm", `ws.onopen${isReconnect ? " (reconnect)" : ""} wrapper=${containerRef.current?.getBoundingClientRect().width.toFixed(0) ?? "?"}x${containerRef.current?.getBoundingClientRect().height.toFixed(0) ?? "?"}`);
+        // On reconnect the daemon will replay the full scrollback; reset first so
+        // the replayed bytes repaint the current screen instead of stacking a
+        // duplicate copy below the stale one. (If the PTY was reaped meanwhile,
+        // the daemon also sends {type:"reset"} + fresh output — harmless overlap.)
+        if (isReconnect) {
+          term.reset();
+          markHasOutput(false);
+        }
+        // Initial viewing report — backend ref-counts viewers and uses this to
+        // keep the PTY warm (or auto-respawn on return if it was reaped).
+        ws.send(JSON.stringify({ type: "viewing", viewing: document.visibilityState === "visible" }));
+        // Defer the resize message until after fit runs at real dimensions —
+        // see scheduleFit below.
+        scheduleFit();
+      };
+
+      ws.onclose = (ev) => {
+        dlog("xterm", `ws.onclose code=${ev.code} reason=${ev.reason || "—"}`);
+        if (wsRef.current !== ws) return; // superseded by a manual reconnect
+        scheduleReconnect();
+      };
+      ws.onerror = () => {
+        dlog("xterm", "ws.onerror");
+        // Let onclose drive the reconnect; closing is idempotent.
+        try { ws.close(); } catch { /* ignore */ }
+      };
     };
-    ws.onclose = (ev) => dlog("xterm", `ws.onclose code=${ev.code} reason=${ev.reason || "—"}`);
-    ws.onerror = () => dlog("xterm", "ws.onerror");
+
+    const scheduleReconnect = () => {
+      if (closed || reconnectTimer !== null) return;
+      setReconnecting(true);
+      const delay = nextReconnectDelay(attempt++);
+      dlog("xterm", `reconnect in ${delay}ms (attempt ${attempt})`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect(true);
+      }, delay);
+    };
+
+    // Recover a dead/half-open socket immediately (used by the visibility effect
+    // on return-to-foreground). No-op if the socket is already open.
+    const reconnectNow = () => {
+      if (closed) return;
+      const cur = wsRef.current;
+      if (cur && cur.readyState === WebSocket.OPEN) return;
+      if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      attempt = 0;
+      if (cur && cur.readyState !== WebSocket.CLOSED) {
+        // Detach so the stale socket's onclose can't schedule a duplicate reconnect.
+        cur.onclose = null;
+        cur.onerror = null;
+        try { cur.close(); } catch { /* ignore */ }
+      }
+      connect(true);
+    };
+    reconnectRef.current = reconnectNow;
 
     // Coalesce a burst of `resize` events (window drag, mobile rotation,
     // devtools open) into one fit + one WS frame per animation frame. Without
@@ -224,15 +298,14 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
         try { fit.fit(); } catch { /* container not yet sized */ }
         fitCount++;
         dlog("xterm", `fit#${fitCount} wrapper=${rect.width.toFixed(0)}x${rect.height.toFixed(0)} cols=${term.cols} rows=${term.rows}`);
-        if (term.cols > 0 && term.rows > 0 && ws.readyState === WebSocket.OPEN) {
+        const ws = wsRef.current;
+        if (term.cols > 0 && term.rows > 0 && ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
           dlog("xterm", `ws.send resize cols=${term.cols} rows=${term.rows}`);
         }
       });
     };
     window.addEventListener("resize", scheduleFit);
-    // Kick off the initial fit on the next frame so layout has settled.
-    scheduleFit();
 
     // ChatInput sits beside us as a flex sibling and grows when the user attaches
     // files. Without this observer the xterm container height shrinks but xterm
@@ -298,8 +371,16 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
     const colorSchemeMq = window.matchMedia("(prefers-color-scheme: dark)");
     colorSchemeMq.addEventListener("change", applyTheme);
 
+    // Open the first socket + kick off the initial fit on the next frame so
+    // layout has settled.
+    connect(false);
+    scheduleFit();
+
     return () => {
       disposed = true;
+      closed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      reconnectRef.current = null;
       themeObserver.disconnect();
       colorSchemeMq.removeEventListener("change", applyTheme);
       window.removeEventListener("resize", scheduleFit);
@@ -307,12 +388,18 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
       wrapper.removeEventListener("touchstart", onTouchStart);
       wrapper.removeEventListener("touchmove", onTouchMove);
       if (raf !== null) cancelAnimationFrame(raf);
-      // Explicit viewing:false before close so the backend decrements promptly
-      // (close handler also decrements as a safety net, but this is cleaner).
-      if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(JSON.stringify({ type: "viewing", viewing: false })); } catch { /* ignore */ }
+      const ws = wsRef.current;
+      if (ws) {
+        // Detach handlers so the close below can't schedule a reconnect.
+        ws.onclose = null;
+        ws.onerror = null;
+        // Explicit viewing:false before close so the backend decrements promptly
+        // (close handler also decrements as a safety net, but this is cleaner).
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: "viewing", viewing: false })); } catch { /* ignore */ }
+        }
+        ws.close();
       }
-      ws.close();
       wsRef.current = null;
       term.dispose();
     };
@@ -320,15 +407,29 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
 
   // Page Visibility — emit on backgrounding/foregrounding so the backend can
   // start the 10-min grace timer (hidden) or trigger auto-resume respawn (visible).
-  // On return-to-visible, the backend also needs a fresh resize to spawn the PTY
-  // at the correct geometry (pty-ws now spawns lazily on first resize). The
-  // scheduleFit hook is set up inside the main effect; we dispatch a synthetic
-  // resize event to trigger it without leaking a ref out of that effect.
+  // On return-to-visible we ALSO recover a socket that went half-open while the tab
+  // was backgrounded (mobile sleep/wake): if it isn't OPEN, reconnect; otherwise
+  // re-report viewing + dispatch a synthetic resize to respawn the PTY at the
+  // correct geometry (pty-ws spawns lazily on first resize). The scheduleFit hook
+  // lives inside the main effect; the synthetic resize event triggers it without
+  // leaking a ref out of that effect.
   useEffect(() => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    try { ws.send(JSON.stringify({ type: "viewing", viewing: visible })); } catch { /* ignore */ }
-    if (visible) window.dispatchEvent(new Event("resize"));
+    if (visible) {
+      // Only force a reconnect for a socket that has actually failed
+      // (CLOSING/CLOSED). A CONNECTING socket — e.g. the initial one on mount —
+      // is mid-handshake and must be left alone; its onopen will report viewing.
+      if (!ws || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+        reconnectRef.current?.();
+        return;
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: "viewing", viewing: true })); } catch { /* ignore */ }
+        window.dispatchEvent(new Event("resize"));
+      }
+    } else if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify({ type: "viewing", viewing: false })); } catch { /* ignore */ }
+    }
   }, [visible]);
 
   if (!sessionId) {
@@ -365,6 +466,25 @@ export function CliTerminal({ sessionId }: { sessionId: string }) {
       }}
     >
       <div ref={containerRef} tabIndex={-1} style={{ height: "100%", width: "100%", overflow: "hidden", background: "var(--bg)" }} />
+      {reconnecting && (
+        <div
+          style={{
+            position: "absolute",
+            top: "0.5rem",
+            right: "0.75rem",
+            padding: "0.15rem 0.5rem",
+            borderRadius: 6,
+            background: "var(--bg-secondary, rgba(0,0,0,0.35))",
+            color: "var(--text-tertiary)",
+            fontFamily: "var(--font-code)",
+            fontSize: 11,
+            pointerEvents: "none",
+            opacity: 0.85,
+          }}
+        >
+          reconnecting…
+        </div>
+      )}
       {!hasOutput && (
         <div
           style={{
