@@ -79,6 +79,9 @@ export interface UseLiveSessionResult {
   streamingText: string
   loading: boolean
   session: Record<string, unknown> | null
+  /** Set when the last load failed (so read-only consumers don't hang on a
+   *  "Loading…" state forever). Cleared at the start of each load attempt. */
+  error: Error | null
   liveContextTokens: number | null
   /** Re-load (reconcile) a session from the server. */
   reload: (id: string) => Promise<void>
@@ -114,6 +117,7 @@ export function useLiveSession(
   const [liveContextTokens, setLiveContextTokens] = useState<number | null>(null)
   const intermediateStartRef = useRef<number>(-1)
   const [currentSession, setCurrentSession] = useState<Record<string, unknown> | null>(null)
+  const [loadError, setLoadError] = useState<Error | null>(null)
   const sessionIdRef = useRef(sessionId)
   const justCompletedAtRef = useRef<number>(0)
   const loadTokenRef = useRef(0)
@@ -325,6 +329,7 @@ export function useLiveSession(
   // Load session data
   const loadSession = useCallback(async (id: string) => {
     const myToken = ++loadTokenRef.current
+    setLoadError(null) // fresh attempt
     try {
       const session = (await api.getSession(id)) as Record<string, unknown>
       if (myToken !== loadTokenRef.current) {
@@ -424,10 +429,11 @@ export function useLiveSession(
           return reconcileMessages(current, next)
         })
       }
-    } catch {
+    } catch (err) {
       setMessages([])
       setCurrentSession(null)
       intermediateStartRef.current = -1
+      setLoadError(err instanceof Error ? err : new Error("Failed to load session"))
     }
   }, [])
 
@@ -437,6 +443,7 @@ export function useLiveSession(
       setMessages([])
       setLoading(false)
       setCurrentSession(null)
+      setLoadError(null)
       streamingTextRef.current = ''
       setStreamingText('')
       intermediateStartRef.current = -1
@@ -552,6 +559,7 @@ export function useLiveSession(
     streamingText,
     loading,
     session: currentSession,
+    error: loadError,
     liveContextTokens,
     reload: loadSession,
     beginSend,

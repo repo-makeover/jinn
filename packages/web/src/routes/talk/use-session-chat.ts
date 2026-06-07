@@ -28,8 +28,10 @@ export interface SessionChatResult {
   /** A reply is in flight — drives the thinking indicator. */
   loading: boolean
   session: Record<string, unknown> | undefined
-  /** The first fetch hasn't resolved yet (nothing loaded). */
+  /** The first fetch hasn't resolved yet (nothing loaded, no error). */
   isInitialLoading: boolean
+  /** The load failed — surface an error state instead of hanging on "Loading…". */
+  error: Error | null
 }
 
 export function useSessionChat(sessionId: string | null): SessionChatResult {
@@ -40,6 +42,9 @@ export function useSessionChat(sessionId: string | null): SessionChatResult {
     streamingText: live.streamingText,
     loading: live.loading,
     session: live.session ?? undefined,
-    isInitialLoading: live.session == null && live.messages.length === 0,
+    // Only "loading" before anything resolves AND no error — otherwise a failed
+    // fetch (session=null, messages=[]) would hang on the spinner forever.
+    isInitialLoading: live.session == null && live.messages.length === 0 && live.error == null,
+    error: live.error,
   }
 }

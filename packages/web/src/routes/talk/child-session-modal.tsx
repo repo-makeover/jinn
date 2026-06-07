@@ -56,7 +56,7 @@ export function ChildSessionModal({ sessionId, open, onClose }: ChildSessionModa
 
 /** Body is split out so useSessionChat only runs while the modal is open. */
 function ChildSessionBody({ sessionId }: { sessionId: string }) {
-  const { messages, streamingText, loading, session, isInitialLoading } =
+  const { messages, streamingText, loading, session, isInitialLoading, error } =
     useSessionChat(sessionId)
   const label = headerLabel(session, sessionId)
   const hasContent = messages.length > 0 || !!streamingText
@@ -73,6 +73,10 @@ function ChildSessionBody({ sessionId }: { sessionId: string }) {
         {isInitialLoading ? (
           <div className="flex flex-1 items-center justify-center px-[var(--space-4)] py-[var(--space-8)] text-[length:var(--text-footnote)] text-[var(--text-tertiary)]">
             Loading conversation…
+          </div>
+        ) : error ? (
+          <div className="flex flex-1 items-center justify-center px-[var(--space-4)] py-[var(--space-8)] text-[length:var(--text-footnote)] text-[var(--text-tertiary)]">
+            Couldn’t load this conversation.
           </div>
         ) : !hasContent ? (
           <div className="flex flex-1 items-center justify-center px-[var(--space-4)] py-[var(--space-8)] text-[length:var(--text-footnote)] text-[var(--text-tertiary)]">

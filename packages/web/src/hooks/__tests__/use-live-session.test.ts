@@ -111,4 +111,66 @@ describe("useLiveSession (read-only)", () => {
     })
     expect(result.current.streamingText).toBe("")
   })
+
+  it("surfaces a load error instead of hanging (modal anti-hang)", async () => {
+    getSession.mockRejectedValue(new Error("boom"))
+    const { subscribe } = makeBus()
+    const { result } = renderHook(() =>
+      useLiveSession("s1", { subscribe, readOnly: true }),
+    )
+    await act(async () => { await Promise.resolve() })
+    expect(result.current.error).toBeInstanceOf(Error)
+    expect(result.current.messages).toEqual([])
+    expect(result.current.session).toBeNull()
+  })
+})
+
+describe("useLiveSession (editable write path)", () => {
+  it("optimistic send → delta accumulation → completion replaces with result", async () => {
+    getSession.mockResolvedValue({ status: "idle", messages: [] })
+    const { subscribe, emit } = makeBus()
+    const { result } = renderHook(() => useLiveSession("s1", { subscribe }))
+    await act(async () => { await Promise.resolve() })
+
+    act(() => {
+      result.current.beginSend({
+        id: "u1",
+        role: "user",
+        content: "do it",
+        timestamp: 1,
+      })
+    })
+    expect(result.current.messages.at(-1)?.content).toBe("do it")
+    expect(result.current.loading).toBe(true)
+
+    act(() => {
+      emit("session:delta", { sessionId: "s1", type: "text", content: "work" })
+      emit("session:delta", { sessionId: "s1", type: "text", content: "ing" })
+    })
+    expect(result.current.streamingText).toBe("working")
+
+    await act(async () => {
+      emit("session:completed", { sessionId: "s1", result: "Done." })
+      await Promise.resolve()
+    })
+    expect(result.current.loading).toBe(false)
+    expect(result.current.streamingText).toBe("")
+    expect(result.current.messages.map((m) => m.content)).toEqual(["do it", "Done."])
+  })
+
+  it("failSend clears loading and appends the error bubble", async () => {
+    getSession.mockResolvedValue({ status: "idle", messages: [] })
+    const { subscribe } = makeBus()
+    const { result } = renderHook(() => useLiveSession("s1", { subscribe }))
+    await act(async () => { await Promise.resolve() })
+
+    act(() => {
+      result.current.beginSend({ id: "u1", role: "user", content: "x", timestamp: 1 })
+    })
+    expect(result.current.loading).toBe(true)
+
+    act(() => { result.current.failSend("Error: nope") })
+    expect(result.current.loading).toBe(false)
+    expect(result.current.messages.at(-1)?.content).toBe("Error: nope")
+  })
 })
