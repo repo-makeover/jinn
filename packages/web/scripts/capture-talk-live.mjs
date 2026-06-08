@@ -23,7 +23,7 @@ await sleep(9500); await shot(page, "live-1-org-pulse.png")
 await sleep(4000)
 
 // Turn 2: delegate to COO → tracker task + card + spoken summary
-post("Ask the COO for a one-sentence status of the Pravko project, and track it.").catch(()=>{})
+post("Ask the COO for a one-sentence status of the demo project, and track it.").catch(()=>{})
 await sleep(11000); await shot(page, "live-2-thinking-delegating.png")  // mid: thinking + task running
 await sleep(13000); await shot(page, "live-3-delegate-done.png")        // task done + card + spoken
 

@@ -46,7 +46,7 @@ const DEFAULT_SCENARIO = {
     { say: "Hey AURA, you there?", expect: "direct" },
     { say: "Give me the one-line state of the org.", expect: "direct" },
     {
-      say: "Have the team do a quick health check on Pravko and report one line back.",
+      say: "Have the team do a quick health check on the demo project and report one line back.",
       expect: "delegate",
       relay: true,
       relaySec: 240,

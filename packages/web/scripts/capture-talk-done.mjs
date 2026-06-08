@@ -8,7 +8,7 @@ const page = await b.newPage({ viewport: { width: 1440, height: 860 }, deviceSca
 await page.addInitScript(() => localStorage.setItem("jinn-theme", "dark"))
 await page.goto("http://localhost:5174/talk", { waitUntil: "networkidle" })
 await sleep(1500)
-fetch(`${GW}/api/talk/turn`, { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ sessionId: SID, text: "Ask the COO for a one-sentence status of the Pravko project, and track it." })}).catch(()=>{})
+fetch(`${GW}/api/talk/turn`, { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ sessionId: SID, text: "Ask the COO for a one-sentence status of the demo project, and track it." })}).catch(()=>{})
 // Poll the tracker DOM until a task row shows a done/result, max 50s.
 let done = false
 for (let i = 0; i < 25 && !done; i++) {
