@@ -681,7 +681,9 @@ export function ChatMessages({ messages, loading, streamingText }: ChatMessagesP
 
       {/* Thinking indicator — visible while waiting, disappears when streaming or response arrives */}
       {loading && !streamingText && messages.length > 0 && (
-        <div className="flex items-center gap-1.5 py-1.5 px-[var(--space-4)] mt-[var(--space-1)]">
+        // Share the assistant text gutter (space-3 mobile / space-8 @lg) so the
+        // indicator lines up flush with the messages and tool cards.
+        <div className="assistant-msg-row flex items-center gap-1.5 mt-[var(--space-1)]">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-[jinn-pulse_1.4s_infinite] shrink-0" />
           <span className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] font-[var(--weight-medium)]">
             Thinking

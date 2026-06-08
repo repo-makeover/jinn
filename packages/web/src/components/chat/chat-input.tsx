@@ -632,9 +632,11 @@ export function ChatInput({
       {/* Meta strip: Engine·Model·Effort selector pinned LEFT, hints CENTERED.
           3-col grid [1fr | auto | 1fr] so the hints sit true-center regardless of
           selector width, with no overlap at narrow widths. */}
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-[var(--space-2)] mt-[var(--space-1)]">
-        {/* Selector — quiet inline metadata, left, with breathing room from the edge */}
-        <div className="min-w-0 ml-[10px] justify-self-start">{selectorSlot}</div>
+      <div className="flex sm:grid sm:grid-cols-[1fr_auto_1fr] items-center gap-[var(--space-2)] mt-[var(--space-1)] min-w-0">
+        {/* Selector — quiet inline metadata, left, with breathing room from the edge.
+            Mobile: takes the full strip width (no 1fr spacer stealing half) and
+            scrolls horizontally if the pills overflow rather than wrapping. */}
+        <div className="min-w-0 ml-[10px] justify-self-start flex-1 sm:flex-initial overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">{selectorSlot}</div>
         {/* Hints — centered, hidden on mobile for space */}
         <div className="hidden sm:flex justify-self-center text-[length:var(--text-caption2)] text-[var(--text-quaternary)] items-center gap-[var(--space-3)]">
           <span>/ - commands</span>

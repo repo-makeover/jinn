@@ -144,7 +144,7 @@ export function ModelSelectorRow({ mode, value, onChange, pendingNote, disabled,
   }
 
   return (
-    <div className="flex items-center gap-1 min-w-0 text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">
+    <div className="flex items-center gap-1 min-w-0 whitespace-nowrap text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">
       {/* Engine — editable on new chat, plain locked text in an existing chat */}
       {mode === 'new' ? (
         <InlineTrigger label="Engine" value={engineLabel(engine)} disabled={disabled}>
@@ -231,7 +231,8 @@ export function ModelSelectorRow({ mode, value, onChange, pendingNote, disabled,
       })()}
 
       {mode === 'existing' && pendingNote && (
-        <span className="ml-1 italic opacity-70">· applies next message</span>
+        // Hidden on mobile (clutters the narrow strip / forces wrap); shown ≥sm.
+        <span className="ml-1 italic opacity-70 hidden sm:inline">· applies next message</span>
       )}
     </div>
   )
