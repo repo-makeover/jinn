@@ -370,6 +370,14 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     if (ver) ok(`codex --version: ${ver}`);
     else warn("codex --version failed");
   }
+  // A successful --version does NOT mean the engine is authenticated — the #1
+  // silent fresh-install failure. Nudge the login step explicitly.
+  if (claudePath || codexPath) {
+    warn("A successful --version does NOT mean the engine is logged in.");
+    if (claudePath) info("First run? Launch `claude` once and use /login to authenticate.");
+    if (codexPath) info("First run? Launch `codex` once and sign in to authenticate.");
+    info("Do this before `jinn start`, or sessions will fail silently.");
+  }
 
   // 5. Interactive setup (only when stdin is a TTY and config doesn't exist yet)
   const isFreshSetup = !fs.existsSync(CONFIG_PATH);
@@ -507,6 +515,9 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "docs"), DOCS_DIR, templateReplacements));
   created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "skills"), SKILLS_DIR, templateReplacements));
   created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "org"), ORG_DIR, templateReplacements));
+  // Seed talk/ (AURA voice persona + card-reference sidecar). The persona points
+  // the orchestrator at talk/card-reference.md, so both must land in ~/.jinn/talk/.
+  created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "talk"), path.join(JINN_HOME, "talk"), templateReplacements));
 
   // Copy skills.json manifest
   const templateSkillsJson = path.join(TEMPLATE_DIR, "skills.json");
