@@ -83,6 +83,11 @@ export interface ApiContext {
    *  prompt + response stream into the live xterm. Distinct from the headless
    *  "claude" engine in sessionManager (which chat/cron/connectors use). */
   interactiveClaudeEngine?: import("../engines/claude-interactive.js").InteractiveClaudeEngine;
+  /** Synchronously re-scan org/ into the gateway's in-memory employee registry
+   *  (and drop warm PTYs). Called after an employee YAML write so the next session
+   *  spawn sees the new persona/model immediately, rather than waiting ~800ms for
+   *  the chokidar watcher. Wired in server.ts; same body as the watcher's onOrgChange. */
+  reloadOrg?: () => void;
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -1181,19 +1186,32 @@ export async function handleApiRequest(
       });
     }
 
-    // PATCH /api/org/employees/:name — update employee fields (currently only alwaysNotify)
+    // PATCH /api/org/employees/:name — update employee fields (whitelisted, validated)
     params = matchRoute("/api/org/employees/:name", pathname);
     if (method === "PATCH" && params) {
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
-      const body = _parsed.body as any;
-      const { updateEmployeeYaml } = await import("./org.js");
-      const updated = updateEmployeeYaml(params.name, {
-        alwaysNotify: typeof body.alwaysNotify === "boolean" ? body.alwaysNotify : undefined,
-      });
-      if (!updated) return notFound(res);
+      const body = _parsed.body as Record<string, unknown>;
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return badRequest(res, "update body must be a JSON object");
+      }
+      const { scanOrg, updateEmployeeYaml, validateEmployeeUpdate } = await import("./org.js");
+      const current = scanOrg().get(params.name);
+      if (!current) return notFound(res);
+
+      const result = validateEmployeeUpdate(context.getConfig(), current, body);
+      if (!result.ok) return badRequest(res, result.error || "invalid update");
+
+      const wrote = updateEmployeeYaml(params.name, result.updates!);
+      if (!wrote) return notFound(res);
+
+      // G1: synchronously refresh the in-memory registry (and drop warm PTYs) so an
+      // immediate session spawn sees the new persona/model — don't wait for the watcher.
+      context.reloadOrg?.();
       context.emit("org:updated", { employee: params.name });
-      return json(res, { status: "ok" });
+
+      const updated = scanOrg().get(params.name);
+      return json(res, { status: "ok", employee: updated ?? null });
     }
 
     // GET /api/org/departments/:name/board

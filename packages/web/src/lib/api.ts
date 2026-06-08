@@ -35,6 +35,21 @@ export interface Employee {
   chain?: string[];
 }
 
+/** Editable employee fields accepted by PATCH /api/org/employees/:name.
+ *  `name` is immutable and is intentionally omitted. */
+export interface EmployeeUpdate {
+  displayName?: string;
+  department?: string;
+  rank?: "executive" | "manager" | "senior" | "employee";
+  engine?: string;
+  model?: string;
+  effortLevel?: string;
+  persona?: string;
+  reportsTo?: string | string[];
+  cliFlags?: string[];
+  alwaysNotify?: boolean;
+}
+
 export interface OrgWarning {
   employee: string;
   type: string;
@@ -95,6 +110,16 @@ async function del<T>(path: string): Promise<T> {
 async function put<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await extractErrorMessage(res));
+  return res.json();
+}
+
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -178,6 +203,13 @@ export const api = {
     post<Record<string, unknown>>(`/api/cron/${id}/trigger`, {}),
   getOrg: () => get<OrgData>("/api/org"),
   getEmployee: (name: string) => get<Employee>(`/api/org/employees/${name}`),
+  /** PATCH an employee's editable fields. `name` is immutable and must not be sent.
+   *  Returns the updated employee as re-scanned from disk. */
+  updateEmployee: (name: string, data: EmployeeUpdate) =>
+    patch<{ status: string; employee: Employee | null }>(
+      `/api/org/employees/${name}`,
+      data,
+    ),
   getDepartmentBoard: (name: string) =>
     get<Record<string, unknown>>(`/api/org/departments/${name}/board`),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),

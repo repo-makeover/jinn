@@ -719,6 +719,18 @@ export async function startGateway(
     }
   };
 
+  // Synchronously re-scan org/ into the in-memory registry and drop warm PTYs so the
+  // next turn respawns with a fresh system prompt. Shared by the API employee-update
+  // handler (immediate refresh, no watcher lag) and the chokidar onOrgChange watcher.
+  const reloadOrg = () => {
+    employeeRegistry = scanOrg();
+    logger.info(`Org directory changed, reloaded ${employeeRegistry.size} employee(s)`);
+    // Org/persona changed — drop warm PTYs so the next turn respawns with fresh system prompt.
+    interactiveClaudeEngine.killAll();
+    antigravityEngine.killAll();
+    emit("org:changed", {});
+  };
+
   // API context
   const apiContext: ApiContext = {
     config: currentConfig,
@@ -731,6 +743,7 @@ export async function startGateway(
     hookRegistry,
     hookSecret: gatewayInfo.secret,
     interactiveClaudeEngine,
+    reloadOrg,
   };
 
   // Replay any pending web queue items (e.g. gateway restart mid-run)
@@ -878,14 +891,7 @@ export async function startGateway(
       logger.info(`Cron jobs reloaded (${updatedJobs.length} job(s))`);
       emit("cron:reloaded", {});
     },
-    onOrgChange: () => {
-      employeeRegistry = scanOrg();
-      logger.info(`Org directory changed, reloaded ${employeeRegistry.size} employee(s)`);
-      // Org/persona changed — drop warm PTYs so the next turn respawns with fresh system prompt.
-      interactiveClaudeEngine.killAll();
-      antigravityEngine.killAll();
-      emit("org:changed", {});
-    },
+    onOrgChange: reloadOrg,
     onSkillsChange: () => {
       logger.info("Skills changed, notifying clients");
       emit("skills:changed", {});
