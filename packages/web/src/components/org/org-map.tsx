@@ -22,8 +22,8 @@ interface OrgMapProps {
 
 const NODE_W = 240
 const NODE_H = 90
-const COL_GAP = 80
-const GROUP_PAD_X = 30
+const COL_GAP = 24
+const GROUP_PAD_X = 16
 const GROUP_PAD_TOP = 36
 const GROUP_PAD_BOTTOM = 24
 
@@ -336,7 +336,7 @@ function buildHierarchyLayout(
     }
   }
 
-  const positions = dagreLayout(nodeIds, edgePairs, { nodesep: 80, ranksep: 120 })
+  const positions = dagreLayout(nodeIds, edgePairs, { nodesep: 40, ranksep: 60 })
 
   // ── Resolve department bounding-box overlaps ─────────────
   const deptNodes = new Map<string, string[]>()
@@ -519,7 +519,7 @@ export function OrgMap({ employees, hierarchy, selectedName, onNodeClick }: OrgM
       nodeTypes={nodeTypes}
       connectionLineType={ConnectionLineType.SmoothStep}
       fitView
-      fitViewOptions={{ padding: 0.2 }}
+      fitViewOptions={{ padding: 0.2, duration: 400 }}
       minZoom={0.2}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
