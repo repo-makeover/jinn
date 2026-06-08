@@ -1,22 +1,34 @@
 # Changelog
 
-## [Unreleased]
+## [0.18.0] - 2026-06-04
 
-> Engine & model-selection sprint. All of the below ships under a **single version
-> bump** at release (no version change in these commits).
+> Big release: the voice-first **Talk** interface, the **Antigravity** engine (replacing Gemini CLI), a dynamic model registry with mid-chat switching, a race-free `jinn restart`, the **Ledger** web theme, and WebSocket reliability work.
 
 ### ✨ Features
+- **Talk - voice-first COO interface at `/talk`.** A hands-on voice layer over the COO: the AURA avatar (state-reactive orb with channel-morphing), client-side Web Speech TTS with per-sentence playback and a sentence-synced transcript, and **decision-support cards** pushed over a dedicated card-action channel. A **thread panel** lets you see, switch, label, and dismiss child sessions by voice, and open any child session in a chat modal (from a thread chip or satellite orb). Voice state persists across route-switch, reload, and backgrounding; persona hot-reloads; iOS Web Speech is unlocked on first gesture.
 - **Antigravity (`agy`) engine** - Google Antigravity replaces the removed Gemini slot as a PTY-interactive engine. agy has no headless/`--print` mode and no hook system, so turns are driven through a PTY (one instance both runs turns and backs the xterm view) and completion is detected by tailing agy's per-conversation transcript (`~/.gemini/antigravity-cli/brain/<convId>/.system_generated/logs/transcript.jsonl`) for a `MODEL/PLANNER_RESPONSE/status:DONE` line. The conversation id becomes the engine session id; resume uses `agy --conversation <id>`. The binary is resolved **dynamically** (PATH + common dirs incl. `~/.local/bin`, optional `engines.antigravity.bin` override) - no hardcoded paths. Workspace trust is pre-seeded by realpath before spawn so the interactive trust gate never blocks; the cached Google credential is reused (no re-auth). Default model Gemini 3 Flash (agy ignores model flags today; `/model` injection deferred). Verified end-to-end against agy v1.0.x (May 2026).
 - **Dynamic model + capability registry** - `models:` block in `config.yaml` (per-model `{id,label,supportsEffort,effortLevels}`, per-engine `effortMechanism`) is the single source of truth for which engines/models exist and what they support. New `GET /api/engines` exposes the resolved registry. When the block is absent it's **synthesized** from `engines.<name>.model`, so existing configs keep working. **Adding a new model is a config edit - zero code change.** Cache invalidates on config reload and `PUT /api/config`.
 - **Mid-chat model & effort switching** - `PUT|PATCH /api/sessions/:id` accepts `{ model?, effortLevel? }`, validated against the registry for the session's engine, and applies **from the next turn** (in place - a resume spike confirmed `claude -p --resume --model <new>` honors the new model while preserving history, so no fork is needed). Engine is **new-chat-only** (not mutable mid-chat). Antigravity model changes persist but are a logged runtime no-op (agy ignores model flags).
 - **Web composer selector row** - a compact **Engine · Model · Effort** pill row above the chat input, fully registry-driven (no hardcoded lists). Engine is editable on a new chat / read-only chip in an existing chat; Model + Effort editable in both; Effort is filtered to the model's levels and hidden for effort-less engines (antigravity). Pre-fills from the chosen employee's config (new chat) or the loaded session; in-chat changes PATCH the session with an "applies to next message" note. Settings-page model/effort dropdowns are now registry-driven too (kills stale `opus-4-6` labels).
+- **`jinn restart` - detached, in-session-safe restart.** A new command that performs stop -> wait-for-port-free -> start from a reparented helper process, so it survives the gateway killing its own session PTYs (the reason a naive `stop && start` from inside a session used to leave the gateway down). `jinn start` now also auto-restarts cleanly when a gateway is already running, instead of racing the old one's shutdown into `EADDRINUSE`.
+- **Ledger web theme** - the dashboard's production look: a Dock x Ledger layout in light and dark, fully tokenized colors, and a full-width document-style chat transcript.
+
+### ⚡ Performance / Reliability
+- **WebSocket resilience.** Gateway ping/pong heartbeat reaps half-open sockets; the web client reconnects with backoff plus a watchdog and resume listeners; the CLI terminal reconnects without disposing xterm; chat backfills on active turns; and loaded session pages are preserved across refetches.
 
 ### 🐛 Fixes / Changed
+- **Interrupted sessions resume cleanly on reconnect.** After a gateway restart the web chat now reloads the interrupted session on WS reconnect and clears the stuck loading spinner, so the conversation is immediately usable instead of frozen until the next message.
 - **Effort validation is registry-driven** - replaced the hardcoded `VALID_EFFORTS` set with per-engine+model `effortLevels` from the registry. This fixes the silent **`xhigh` rejection** for codex (now valid and passed through). Unknown/unsupported levels are dropped with a logged warning (graceful degradation), never a silent pass or a throw; effort-less engines default cleanly with no noise.
+- **Talk polish** - the chat modal no longer hangs on a load failure; dismissed threads stay dismissed; `stripMarkdown` no longer mangles spoken code/math/URLs; the card validator fails closed on nested fields and is wrapped in an error boundary.
+- **Streaming + proxy** - restored live streaming and persona injection via `--append-system-prompt`; the proxy retries corrupted-TLS-socket errors (bad record mac / decrypt error / EPROTO).
+- **Tool cards** align their left edge with the message text column.
 
 ### 💥 Removed / Not supported
 - **Removed the Gemini CLI engine.** Google is sunsetting Gemini CLI for individual/free and AI Pro/Ultra users on **2026-06-18**, directing them to Antigravity. The `gemini` engine option (`engines.gemini`, `engine: gemini`) is gone. **Gemini *API* usage is unaffected** - `GEMINI_API_KEY` features (deep-research, nano-banana) still work. Historical migration notes left intact.
 - **Fast mode is explicitly NOT supported** (any engine). The real `claude` CLI has no `--fast` flag - `/fast` is an interactive, stateful TUI toggle (resets on model switch, org-disablable) with no headless/flag equivalent, and Jinn runs turns headless. Rather than carry dead infra, the concept was dropped end-to-end (no `supportsFast` in the registry, no UI control).
+
+### 🪄 Docs
+- README overhaul: Antigravity replaces Gemini throughout, the web stack is corrected to Vite (`:5173`), new features are documented (file attachments, in-app file viewer, per-session engine/model/effort, live context meter, `jinn restart`), and the obsolete `engines.claude.mode` headless opt-out was removed. Em dashes purged across all Markdown (except version-pinned migration records).
 
 ## [0.17.1] - 2026-05-31
 
