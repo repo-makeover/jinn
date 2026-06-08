@@ -34,6 +34,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { mergeSidebarEmployees } from "@/components/chat/chat-route-helpers"
 
 interface Session {
   id: string
@@ -66,6 +67,8 @@ interface ChatSidebarProps {
   onSessionsLoaded?: (sessions: Session[]) => void
   onEmployeeSessionsAvailable?: (sessions: Session[]) => void
   onOrderComputed?: (order: SidebarOrder) => void
+  /** Start a new chat with a session-less roster employee (contactable list). */
+  onContactEmployee?: (name: string) => void
 }
 
 interface FlatItem {
@@ -610,6 +613,7 @@ export function ChatSidebar({
   onSessionsLoaded,
   onEmployeeSessionsAvailable,
   onOrderComputed,
+  onContactEmployee,
 }: ChatSidebarProps) {
   const { settings } = useSettings()
   const portalName = settings.portalName ?? "Jinn"
@@ -901,6 +905,25 @@ export function ChatSidebar({
 
   const cronCollapsed = collapsed.has("cron")
 
+  // Contactable employees: the full org roster MERGED with the employees that
+  // already have sessions, then sliced down to the roster-only tail (employees
+  // with ZERO sessions). These are listed so they can be contacted directly.
+  // Hidden while searching (search spans real sessions, not the roster) and the
+  // COO/portal row is excluded (reachable via "New chat").
+  const contactableEmployees = useMemo(() => {
+    if (search.trim()) return []
+    const sessionful = [...pinnedFlat, ...unpinnedFlat]
+      .map((item) => item.employeeName)
+      .filter((n): n is string => !!n)
+    const sessionfulSet = new Set(sessionful)
+    const rosterNames = (orgData?.employees ?? []).map((e) => e.name)
+    const merged = mergeSidebarEmployees(sessionful, rosterNames)
+    return merged
+      .filter((name) => !sessionfulSet.has(name) && name !== portalSlug)
+      .map((name) => employeeData.get(name))
+      .filter((e): e is Employee => !!e)
+  }, [search, pinnedFlat, unpinnedFlat, orgData, employeeData, portalSlug])
+
   // Emit flat session order for keyboard navigation (J/K/E shortcuts)
   const orderRef = useRef<string>('')
   const allFlatIds = useMemo(() => {
@@ -1187,6 +1210,33 @@ export function ChatSidebar({
             ) : null}
           </>
         )}
+
+        {!loading && onContactEmployee && contactableEmployees.length > 0 ? (
+          <div className="mt-2 border-t border-border pt-1">
+            <SectionLabel icon={<Plus className="size-3.5 text-muted-foreground" />} label="Team" count={contactableEmployees.length} />
+            {contactableEmployees.map((emp) => (
+              <button
+                key={emp.name}
+                onClick={() => onContactEmployee(emp.name)}
+                title={`Start a chat with ${emp.displayName || titleCase(emp.name)}`}
+                className="group/contact relative flex w-full items-center gap-3 border-l-2 border-l-transparent px-4 py-2.5 text-left transition-colors hover:bg-accent"
+              >
+                <div className="relative flex size-9 shrink-0 items-center justify-center">
+                  <EmployeeAvatar name={emp.name} size={36} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <span className="block min-w-0 truncate text-[13px] font-medium tracking-[-0.2px] text-foreground">
+                    {emp.displayName || titleCase(emp.name)}
+                  </span>
+                  {emp.department ? (
+                    <span className="block truncate text-[11px] text-[var(--text-tertiary)]">{emp.department}</span>
+                  ) : null}
+                </div>
+                <Plus className="size-3.5 shrink-0 text-[var(--text-quaternary)] transition-colors group-hover/contact:text-[var(--accent)]" />
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>

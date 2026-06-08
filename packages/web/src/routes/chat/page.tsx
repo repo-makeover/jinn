@@ -1,5 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo, Suspense } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { resolveDeepLink } from '@/components/chat/chat-route-helpers'
 import { useGateway } from '@/hooks/use-gateway'
 import { PageLayout } from '@/components/page-layout'
 import { ChatSidebar, type SidebarOrder } from '@/components/chat/chat-sidebar'
@@ -78,6 +80,9 @@ function ChatPage() {
   const [employeeSessions, setEmployeeSessions] = useState<Array<{ id: string; title?: string; lastActivity?: string; createdAt?: string }>>([])
   // When true, user explicitly started a new chat — don't auto-select first session
   const newChatIntentRef = useRef(false)
+  // Employee to preselect for a brand-new chat (contacting a session-less
+  // employee from the sidebar, or via an ?employee= deep-link). Null = none.
+  const [pendingEmployee, setPendingEmployee] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('jinn-chat-sidebar-collapsed') === 'true'
@@ -265,12 +270,42 @@ function ChatPage() {
 
   const handleNewChat = useCallback(() => {
     newChatIntentRef.current = true
+    setPendingEmployee(null)
     setSelectedId(null)
     setSessionMeta(null)
     setMobileView('chat')
     setEmployeeSessions([])
     chatTabs.clearActiveTab()
   }, [chatTabs])
+
+  // Start a new chat with a specific employee preselected — used when contacting
+  // a session-less employee from the sidebar roster or via an ?employee= deep-link.
+  // The actual session is created on first send (ChatPane → buildNewSessionParams).
+  const contactEmployee = useCallback((name: string) => {
+    newChatIntentRef.current = true
+    setPendingEmployee(name)
+    setSelectedId(null)
+    setSessionMeta(null)
+    setMobileView('chat')
+    setEmployeeSessions([])
+    chatTabs.clearActiveTab()
+  }, [chatTabs])
+
+  // Deep-links: ?session=<id> focuses/opens that session's tab; ?employee=<name>
+  // opens a new chat with that employee preselected. The param is consumed once
+  // (cleared from the URL) so it doesn't re-fire on unrelated re-renders or stick
+  // across navigation. Mirrors routes/file/page.tsx's useSearchParams usage.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const link = resolveDeepLink(searchParams)
+    if (!link) return
+    if (link.kind === 'session') handleSelect(link.id)
+    else contactEmployee(link.name)
+    const next = new URLSearchParams(searchParams)
+    next.delete('session')
+    next.delete('employee')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, handleSelect, contactEmployee, setSearchParams])
 
   // Back target for the mobile file-view "back" button: the session that was
   // active when a file link was clicked. selectedIdRef (declared below) is read
@@ -654,6 +689,7 @@ function ChatPage() {
               onSessionsLoaded={handleSessionsLoaded}
               onEmployeeSessionsAvailable={handleEmployeeSessionsAvailable}
               onOrderComputed={handleOrderComputed}
+              onContactEmployee={contactEmployee}
             />
           </div>
         </div>
@@ -684,6 +720,7 @@ function ChatPage() {
               onSessionsLoaded={handleSessionsLoaded}
               onEmployeeSessionsAvailable={handleEmployeeSessionsAvailable}
               onOrderComputed={handleOrderComputed}
+              onContactEmployee={contactEmployee}
             />
           </div>
 
@@ -700,8 +737,9 @@ function ChatPage() {
               <FileView path={chatTabs.activeTab.path} embedded onBack={handleFileBack} />
             ) : (
               <ChatPane
-                key={selectedId ?? '__new__'}
+                key={selectedId ?? `__new__:${pendingEmployee ?? ''}`}
                 sessionId={selectedId}
+                initialEmployee={selectedId ? undefined : pendingEmployee}
                 isActive={true}
                 onFocus={() => {}}
                 onSessionCreated={handleSessionCreated}

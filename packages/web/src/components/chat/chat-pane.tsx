@@ -49,6 +49,8 @@ interface ChatPaneProps {
   focusTrigger?: number
   /** Callback to open keyboard shortcuts overlay */
   onShortcutsClick?: () => void
+  /** Pre-selected employee for a NEW chat (e.g. contacting a session-less employee or an ?employee= deep-link). */
+  initialEmployee?: string | null
 }
 
 export function ChatPane({
@@ -67,6 +69,7 @@ export function ChatPane({
   focusTrigger,
   onShortcutsClick,
   pendingUserMessage,
+  initialEmployee,
 }: ChatPaneProps) {
   // Live read pipeline (messages, streaming, loading, session, reconnect/watchdog)
   // is owned by useLiveSession; this pane keeps the composer + send on top and
@@ -95,8 +98,10 @@ export function ChatPane({
   const sessionIdRef = useRef(sessionId)
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
-  // Employee picker state for new chat
-  const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null)
+  // Employee picker state for new chat. Seeded from initialEmployee so a
+  // "contact this employee" click / ?employee= deep-link opens the new chat
+  // with that employee preselected (the pane is remounted via key on change).
+  const [selectedEmployee, setSelectedEmployee] = useState<string | null>(initialEmployee ?? null)
   const { data: orgData } = useOrg()
   const pickerEmployees = Array.isArray(orgData?.employees)
     ? orgData.employees.map((emp) => ({
@@ -106,9 +111,10 @@ export function ChatPane({
         rank: emp.rank,
       }))
     : []
-  // Clear the employee picker when there is no session (the live read pipeline
+  // Reset the employee picker when there is no session (the live read pipeline
   // clears its own state on a null sessionId; this is the pane-local part).
-  useEffect(() => { if (!sessionId) setSelectedEmployee(null) }, [sessionId])
+  // Falls back to initialEmployee so a preselected contact survives the reset.
+  useEffect(() => { if (!sessionId) setSelectedEmployee(initialEmployee ?? null) }, [sessionId, initialEmployee])
 
   // Engine/Model/Effort selector state (composer). Engine is editable on a new
   // chat only; model + effort are editable in existing chats too.
