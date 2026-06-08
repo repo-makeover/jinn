@@ -84,7 +84,9 @@
   100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
-/* Satellite label chip under a child orb. */
+/* Satellite label chip under a child orb. Hidden by default to keep the surface
+   quiet — only the focused channel (the one AURA is talking to) shows its label,
+   so there is at most one label on screen instead of one under every orb. */
 .cst-orb-label {
   position: absolute;
   left: 50%;
@@ -99,7 +101,11 @@
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-tertiary);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
 }
+.cst-orb[data-focused="true"] .cst-orb-label { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
   .cst-link-flow, .cst-link-return { animation: none; }

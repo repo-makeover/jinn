@@ -37,12 +37,15 @@ export default function TalkPage() {
   }, [talk])
 
   const hint = (() => {
-    if (!talk.connected) return "Connecting to Jinn…"
-    if (talk.listening) return "Listening… tap to send"
-    if (talk.state === "thinking") return "Thinking…"
-    if (talk.state === "speaking") return "Speaking…"
-    if (talk.ttsStatus.kind === "error") return "Voice output unavailable on this device"
-    if (talk.sttAvailable === false) return "Speech-to-text not installed — mic shows visual only"
+    if (!talk.connected) return "Connecting"
+    if (talk.listening) return "Listening"
+    if (talk.state === "thinking") return "Thinking"
+    if (talk.state === "speaking") return "Speaking"
+    // Errors get an actionable sentence (not a one-word state): tapping the mic
+    // clears the error and retries, so the mic button doubles as Retry.
+    if (talk.sttError) return "Didn't catch that — tap to retry"
+    if (talk.ttsStatus.kind === "error") return talk.ttsStatus.message || "No voice output"
+    if (talk.sttAvailable === false) return "Mic only"
     return "Tap to talk"
   })()
 
@@ -142,6 +145,15 @@ export default function TalkPage() {
         className="absolute inset-x-0 bottom-0 z-30 flex flex-col items-center gap-3"
         style={{ paddingBottom: "max(env(safe-area-inset-bottom), 22px)" }}
       >
+        {talk.state === "speaking" && (
+          <button
+            onClick={talk.stopSpeaking}
+            aria-label="Stop speaking"
+            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--separator)] bg-[var(--material-regular)] px-3 text-footnote text-[var(--text-secondary)] backdrop-blur-md transition-colors active:bg-[var(--fill-secondary)]"
+          >
+            <Square size={11} className="fill-current" /> Stop
+          </button>
+        )}
         <p className="text-caption1 text-[var(--text-quaternary)]">{hint}</p>
         <button
           onClick={onMic}

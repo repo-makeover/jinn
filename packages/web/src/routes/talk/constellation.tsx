@@ -123,6 +123,7 @@ export function Constellation({ state, level, threads, onOpenSession }: Constell
           <div
             key={c.id}
             className={`cst-orb ${isNew ? "cst-orb-enter" : ""}${clickable ? " cst-orb-clickable" : ""}`}
+            data-focused={isFocused}
             style={{
               left: center.x,
               top: center.y,

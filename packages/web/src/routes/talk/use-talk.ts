@@ -75,6 +75,9 @@ export interface UseTalkReturn {
   connected: boolean
   listening: boolean
   sttAvailable: boolean | null
+  /** Last speech-to-text failure (null when none). Surfaced so a failed turn
+   * isn't silent; tapping the mic again clears it and retries. */
+  sttError: string | null
   ttsStatus: TtsStatus
   /** Route the next dispatch to continue an existing thread (null → new). */
   selectThread: (id: string | null) => void
@@ -96,6 +99,12 @@ export interface UseTalkReturn {
   cardAction: (message: string) => void
   startListening: () => void
   stop: () => void
+  /**
+   * Interrupt the current spoken reply: stops Web-Speech / server audio
+   * playback and returns the avatar to idle. Playback-stop only — it does not
+   * re-open the mic or cancel the (already-finished) backend turn.
+   */
+  stopSpeaking: () => void
 }
 
 export function useTalk(): UseTalkReturn {
@@ -128,6 +137,10 @@ export function useTalk(): UseTalkReturn {
 
   const levelRafRef = useRef<number>(0)
   const levelModeRef = useRef<"mic" | "output" | null>(null)
+  // Throttle state for the level loop: last committed value + timestamp, so the
+  // rAF can sample every frame but only re-render the orb tree ~25fps.
+  const levelLastValRef = useRef<number | undefined>(undefined)
+  const levelLastCommitRef = useRef(0)
   const turnSeqRef = useRef(0)
 
   // Per-turn assistant bubble + accumulated text (for Web Speech on completion).
@@ -160,6 +173,8 @@ export function useTalk(): UseTalkReturn {
       levelRafRef.current = 0
     }
     levelModeRef.current = null
+    levelLastValRef.current = undefined
+    levelLastCommitRef.current = 0
     setLevel(undefined)
   }, [])
 
@@ -167,6 +182,24 @@ export function useTalk(): UseTalkReturn {
     if (levelRafRef.current && levelModeRef.current === mode) return
     if (levelRafRef.current) cancelAnimationFrame(levelRafRef.current)
     levelModeRef.current = mode
+    // The rAF samples every frame (smooth source for the orb springs) but
+    // setLevel — which re-renders the orb tree — is gated: at most ~25fps and
+    // only when the value moved a perceptible amount. Edge transitions to/from
+    // undefined always commit so listening/idle handoffs are never dropped.
+    const MIN_COMMIT_MS = 40
+    const MIN_DELTA = 0.01
+    const commit = (next: number | undefined) => {
+      const prev = levelLastValRef.current
+      const edge = (next === undefined) !== (prev === undefined)
+      const changed =
+        next !== undefined && prev !== undefined && Math.abs(next - prev) >= MIN_DELTA
+      if (!edge && !changed) return
+      const now = performance.now()
+      if (!edge && now - levelLastCommitRef.current < MIN_COMMIT_MS) return
+      levelLastCommitRef.current = now
+      levelLastValRef.current = next
+      setLevel(next)
+    }
     const tick = () => {
       if (mode === "mic") {
         const analyser = sttRef.current.analyser
@@ -179,11 +212,11 @@ export function useTalk(): UseTalkReturn {
             sum += v * v
           }
           const rms = Math.sqrt(sum / buf.length)
-          setLevel(Math.min(1, rms * 3.2))
-        } else setLevel(undefined)
+          commit(Math.min(1, rms * 3.2))
+        } else commit(undefined)
       } else {
         const player = playerRef.current
-        setLevel(player && player.playing ? player.level : undefined)
+        commit(player && player.playing ? player.level : undefined)
       }
       levelRafRef.current = requestAnimationFrame(tick)
     }
@@ -589,6 +622,18 @@ export function useTalk(): UseTalkReturn {
     }
   }, [stopLevelLoop])
 
+  // ---- Interrupt playback (Stop button while speaking) ---------------------
+  // Cancels the in-flight Web-Speech sentence chain (and its caption timers) and
+  // resets the server-audio player in case Kokoro audio is playing, then drops
+  // to idle. The backend turn already completed by the time we're speaking, so
+  // there's nothing to cancel server-side; this is pure playback-stop.
+  const stopSpeaking = useCallback(() => {
+    try { speakRef.current.cancel() } catch { /* noop */ }
+    playerRef.current?.reset()
+    setState((s) => (s === "speaking" ? "idle" : s))
+    stopLevelLoop()
+  }, [stopLevelLoop])
+
   // ---- Cleanup -------------------------------------------------------------
   useEffect(() => {
     return () => {
@@ -609,11 +654,12 @@ export function useTalk(): UseTalkReturn {
       connected: gateway.connected,
       listening,
       sttAvailable: stt.available,
+      sttError: stt.error,
       ttsStatus,
       selectThread, renameThread, dismissThread,
       activate, cardAction,
-      startListening, stop,
+      startListening, stop, stopSpeaking,
     }),
-    [state, entries, threads, targetThreadId, cards, level, gateway.connected, listening, stt.available, ttsStatus, selectThread, renameThread, dismissThread, activate, cardAction, startListening, stop],
+    [state, entries, threads, targetThreadId, cards, level, gateway.connected, listening, stt.available, stt.error, ttsStatus, selectThread, renameThread, dismissThread, activate, cardAction, startListening, stop, stopSpeaking],
   )
 }

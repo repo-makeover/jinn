@@ -7,7 +7,8 @@
  */
 
 .tp {
-  width: min(248px, 76vw);
+  /* Collapsed → fits the icon row (quiet); expanded → full panel width. */
+  width: auto;
   border-radius: var(--radius-lg, 14px);
   border: 1px solid var(--separator);
   background: var(--material-thick);
@@ -16,6 +17,7 @@
   box-shadow: var(--shadow-overlay);
   overflow: hidden;
 }
+.tp[data-open="true"] { width: min(248px, 76vw); }
 
 /* ---- header / collapse toggle ---- */
 .tp__head {
@@ -32,18 +34,6 @@
   cursor: pointer;
 }
 .tp__head:active { background: var(--fill-secondary); }
-.tp__title { flex: 0 0 auto; }
-.tp__count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--accent-fill);
-  color: var(--accent);
-  font-size: 11px;
-}
 .tp__chev { margin-left: auto; transition: transform 220ms ease; }
 .tp__chev--open { transform: rotate(180deg); }
 
@@ -58,14 +48,14 @@
 }
 
 .tp__new {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 9px;
-  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  align-self: flex-start;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   border: 1px dashed var(--separator);
   color: var(--text-tertiary);
-  font-size: 12.5px;
   cursor: pointer;
   transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
 }
@@ -140,16 +130,6 @@
   color: var(--text-primary);
   outline: none;
 }
-
-.tp__status {
-  flex-shrink: 0;
-  font-family: var(--font-code);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.tp__status--run { color: hsl(var(--tp-hue) 70% 58%); }
-.tp__status--done { color: var(--text-quaternary); }
 
 .tp__icon {
   flex-shrink: 0;

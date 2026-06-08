@@ -25,7 +25,9 @@ export interface ThreadPanelProps {
 }
 
 export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDismiss, onOpenSession }: ThreadPanelProps) {
-  const [open, setOpen] = useState(true)
+  // Collapsed by default: the panel is a single icon until tapped, so the voice
+  // surface stays quiet (orb-dominant). Expanding reveals the thread list.
+  const [open, setOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState("")
 
@@ -41,11 +43,15 @@ export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDis
   }
 
   return (
-    <div className="tp">
-      <button className="tp__head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+    <div className="tp" data-open={open}>
+      <button
+        className="tp__head"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-label={`Threads (${threads.length})`}
+        title={`Threads (${threads.length})`}
+      >
         <Layers size={13} />
-        <span className="tp__title">Threads</span>
-        <span className="tp__count">{threads.length}</span>
         <ChevronDown size={14} className={`tp__chev${open ? " tp__chev--open" : ""}`} />
       </button>
 
@@ -55,8 +61,10 @@ export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDis
             className="tp__new"
             data-active={targetThreadId === null}
             onClick={() => onSelect(null)}
+            aria-label="Route next message to a new thread"
+            title="New thread"
           >
-            <Plus size={13} /> New thread
+            <Plus size={13} />
           </button>
 
           {ordered.map((t) => {
@@ -94,10 +102,6 @@ export function ThreadPanel({ threads, targetThreadId, onSelect, onRename, onDis
                     {t.label}
                   </button>
                 )}
-
-                <span className={`tp__status tp__status--${running ? "run" : "done"}`}>
-                  {running ? "Running" : "Done"}
-                </span>
 
                 <button
                   className="tp__icon"
