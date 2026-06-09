@@ -379,6 +379,23 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     info("Do this before `jinn start`, or sessions will fail silently.");
   }
 
+  // 4b. Speech-to-text (mic) prerequisites — optional. The voice/mic flow on
+  // /talk and /chat transcribes audio with whisper.cpp's `whisper-cli` plus
+  // `ffmpeg` (to resample to 16kHz mono WAV). These are NOT required for the
+  // gateway, text chat, or voice output — only mic input — so missing deps are
+  // guidance, never a hard failure.
+  console.log("");
+  const whisperPath = whichBin("whisper-cli");
+  const ffmpegPath = whichBin("ffmpeg");
+  if (whisperPath && ffmpegPath) {
+    ok("Speech-to-text (mic) ready -- whisper-cli + ffmpeg found");
+  } else {
+    warn("Speech-to-text (mic) unavailable -- mic input will be disabled (text + voice output still work).");
+    if (!ffmpegPath) info("Install ffmpeg with: brew install ffmpeg");
+    if (!whisperPath) info("Install whisper-cli with: brew install whisper-cpp");
+    info("The transcription model is downloaded automatically from the app the first time you use the mic -- no manual fetch needed.");
+  }
+
   // 5. Interactive setup (only when stdin is a TTY and config doesn't exist yet)
   const isFreshSetup = !fs.existsSync(CONFIG_PATH);
   const isInteractive = process.stdin.isTTY && isFreshSetup;
