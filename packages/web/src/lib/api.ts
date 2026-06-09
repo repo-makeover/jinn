@@ -267,12 +267,51 @@ export const api = {
    */
   talkCreateSession: (fresh = false) =>
     post<{ sessionId: string; reused: boolean }>("/api/talk/session", { fresh }),
-  /** Talk: TTS/loop readiness (whether the local voice model is installed + download state). */
+  /** Talk: TTS/loop readiness + the active orchestrator engine/model. */
   talkStatus: () =>
-    get<{ available: boolean; ttsAvailable: boolean; ttsModel: string | null; downloading: boolean; progress: number }>("/api/talk/status"),
+    get<{
+      ttsAvailable: boolean
+      ttsDownloading: boolean
+      progress: number
+      voice?: string | null
+      ready?: boolean
+      /** Active orchestrator engine (null when none is installed). */
+      engine: string | null
+      model: string | null
+      /** True when the configured/default engine was unavailable and we fell back. */
+      engineFallback: boolean
+      /** Installed engines the orchestrator could use, in priority order. */
+      enginesAvailable: string[]
+    }>("/api/talk/status"),
   /** Talk: kick off the local TTS model download (progress streams via talk:tts:download:* WS events). */
   talkTtsDownload: () =>
     post<{ status: string; model: string }>("/api/talk/tts/download", {}),
+  /** Talk: the currently-active orchestrator engine/model + the available set. */
+  talkEngineGet: () =>
+    get<{
+      engine: string | null
+      model: string | null
+      fallback: boolean
+      reason: string | null
+      available: string[]
+      configured: string | null
+      liveSessionEngine: string | null
+    }>("/api/talk/engine"),
+  /**
+   * Talk: switch the orchestrator engine and/or model.
+   * - model: applies to the live session on its next turn (no re-bootstrap).
+   * - engine: new-chat-only — the caller MUST re-bootstrap the talk session
+   *   (talkCreateSession) so the new engine is adopted.
+   */
+  talkEngineSet: (body: { engine?: string; model?: string }) =>
+    post<{
+      ok: boolean
+      engine: string | null
+      model: string | null
+      fallback: boolean
+      reason: string | null
+      available: string[]
+    }>("/api/talk/engine", body),
   getSessionQueue: (id: string) =>
     get<QueueItem[]>(`/api/sessions/${id}/queue`),
   cancelQueueItem: (sessionId: string, itemId: string) =>

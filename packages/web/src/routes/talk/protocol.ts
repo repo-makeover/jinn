@@ -27,6 +27,7 @@ export const TALK_EVENTS = {
   ttsDownloadProgress: "talk:tts:download:progress",
   ttsDownloadComplete: "talk:tts:download:complete",
   ttsDownloadError: "talk:tts:download:error",
+  engine: "talk:engine",
 } as const
 
 /** Task as it arrives on the wire (backend uses `label`). */
@@ -58,6 +59,10 @@ export interface TalkTurnDoneEvent { sessionId: string; ok: boolean; error?: str
 export interface TalkFocusEvent { cooId: string; label: string; parentId: string }
 /** Orchestrator sets/refines a COO thread's topic label. */
 export interface TalkThreadLabelEvent { sessionId: string; threadId: string; label: string }
+/** The active orchestrator engine/model changed (POST /api/talk/engine). The model
+ *  applies on the live session's next turn; the engine is new-chat-only (the UI
+ *  re-bootstraps the talk session for an engine change). */
+export interface TalkEngineEvent { engine: string | null; model: string | null; fallback: boolean }
 
 /**
  * Core gateway stream events the Talk loop also consumes (Path 1). The voice

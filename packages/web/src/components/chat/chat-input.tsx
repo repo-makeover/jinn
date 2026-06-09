@@ -3,7 +3,7 @@ import { api } from '@/lib/api'
 import type { MediaAttachment } from '@/lib/conversations'
 import { MediaPreview } from './media-preview'
 import { useStt } from '@/hooks/use-stt'
-import { SttDownloadModal } from './stt-download-modal'
+import { WhisperDownloadModal } from '@/components/stt/whisper-download-modal'
 import { SttWaveform } from './stt-waveform'
 import { EmployeeAvatar } from '@/components/ui/employee-avatar'
 
@@ -667,7 +667,7 @@ export function ChatInput({
       )}
 
       {/* STT model download modal */}
-      <SttDownloadModal
+      <WhisperDownloadModal
         open={stt.state === 'no-model'}
         progress={stt.downloadProgress}
         onDownload={stt.startDownload}

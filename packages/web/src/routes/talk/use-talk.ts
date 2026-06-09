@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useGateway } from "@/hooks/use-gateway"
-import { useStt } from "@/hooks/use-stt"
+import { useStt, type SttState } from "@/hooks/use-stt"
 import { useSpeak, splitSentences } from "./use-speak"
 import { stripMarkdown } from "@/lib/strip-markdown"
 import { api } from "@/lib/api"
@@ -30,6 +30,7 @@ import {
   type TalkCardEvent,
   type TalkCardUpdateEvent,
   type TalkCardDismissEvent,
+  type TalkEngineEvent,
   type SessionDeltaEvent,
   type SessionCompletedEvent,
 } from "./protocol"
@@ -61,6 +62,24 @@ export type TtsStatus =
   | { kind: "ready" }
   | { kind: "error"; message: string }
 
+/** Which voice actually produced the most recent spoken turn. `neural` = the
+ *  gateway streamed Kokoro audio (talk:audio) and it played; `fallback` = the
+ *  browser Web-Speech synth (or caption-only). null → nothing spoken yet. This
+ *  makes a silent Kokoro break visible instead of degrading unnoticed. */
+export type VoiceMode = "neural" | "fallback" | null
+
+/** Active orchestrator engine/model + the available set, for the picker. */
+export interface TalkEngineInfo {
+  engine: string | null
+  model: string | null
+  fallback: boolean
+  reason: string | null
+  available: string[]
+  /** False until GET /api/talk/engine has resolved — so an empty `available`
+   *  before the first fetch isn't mistaken for "no engine installed". */
+  loaded: boolean
+}
+
 export interface UseTalkReturn {
   state: AvatarState
   entries: TranscriptEntry[]
@@ -79,6 +98,23 @@ export interface UseTalkReturn {
    * isn't silent; tapping the mic again clears it and retries. */
   sttError: string | null
   ttsStatus: TtsStatus
+  /** Voice that produced the last spoken turn (neural Kokoro vs Web-Speech). */
+  voiceMode: VoiceMode
+  /** Raw STT lifecycle state — drives the whisper-model-download modal. */
+  sttState: SttState
+  /** 0..100 while the whisper model downloads (null otherwise). */
+  sttDownloadProgress: number | null
+  /** Kick off the local whisper model download (progress streams over WS). */
+  startSttDownload: () => void
+  /** Dismiss the download modal and return the avatar to idle. */
+  dismissSttDownload: () => void
+  /** Active orchestrator engine/model + available engines (for the picker). */
+  engineInfo: TalkEngineInfo
+  /** Switch the orchestrator ENGINE — persists then RE-BOOTSTRAPS the session so
+   *  the new engine is adopted immediately (a live PTY can't swap mid-turn). */
+  switchEngine: (engine: string) => void
+  /** Switch the orchestrator MODEL — applies on the live session's next turn. */
+  switchModel: (model: string) => void
   /** Route the next dispatch to continue an existing thread (null → new). */
   selectThread: (id: string | null) => void
   /** Rename a thread's topic label (UI-only). */
@@ -118,6 +154,15 @@ export function useTalk(): UseTalkReturn {
   const [cards, setCards] = useState<Card[]>([])
   const [level, setLevel] = useState<number | undefined>(undefined)
   const [ttsStatus, setTtsStatus] = useState<TtsStatus>({ kind: "idle" })
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>(null)
+  const [engineInfo, setEngineInfo] = useState<TalkEngineInfo>({
+    engine: null,
+    model: null,
+    fallback: false,
+    reason: null,
+    available: [],
+    loaded: false,
+  })
 
   // Heavy bootstrap is gated on activation (TalkPage calls activate() on mount),
   // so the globally-mounted provider doesn't create a talk session until used.
@@ -162,7 +207,9 @@ export function useTalk(): UseTalkReturn {
   const targetThreadIdRef = useRef<string | null>(targetThreadId)
   targetThreadIdRef.current = targetThreadId
 
-  const stt = useStt()
+  // Pass the gateway's `stt:*` event stream so the whisper-model download
+  // progress/completion lands here too (same source ChatInput's useStt uses).
+  const stt = useStt(gateway.events)
   const sttRef = useRef(stt)
   sttRef.current = stt
 
@@ -374,6 +421,10 @@ export function useTalk(): UseTalkReturn {
         stopLevelLoop()
         return
       }
+      // Record which voice is producing this turn so the UI can show neural vs
+      // fallback. `kokoro` is true only when server talk:audio actually arrived
+      // and played — so a silent Kokoro break surfaces here as "fallback".
+      setVoiceMode(kokoro ? "neural" : "fallback")
       setState("speaking")
       // When kokoro is true, server audio owns the speaking/idle transition via
       // player.onIdle — speak() runs caption-only timers and we only finalize.
@@ -395,6 +446,17 @@ export function useTalk(): UseTalkReturn {
         if (event === TALK_EVENTS.ttsDownloadProgress) setTtsStatus({ kind: "downloading", progress: (payload as { progress?: number }).progress ?? 0 })
         else if (event === TALK_EVENTS.ttsDownloadComplete) setTtsStatus({ kind: "ready" })
         else setTtsStatus({ kind: "error", message: (payload as { error?: string }).error ?? "TTS error" })
+        return
+      }
+
+      if (event === TALK_EVENTS.engine) {
+        const ev = payload as TalkEngineEvent
+        setEngineInfo((prev) => ({
+          ...prev,
+          engine: ev.engine,
+          model: ev.model,
+          fallback: ev.fallback,
+        }))
         return
       }
 
@@ -532,28 +594,71 @@ export function useTalk(): UseTalkReturn {
   // swallowed and a mobile tab-resume right after load wouldn't re-pull.
   const didInitialReconnectRef = useRef(false)
 
-  // ---- Bootstrap orchestrator + probe TTS (gated on activation) -------------
+  // Create (or reuse) the orchestrator session and rehydrate it. Extracted so an
+  // ENGINE switch can RE-BOOTSTRAP: the POST /api/talk/session reuse-guard refuses
+  // to reuse a session whose engine differs from the freshly-resolved one, so a
+  // plain re-create lands the new engine on a fresh session id.
+  const bootstrapSession = useCallback(async () => {
+    try {
+      const r = await api.talkCreateSession()
+      setOrchestratorId(r.sessionId)
+      void rehydrate(r.sessionId)
+      didInitialReconnectRef.current = true
+    } catch { /* surfaced via connection hint */ }
+  }, [rehydrate])
+
+  // Refresh the active orchestrator engine/model + the available engine set.
+  const refreshEngineInfo = useCallback(async () => {
+    try {
+      const e = await api.talkEngineGet()
+      setEngineInfo({
+        engine: e.engine, model: e.model, fallback: e.fallback, reason: e.reason, available: e.available, loaded: true,
+      })
+    } catch { /* keep prior info */ }
+  }, [])
+
+  // ---- Bootstrap orchestrator + probe TTS/engine (gated on activation) ------
   useEffect(() => {
     if (!activated) return
     let alive = true
-    api.talkCreateSession()
-      .then((r) => {
-        if (!alive) return
-        setOrchestratorId(r.sessionId)
-        void rehydrate(r.sessionId)
-        didInitialReconnectRef.current = true
-      })
-      .catch(() => { /* surfaced via connection hint */ })
+    void bootstrapSession()
+    void refreshEngineInfo()
     api.talkStatus()
       .then((s) => {
         if (!alive) return
-        if (s.downloading) setTtsStatus({ kind: "downloading", progress: s.progress ?? 0 })
+        if (s.ttsDownloading) setTtsStatus({ kind: "downloading", progress: s.progress ?? 0 })
         else if (s.ttsAvailable) setTtsStatus({ kind: "ready" })
         else setTtsStatus({ kind: "idle" })
       })
       .catch(() => {})
     return () => { alive = false }
-  }, [activated, rehydrate])
+  }, [activated, bootstrapSession, refreshEngineInfo])
+
+  // ---- Engine / model switching --------------------------------------------
+  // Engine: persist then re-bootstrap (new-chat-only). Model: persist only
+  // (applies on the live session's next turn — the backend mutates it for us).
+  const switchEngine = useCallback((engine: string) => {
+    void (async () => {
+      try {
+        const r = await api.talkEngineSet({ engine })
+        setEngineInfo((prev) => ({
+          ...prev, engine: r.engine, model: r.model, fallback: r.fallback, reason: r.reason, available: r.available,
+        }))
+        await bootstrapSession()
+      } catch { /* leave prior engine; fallback surfaced in the picker */ }
+    })()
+  }, [bootstrapSession])
+
+  const switchModel = useCallback((model: string) => {
+    void (async () => {
+      try {
+        const r = await api.talkEngineSet({ model })
+        setEngineInfo((prev) => ({
+          ...prev, engine: r.engine, model: r.model, fallback: r.fallback, reason: r.reason, available: r.available,
+        }))
+      } catch { /* keep prior */ }
+    })()
+  }, [])
 
   // ---- Persist the routed-thread selection ---------------------------------
   useEffect(() => { saveTargetThread(targetThreadId) }, [targetThreadId])
@@ -568,6 +673,23 @@ export function useTalk(): UseTalkReturn {
     if (!didInitialReconnectRef.current) return // bootstrap hasn't rehydrated yet
     void rehydrate(orch)
   }, [activated, gateway.connectionSeq, rehydrate])
+
+  // ---- Whisper model download (mic tap on a fresh install) -----------------
+  // When the mic tap finds no local STT model, useStt flips to "no-model"; drop
+  // the optimistic "listening" state back to idle so the download modal reads
+  // cleanly. dismiss returns to idle; startDownload streams progress over WS.
+  useEffect(() => {
+    if (stt.state === "no-model") {
+      setState((s) => (s === "listening" ? "idle" : s))
+      stopLevelLoop()
+    }
+  }, [stt.state, stopLevelLoop])
+
+  const dismissSttDownload = useCallback(() => {
+    sttRef.current.dismissDownload()
+    setState((s) => (s === "listening" ? "idle" : s))
+    stopLevelLoop()
+  }, [stopLevelLoop])
 
   // ---- Mic control (plain tap-to-talk) -------------------------------------
   const startListening = useCallback(() => {
@@ -656,10 +778,17 @@ export function useTalk(): UseTalkReturn {
       sttAvailable: stt.available,
       sttError: stt.error,
       ttsStatus,
+      voiceMode,
+      sttState: stt.state,
+      sttDownloadProgress: stt.downloadProgress,
+      startSttDownload: stt.startDownload,
+      dismissSttDownload,
+      engineInfo,
+      switchEngine, switchModel,
       selectThread, renameThread, dismissThread,
       activate, cardAction,
       startListening, stop, stopSpeaking,
     }),
-    [state, entries, threads, targetThreadId, cards, level, gateway.connected, listening, stt.available, stt.error, ttsStatus, selectThread, renameThread, dismissThread, activate, cardAction, startListening, stop, stopSpeaking],
+    [state, entries, threads, targetThreadId, cards, level, gateway.connected, listening, stt.available, stt.error, stt.state, stt.downloadProgress, stt.startDownload, ttsStatus, voiceMode, dismissSttDownload, engineInfo, switchEngine, switchModel, selectThread, renameThread, dismissThread, activate, cardAction, startListening, stop, stopSpeaking],
   )
 }

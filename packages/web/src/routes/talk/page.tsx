@@ -17,6 +17,9 @@ import { CardStack } from "./cards/card-stack"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { ThreadPanel } from "./thread-panel"
 import { ChildSessionModal } from "./child-session-modal"
+import { TalkEnginePicker } from "./talk-engine-picker"
+import { TalkVoiceIndicator } from "./talk-voice-indicator"
+import { WhisperDownloadModal } from "@/components/stt/whisper-download-modal"
 import { useTalkContext } from "./talk-provider"
 
 export default function TalkPage() {
@@ -36,8 +39,13 @@ export default function TalkPage() {
     else talk.startListening()
   }, [talk])
 
+  // No installed engine for the orchestrator → the loop can't run; surface an
+  // actionable message instead of letting the mic silently fail.
+  const noEngine = talk.engineInfo.loaded && talk.engineInfo.available.length === 0
+
   const hint = (() => {
     if (!talk.connected) return "Connecting"
+    if (noEngine) return "No voice engine — open settings ⚙"
     if (talk.listening) return "Listening"
     if (talk.state === "thinking") return "Thinking"
     if (talk.state === "speaking") return "Speaking"
@@ -74,13 +82,21 @@ export default function TalkPage() {
         <span className="pointer-events-none select-none font-[family-name:var(--font-code)] text-[10px] uppercase tracking-[0.28em] text-[var(--text-tertiary)]">
           Jinn · Talk <span className="text-[var(--accent)]">// AURA</span>
         </span>
-        <button
-          onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-          aria-label="Toggle theme"
-          className="inline-flex size-9 items-center justify-center rounded-full border border-[var(--separator)] bg-[var(--material-regular)] text-[var(--text-secondary)] backdrop-blur-md transition-colors active:bg-[var(--fill-secondary)]"
-        >
-          {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Engine/model picker — tiny gear, tucked beside the theme toggle. */}
+          <TalkEnginePicker
+            engineInfo={talk.engineInfo}
+            onSwitchEngine={talk.switchEngine}
+            onSwitchModel={talk.switchModel}
+          />
+          <button
+            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            aria-label="Toggle theme"
+            className="inline-flex size-9 items-center justify-center rounded-full border border-[var(--separator)] bg-[var(--material-regular)] text-[var(--text-secondary)] backdrop-blur-md transition-colors active:bg-[var(--fill-secondary)]"
+          >
+            {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
+          </button>
+        </div>
       </div>
 
       {/* Transcript overlay (upper area) */}
@@ -154,7 +170,11 @@ export default function TalkPage() {
             <Square size={11} className="fill-current" /> Stop
           </button>
         )}
-        <p className="text-caption1 text-[var(--text-quaternary)]">{hint}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-caption1 text-[var(--text-quaternary)]">{hint}</p>
+          {/* Neural-vs-fallback voice indicator (hidden until first spoken turn). */}
+          <TalkVoiceIndicator voiceMode={talk.voiceMode} />
+        </div>
         <button
           onClick={onMic}
           aria-label={isRecording ? "Stop and send" : "Start talking"}
@@ -174,6 +194,15 @@ export default function TalkPage() {
         sessionId={chatSessionId}
         open={!!chatSessionId}
         onClose={() => setChatSessionId(null)}
+      />
+
+      {/* Whisper STT model-download — shown when the mic is tapped on a fresh
+          install with no local model (same flow /chat uses). */}
+      <WhisperDownloadModal
+        open={talk.sttState === "no-model"}
+        progress={talk.sttDownloadProgress}
+        onDownload={talk.startSttDownload}
+        onCancel={talk.dismissSttDownload}
       />
     </div>
   )

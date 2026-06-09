@@ -1,13 +1,21 @@
+/**
+ * Whisper STT model-download modal — shared by /chat (ChatInput) and /talk.
+ *
+ * Both surfaces drive the same useStt flow: when the mic is tapped and no local
+ * model is installed, stt.state becomes "no-model" and this modal asks to
+ * download it. Progress (downloadProgress) streams over `stt:*` WS events while
+ * api.sttDownload() runs. Keep this dependency-free so any surface can mount it.
+ */
 import React from "react"
 
-interface SttDownloadModalProps {
+interface WhisperDownloadModalProps {
   open: boolean
   progress: number | null
   onDownload: () => void
   onCancel: () => void
 }
 
-export function SttDownloadModal({ open, progress, onDownload, onCancel }: SttDownloadModalProps) {
+export function WhisperDownloadModal({ open, progress, onDownload, onCancel }: WhisperDownloadModalProps) {
   if (!open) return null
 
   const isDownloading = progress !== null
