@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.19.0] - 2026-06-09
+
+> Talk grows up: a calmer voice-first surface, a configurable orchestrator engine with seamless fallback (so Talk works on Codex/Antigravity, not just Claude), in-app mic setup, type-to-talk, and a silent/read mode. Plus a fresh-install hardening pass, org-map improvements, and a repository privacy scrub.
+
+### ✨ Features
+- **Talk — quieter, more usable voice surface.** The screen was reworked so the AURA orb dominates: collapsed/icon-only thread panel, one-word status, focused-only channel labels, a throttled level meter, and a Stop-speaking button. The orchestrator persona was rewritten ~50% leaner and voice-first.
+- **Talk — configurable orchestrator engine + seamless fallback.** The voice orchestrator is no longer hardcoded to Claude. New `config.talk.engine` plus a resolver chain (`talk.engine → default engine → first available`) means a user with only **Codex** or only **Antigravity** gets a working Talk out of the box. A tucked-away gear picker switches engine + model live (applies next turn).
+- **Talk — type-to-talk.** A keyboard toggle reveals a text input that routes through the same path as a voice turn — usable when you can't speak or the mic isn't set up. The main button is action-aware, morphing **Mic ↔ Send ↔ Stop**.
+- **Talk — mute / silent-read mode.** Suppresses speech (both neural and browser fallback) and skips server-side synthesis entirely when muted; replies are read in the transcript. Persisted across reloads.
+- **Talk — in-app mic setup.** Tapping the mic on a fresh install now opens the shared Whisper-model download flow (reused from chat) instead of dead-ending; `jinn setup` checks for `whisper-cli` + `ffmpeg` and prints install guidance.
+- **Talk — focused card model.** The voice surface now shows only actionable/watchable cards (approval, choice, status, agent-activity, plus a rare text valve); richer card types are reserved for chat.
+- **Org map.** Map-only `/org` view with a compact d3-hierarchy layout, an inline employee editor in the detail panel, a full employee-update API (`PATCH /api/org/employees/:name`), and chat deep-links to contactable roster employees.
+
+### ⚡ Performance / Reliability
+- **Kokoro neural TTS hardening.** The voice sidecar now recovers automatically if its Python venv is invalidated by a base-Python upgrade (a broken interpreter symlink is treated as "rebuild needed"), so neural voice doesn't silently degrade to the robotic browser fallback.
+
+### 🐛 Fixes
+- **Duplicate works for `.jinn` sessions** — the fork slug now handles `.` in the working-directory path.
+- **Fresh-install hardening** — a missing/unauthenticated engine is surfaced clearly instead of failing silently; engine binary resolution is unified across Claude/Codex (thin-PATH safe); the onboarding rename is fixed; config reload is instant; the browser opens on first start; the seeded config now includes the MCP block.
+- **Connector reply delivery** when a web-session turn completes; **Codex fallback** guarded on the engine actually being installed; **mid-turn stream blocks** persist so a refresh restores them; child turn text is recovered from the transcript when the Stop hook is lost.
+
+### 🔒 Privacy
+- **Repository privacy scrub.** Removed maintainer/third-party personal data that had been committed into shipped source (notably the default Talk persona), genericized examples, and **stopped shipping test files in the npm tarball**. The default persona and templates are now fully generic; anything personal lives only in a user's local `~/.jinn`.
+
 ## [0.18.1] - 2026-06-08
 
 ### 🐛 Fixes
