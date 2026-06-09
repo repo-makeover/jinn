@@ -14,8 +14,13 @@ interface LiveProcess {
  * so the window fill is `input_tokens` alone — summing would double-count.
  * Best-effort: returns undefined on any shape mismatch.
  */
-function extractCodexContextTokens(usage: unknown): number | undefined {
+export function extractCodexContextTokens(usage: unknown): number | undefined {
   if (!usage || typeof usage !== "object") return undefined;
+  const last = (usage as Record<string, unknown>).last_token_usage;
+  if (last && typeof last === "object") {
+    const n = Number((last as Record<string, unknown>).input_tokens ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  }
   const n = Number((usage as Record<string, unknown>).input_tokens ?? 0);
   // Some Codex CLI builds report cumulative/billed input tokens here, not the
   // active context window. A value above any supported Codex window is unusable

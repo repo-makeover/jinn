@@ -10,7 +10,7 @@
  *     (no viewer, no running turn, oldest viewingEndedAt/lastTurnEndedAt).
  */
 
-export const CLI_KEEPALIVE_AFTER_LEAVE_MS = 10 * 60 * 1000;
+export const CLI_KEEPALIVE_AFTER_LEAVE_MS = 4 * 60 * 60 * 1000;
 
 export interface PtyHandle {
   pid: number;

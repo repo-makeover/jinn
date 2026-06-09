@@ -507,9 +507,7 @@ function ChatPage() {
     // instead of ChatPane, but the underlying session selection is preserved.
   }, [chatTabs.activeTab, selectedId])
 
-  // Codex does not have a PTY/xterm wrapper yet. Keep the Chat/CLI control visible
-  // so the capability gap is explicit, but keep Codex sessions rendered as chat.
-  const cliModeAvailable = sessionMeta?.engine !== 'codex'
+  const cliModeAvailable = !sessionMeta?.engine || ['claude', 'codex', 'antigravity'].includes(sessionMeta.engine)
   const effectiveViewMode: ViewMode = cliModeAvailable ? viewMode : 'chat'
 
   // More menu (shared between desktop tab bar and mobile header)
@@ -540,7 +538,7 @@ function ChatPage() {
               <button
                 onClick={() => { if (cliModeAvailable) { setAndPersistViewMode('cli'); setShowMoreMenu(false) } }}
                 disabled={!cliModeAvailable}
-                title={cliModeAvailable ? undefined : 'Codex CLI view is not wired yet'}
+                title={cliModeAvailable ? undefined : 'CLI view is not available for this engine'}
                 className={cn(
                   "flex-1 rounded-md px-2 py-1 font-mono text-xs font-medium transition-colors",
                   effectiveViewMode === 'cli' ? "bg-[var(--accent-fill)] text-[var(--accent)]" : "text-muted-foreground hover:bg-accent",
@@ -622,7 +620,7 @@ function ChatPage() {
         <button
           onClick={() => { if (cliModeAvailable) setAndPersistViewMode('cli') }}
           disabled={!cliModeAvailable}
-          title={cliModeAvailable ? undefined : 'Codex CLI view is not wired yet'}
+          title={cliModeAvailable ? undefined : 'CLI view is not available for this engine'}
           className={cn(
             "rounded-full px-2.5 py-1 font-mono text-[11px] font-medium transition-all",
             effectiveViewMode === 'cli'

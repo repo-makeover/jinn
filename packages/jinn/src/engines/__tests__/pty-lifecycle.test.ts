@@ -28,7 +28,7 @@ describe("PtyLifecycleManager", () => {
 
   it("a PTY with no viewer dies within the grace window after turnEnded", () => {
     // No viewer, no turn → grace window starts → reevaluate kills since lastTurnEndedAt is 0… actually
-    // lastTurnEndedAt is set on turnEnded, so within the 10-min cap it stays alive.
+    // lastTurnEndedAt is set on turnEnded, so within the keep-alive cap it stays alive.
     const m = new PtyLifecycleManager({ maxLivePtys: 8 });
     const h = fakeHandle();
     m.adopt("sess-3", h);
@@ -53,7 +53,7 @@ describe("PtyLifecycleManager", () => {
     m.adopt("sess-5", h);
     m.viewerEnter("sess-5");
     m.viewerLeave("sess-5");
-    // viewingEndedAt was just set to now → still inside 10-min grace → alive
+    // viewingEndedAt was just set to now -> still inside keep-alive grace -> alive
     expect(h.killed).toBe(false);
   });
 

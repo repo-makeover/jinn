@@ -295,6 +295,10 @@ export class TurnResolver {
     this.settle({ sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "", result: "", error: reason });
   }
 
+  completeNativeCommand(): void {
+    this.settle({ sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "", result: "", numTurns: 1 });
+  }
+
   private settle(r: EngineResult): void {
     if (this.settled) return;
     this.settled = true;
@@ -304,6 +308,14 @@ export class TurnResolver {
 
 /** Cap for the per-session PTY scrollback ring buffer (xterm.js reconnect replay). */
 const SCROLLBACK_CAP_BYTES = 262144;
+const NATIVE_COMMAND_QUIET_MS = 1800;
+const NATIVE_COMMAND_MIN_MS = 3000;
+const NATIVE_COMMAND_MAX_MS = 90_000;
+
+function isNativeClaudeCommand(prompt: string): boolean {
+  const first = prompt.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  return first === "/compact" || first === "/clear" || first === "/model";
+}
 
 /** Bracketed-paste `text` into a PTY then submit with CR after a 50ms beat.
  *  Phase 0 finding: bracketed-paste does NOT neutralize a leading /, @, or ! —
@@ -347,6 +359,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  warm PTY was reaped — otherwise spawn() falls back to 120×40 and the TUI
    *  text body is locked in at the wrong width. */
   private lastGeom = new Map<string, { cols: number; rows: number }>();
+  private lastOutputAt = new Map<string, number>();
   /** Model/effort the live PTY was spawned with, per session. `--model`/`--effort`
    *  apply only at spawn, so a mid-chat switch must cold-respawn rather than reuse
    *  the warm PTY (which would keep running the old model). */
@@ -406,6 +419,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     });
     const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: pty.IPty } = { resolver, onStream: opts.onStream };
     this.active.set(jinnSessionId, entry);
+    const nativeCommand = isNativeClaudeCommand(opts.prompt);
 
     // Register BEFORE spawning so a fast SessionStart is buffered+drained, not lost.
     this.hookRegistry.register(jinnSessionId, (h) => {
@@ -452,11 +466,26 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     }, 5000);
     watchdog.unref?.();
 
+    let nativeCommandTimer: NodeJS.Timeout | undefined;
+    if (nativeCommand) {
+      const startedAt = Date.now();
+      nativeCommandTimer = setInterval(() => {
+        const now = Date.now();
+        const quietFor = now - (this.lastOutputAt.get(jinnSessionId) ?? startedAt);
+        const elapsed = now - startedAt;
+        if ((elapsed >= NATIVE_COMMAND_MIN_MS && quietFor >= NATIVE_COMMAND_QUIET_MS) || elapsed >= NATIVE_COMMAND_MAX_MS) {
+          resolver.completeNativeCommand();
+        }
+      }, 500);
+      nativeCommandTimer.unref?.();
+    }
+
     let result: EngineResult;
     try {
       result = await resolver.promise;
     } finally {
       clearInterval(watchdog);
+      if (nativeCommandTimer) clearInterval(nativeCommandTimer);
       this.hookRegistry.unregister(jinnSessionId);
       this.active.delete(jinnSessionId);
       this.lifecycle.turnEnded(jinnSessionId); // manager decides kill vs keep-warm
@@ -479,7 +508,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     // message is still on disk in the transcript; backfill it so the parent-session
     // callback shows real output instead of "(no output)". stopFailure turns are a
     // genuine no-output API error — leave those alone.
-    if (!result.result?.trim() && !resolver.stopFailure) {
+    if (!nativeCommand && !result.result?.trim() && !resolver.stopFailure) {
       const sid = resolver.sessionId ?? opts.resumeSessionId ?? result.sessionId;
       const recoveryPath = sid ? findTranscriptForSession(sid) : undefined;
       const recovered = recoveryPath ? lastAssistantTextFromTranscript(recoveryPath) : undefined;
@@ -582,6 +611,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     });
 
     proc.onData((d) => {
+      this.lastOutputAt.set(jinnSessionId, Date.now());
       // Convert string to Buffer once; push to ring; evict head until under cap.
       const chunk = Buffer.from(d, "utf-8");
       stream.chunks.push(chunk);

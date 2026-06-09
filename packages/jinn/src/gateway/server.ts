@@ -15,6 +15,7 @@ import { SessionManager, type RouteOptions } from "../sessions/manager.js";
 import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import { CodexEngine } from "../engines/codex.js";
+import { CodexInteractiveEngine } from "../engines/codex-interactive.js";
 import { AntigravityEngine } from "../engines/antigravity.js";
 import { PiEngine } from "../engines/pi.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
@@ -223,13 +224,18 @@ export async function startGateway(
     logger.warn(`Failed to seed Claude trust: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Orphan-PTY tracking spans both interactive engines (Claude + Antigravity).
+  // Orphan-PTY tracking spans all interactive engines.
   // Declared as a hoisted function so the lifecycle callbacks below can reference
   // the not-yet-constructed managers (only invoked later, on adopt/cleanup).
+  let codexLifecycle: PtyLifecycleManager | undefined;
   let antigravityLifecycle: PtyLifecycleManager | undefined;
   function refreshPtyPids(): void {
     try {
-      const pids = [...claudeLifecycle.livePids(), ...(antigravityLifecycle ? antigravityLifecycle.livePids() : [])];
+      const pids = [
+        ...claudeLifecycle.livePids(),
+        ...(codexLifecycle ? codexLifecycle.livePids() : []),
+        ...(antigravityLifecycle ? antigravityLifecycle.livePids() : []),
+      ];
       updateGatewayPtyPids(GATEWAY_INFO_FILE, pids);
     } catch { /* best effort */ }
   }
@@ -245,6 +251,15 @@ export async function startGateway(
   });
   const interactiveClaudeEngine = new InteractiveClaudeEngine(claudeLifecycle, hookRegistry);
 
+  // Codex has two modes: headless `codex exec --json` for chat/default work
+  // turns, and real `codex` TUI PTYs for the dashboard CLI view.
+  codexLifecycle = new PtyLifecycleManager({
+    maxLivePtys: claudeCfg.maxLivePtys!,
+    onAdopt: () => refreshPtyPids(),
+    onCleanup: () => refreshPtyPids(),
+  });
+  const codexInteractiveEngine = new CodexInteractiveEngine(codexLifecycle);
+
   // Antigravity (`agy`) — PTY-interactive engine. One instance both runs turns
   // and backs the xterm view (agy has no headless mode), so it needs its own
   // PTY lifecycle manager.
@@ -255,7 +270,7 @@ export async function startGateway(
   });
   const antigravityEngine = new AntigravityEngine(antigravityLifecycle);
   const piEngine = new PiEngine();
-  logger.info("Engines initialized: claude (interactive PTY), codex, antigravity (interactive PTY), pi");
+  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), pi");
 
   const codexEngine = new CodexEngine();
   const engines = new Map<string, Engine>();
@@ -276,6 +291,7 @@ export async function startGateway(
   // session.engine so the xterm view attaches to the right engine.
   const ptyViewEngines: Record<string, Engine & PtyViewEngine> = {
     claude: interactiveClaudeEngine,
+    codex: codexInteractiveEngine,
     antigravity: antigravityEngine,
   };
 
@@ -733,6 +749,7 @@ export async function startGateway(
     logger.info(`Org directory changed, reloaded ${employeeRegistry.size} employee(s)`);
     // Org/persona changed — drop warm PTYs so the next turn respawns with fresh system prompt.
     interactiveClaudeEngine.killAll();
+    codexInteractiveEngine.killAll();
     antigravityEngine.killAll();
     emit("org:changed", {});
   };
@@ -985,6 +1002,7 @@ export async function startGateway(
     // Terminate live engine subprocesses after marking sessions.
     interactiveClaudeEngine.killAll();
     codexEngine.killAll();
+    codexInteractiveEngine.killAll();
     antigravityEngine.killAll();
     piEngine.killAll();
 

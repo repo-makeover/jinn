@@ -309,6 +309,18 @@ describe("CodexEngine — usage / context-token extraction", () => {
     ]);
     expect(result.contextTokens).toBeUndefined();
   });
+
+  it("uses nested last_token_usage when available instead of cumulative totals", async () => {
+    const { result } = await runWith({}, [
+      threadStarted("t1"),
+      agentMessage("a"),
+      turnCompleted({
+        input_tokens: 9_282_000,
+        last_token_usage: { input_tokens: 42_000, output_tokens: 50 },
+      }),
+    ]);
+    expect(result.contextTokens).toBe(42_000);
+  });
 });
 
 describe("CodexEngine — error / failure handling", () => {

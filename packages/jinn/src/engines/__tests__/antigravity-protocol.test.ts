@@ -13,6 +13,8 @@ const HISTORY_LINE = `{"step_index":1,"source":"SYSTEM","type":"CONVERSATION_HIS
 const MODEL_DONE = `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"alpha beta gamma"}`;
 const MODEL_INPROGRESS = `{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"IN_PROGRESS","content":"thinking..."}`;
 const MODEL_DONE_2 = `{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"second answer"}`;
+const TOOL_RUNNING = `{"step_index":5,"source":"MODEL","type":"RUN_COMMAND","status":"RUNNING","content":"Created At: now"}`;
+const TOOL_DONE = `{"step_index":6,"source":"MODEL","type":"RUN_COMMAND","status":"DONE","content":"Completed At: now"}`;
 
 describe("extractDoneResponses", () => {
   it("returns only MODEL/PLANNER_RESPONSE entries with status DONE, in order", () => {
@@ -49,6 +51,15 @@ describe("transcriptLineToDeltas", () => {
     expect(transcriptLineToDeltas(HISTORY_LINE)).toEqual([]);
     expect(transcriptLineToDeltas("garbage")).toEqual([]);
     expect(transcriptLineToDeltas("")).toEqual([]);
+  });
+
+  it("emits tool markers for non-planner model rows", () => {
+    expect(transcriptLineToDeltas(TOOL_RUNNING)).toEqual([
+      { type: "tool_use", content: "Using run_command", toolName: "run_command" },
+    ]);
+    expect(transcriptLineToDeltas(TOOL_DONE)).toEqual([
+      { type: "tool_result", content: "run_command done", toolName: "run_command" },
+    ]);
   });
 });
 
