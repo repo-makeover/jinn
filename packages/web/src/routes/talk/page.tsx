@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { ArrowLeft, Mic, Square, Sun, Moon, Keyboard, Volume2, VolumeX, Send } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { mainButtonMode } from "./main-button"
 import { useTheme } from "@/routes/providers"
 import { Constellation } from "./constellation"
 import { Transcript } from "./transcript"
@@ -43,11 +44,35 @@ export default function TalkPage() {
   }, [draft, talk])
 
   const isRecording = talk.listening
+  // The text input has content → the main mic button morphs into a Send button.
+  const hasText = typing && draft.trim().length > 0
+  const mode = mainButtonMode({ listening: isRecording, hasText })
 
   const onMic = useCallback(() => {
     if (talk.listening) talk.stop()
     else talk.startListening()
   }, [talk])
+
+  // One action-aware button: send the draft when there's text, otherwise drive
+  // the mic (start, or stop-and-send while recording).
+  const onMainButton = useCallback(() => {
+    if (mode === "send") submitText()
+    else onMic()
+  }, [mode, submitText, onMic])
+
+  // Transient "Switched to <engine>" marker — switching the engine re-bootstraps
+  // the talk session (new chat), so a quiet note confirms the change landed.
+  const [engineNotice, setEngineNotice] = useState<string | null>(null)
+  const onSwitchEngine = useCallback((engine: string) => {
+    talk.switchEngine(engine)
+    const label = engine.charAt(0).toUpperCase() + engine.slice(1)
+    setEngineNotice(`Switched to ${label}`)
+  }, [talk])
+  useEffect(() => {
+    if (!engineNotice) return
+    const t = window.setTimeout(() => setEngineNotice(null), 2600)
+    return () => window.clearTimeout(t)
+  }, [engineNotice])
 
   // No installed engine for the orchestrator → the loop can't run; surface an
   // actionable message instead of letting the mic silently fail.
@@ -96,9 +121,24 @@ export default function TalkPage() {
           {/* Engine/model picker — tiny gear, tucked beside the theme toggle. */}
           <TalkEnginePicker
             engineInfo={talk.engineInfo}
-            onSwitchEngine={talk.switchEngine}
+            onSwitchEngine={onSwitchEngine}
             onSwitchModel={talk.switchModel}
           />
+          {/* Mute (silent/read mode) — icon-only, matches the gear + theme buttons. */}
+          <button
+            onClick={talk.toggleMute}
+            aria-pressed={talk.muted}
+            aria-label={talk.muted ? "Unmute" : "Mute"}
+            title={talk.muted ? "Muted — replies are read, not spoken" : "Mute — silent/read mode"}
+            className={cn(
+              "inline-flex size-9 items-center justify-center rounded-full border backdrop-blur-md transition-colors",
+              talk.muted
+                ? "border-[var(--accent)] bg-[var(--accent-fill)] text-[var(--accent)]"
+                : "border-[var(--separator)] bg-[var(--material-regular)] text-[var(--text-secondary)] active:bg-[var(--fill-secondary)]",
+            )}
+          >
+            {talk.muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </button>
           <button
             onClick={() => setTheme(theme === "light" ? "dark" : "light")}
             aria-label="Toggle theme"
@@ -180,17 +220,25 @@ export default function TalkPage() {
             <Square size={11} className="fill-current" /> Stop
           </button>
         )}
+        {/* Transient "Switched to <engine>" marker after an engine re-bootstrap. */}
+        {engineNotice && (
+          <div className="rounded-full border border-[var(--separator)] bg-[var(--material-regular)] px-3 py-1 text-caption2 text-[var(--text-secondary)] backdrop-blur-md">
+            {engineNotice}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <p className="text-caption1 text-[var(--text-quaternary)]">{hint}</p>
           {/* Neural-vs-fallback voice indicator (or "Muted" in silent mode). */}
           <TalkVoiceIndicator voiceMode={talk.voiceMode} muted={talk.muted} />
         </div>
 
-        {/* Type-to-talk: compact text input, revealed by the keyboard toggle. */}
+        {/* Type-to-talk: compact text input, revealed by the keyboard toggle.
+            No separate send button — the main button below morphs into Send when
+            this has text; Enter also sends. */}
         {typing && (
           <form
             onSubmit={(e) => { e.preventDefault(); submitText() }}
-            className="flex w-full max-w-sm items-center gap-2 px-4"
+            className="w-full max-w-sm px-4"
           >
             <input
               autoFocus
@@ -198,49 +246,33 @@ export default function TalkPage() {
               onChange={(e) => setDraft(e.target.value)}
               placeholder="Type a message to AURA…"
               aria-label="Type a message to AURA"
-              className="h-10 flex-1 rounded-full border border-[var(--separator)] bg-[var(--material-regular)] px-4 text-footnote text-[var(--text-primary)] outline-none backdrop-blur-md placeholder:text-[var(--text-quaternary)] focus:border-[var(--accent)]"
+              className="h-10 w-full rounded-full border border-[var(--separator)] bg-[var(--material-regular)] px-4 text-footnote text-[var(--text-primary)] outline-none backdrop-blur-md placeholder:text-[var(--text-quaternary)] focus:border-[var(--accent)]"
             />
-            <button
-              type="submit"
-              aria-label="Send message"
-              disabled={!draft.trim()}
-              className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--accent-contrast)] transition-opacity disabled:opacity-40"
-            >
-              <Send size={16} />
-            </button>
           </form>
         )}
 
+        {/* One action-aware button: Mic ↔ Send ↔ Stop by context (see mainButtonMode). */}
         <button
-          onClick={onMic}
-          aria-label={isRecording ? "Stop and send" : "Start talking"}
+          onClick={onMainButton}
+          aria-label={mode === "send" ? "Send message" : mode === "stop" ? "Stop and send" : "Start talking"}
           className={cn(
             "inline-flex size-16 touch-manipulation items-center justify-center rounded-full shadow-[var(--shadow-overlay)] transition-all duration-200 active:scale-95",
-            isRecording
+            mode === "stop"
               ? "bg-[var(--system-red)] text-white"
               : "bg-[var(--accent)] text-[var(--accent-contrast)]",
           )}
         >
-          {isRecording ? <Square size={22} className="fill-current" /> : <Mic size={26} />}
+          {mode === "stop" ? (
+            <Square size={22} className="fill-current" />
+          ) : mode === "send" ? (
+            <Send size={24} />
+          ) : (
+            <Mic size={26} />
+          )}
         </button>
 
-        {/* Secondary controls: mute (silent/read mode) + type-to-talk toggle. */}
+        {/* Secondary control: type-to-talk toggle (mute now lives in the top bar). */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={talk.toggleMute}
-            aria-pressed={talk.muted}
-            aria-label={talk.muted ? "Unmute" : "Mute"}
-            title={talk.muted ? "Muted — replies are read, not spoken" : "Mute — silent/read mode"}
-            className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-footnote backdrop-blur-md transition-colors",
-              talk.muted
-                ? "border-[var(--accent)] bg-[var(--accent-fill)] text-[var(--accent)]"
-                : "border-[var(--separator)] bg-[var(--material-regular)] text-[var(--text-secondary)] active:bg-[var(--fill-secondary)]",
-            )}
-          >
-            {talk.muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-            {talk.muted ? "Muted" : "Mute"}
-          </button>
           <button
             onClick={() => setTyping((v) => !v)}
             aria-pressed={typing}
