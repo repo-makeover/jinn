@@ -226,6 +226,7 @@ function dispatchWebSessionRun(
         result: null,
         error: errMsg,
       });
+      maybeEmitTalkGraph(session.id, "completed", { getSession, emit: context.emit });
     });
   };
 
