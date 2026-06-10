@@ -59,6 +59,9 @@ export interface SessionDeltaEvent {
   content?: string | number
   toolName?: string
   toolId?: string
+  /** Truncated (≤200 chars) stringified tool input. Present on PreToolUse-sourced
+   *  `tool_use` deltas only; absent on the initial SSE-proxy delta. */
+  input?: string
 }
 export interface SessionCompletedEvent { sessionId: string; result?: string | null; error?: string | null }
 

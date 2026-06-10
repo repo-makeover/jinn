@@ -183,6 +183,21 @@ export function buildInteractiveArgs(o: InteractiveArgsOpts): string[] {
 }
 
 /**
+ * Stringify a tool_input value from a hook payload into a truncated string
+ * suitable for the `input` field on a StreamDelta (first `maxChars` chars).
+ * Exported for unit testing; not part of the public engine API.
+ */
+export function truncatedToolInput(toolInput: unknown, maxChars = 200): string {
+  const raw =
+    typeof toolInput === "object" && toolInput !== null
+      ? JSON.stringify(toolInput)
+      : typeof toolInput === "string"
+      ? toolInput
+      : "";
+  return raw.slice(0, maxChars);
+}
+
+/**
  * Translate one parsed Anthropic SSE `data:` event into StreamDeltas. This is the
  * live streaming source (replacing the old transcript tailer): word-by-word text
  * in true order, tool markers positioned correctly relative to text, and live
@@ -596,6 +611,17 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       // (content_block_start / content_block_delta) in true order. The hook only
       // supplies tool_result — the assistant SSE stream has no tool_result event
       // (tools execute locally between assistant messages).
+      // PreToolUse fires just before the tool runs; the full input is assembled by
+      // then. Emit a second tool_use delta carrying a truncated input so the Talk
+      // whisper can distinguish delegate/search/card calls from generic Bash work.
+      if (h.hook_event_name === "PreToolUse" && opts.onStream) {
+        opts.onStream({
+          type: "tool_use",
+          content: String(h.tool_name ?? ""),
+          toolName: typeof h.tool_name === "string" ? h.tool_name : undefined,
+          input: truncatedToolInput(h.tool_input),
+        });
+      }
       if (h.hook_event_name === "PostToolUse" && opts.onStream) {
         opts.onStream({
           type: "tool_result",

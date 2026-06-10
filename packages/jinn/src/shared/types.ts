@@ -5,6 +5,10 @@ export interface StreamDelta {
   content: string;
   toolName?: string;
   toolId?: string;
+  /** First 200 chars of the stringified tool input. Present on PreToolUse-sourced
+   *  `tool_use` deltas (fired just before the tool runs, full input assembled).
+   *  Absent on the SSE-proxy `content_block_start` delta (input not yet known). */
+  input?: string;
 }
 
 export interface Engine {

@@ -659,7 +659,9 @@ export function useTalk(): UseTalkReturn {
               setState((st) => (st === "speaking" ? st : "thinking"))
             } else if (ev.type === "tool_use") {
               // Surface what the orchestrator is doing as a short under-orb whisper.
-              setWhisper(whisperFor({ toolName: ev.toolName, content: ev.content }))
+              // The PreToolUse-sourced delta carries `input` (truncated tool_input JSON)
+              // so whisperFor can distinguish delegate/search/card from generic work.
+              setWhisper(whisperFor({ toolName: ev.toolName, content: ev.content, input: ev.input }))
             }
           } else if (isChild && s) {
             dispatchGraph({ type: "setStatus", id: s, status: "running" }) // keep working
