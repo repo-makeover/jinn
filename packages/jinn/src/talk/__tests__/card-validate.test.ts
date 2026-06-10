@@ -24,8 +24,8 @@ describe("validateCard", () => {
     }
   });
 
-  it("rejects rich-content types dropped from the voice surface", () => {
-    const dropped: unknown[] = [
+  it("accepts well-formed rich-content types (all 13 renderer types now allowed)", () => {
+    const richCards: unknown[] = [
       { id: "x1", type: "list", items: [{ text: "one" }] },
       { id: "x2", type: "stat", value: "42", label: "users" },
       { id: "x3", type: "link", url: "https://x", label: "open" },
@@ -35,11 +35,9 @@ describe("validateCard", () => {
       { id: "x7", type: "keyvalue", rows: [{ k: "Uptime", v: "99%" }] },
       { id: "x8", type: "diff", hunks: [{ label: "cfg", before: "a", after: "b" }] },
     ];
-    for (const card of dropped) {
+    for (const card of richCards) {
       const result = validateCard(card);
-      expect(result.ok, JSON.stringify(card)).toBe(false);
-      // The error names the type and points AURA at the kept alternatives.
-      if (!result.ok) expect(result.error).toMatch(/voice surface/i);
+      expect(result.ok, JSON.stringify(card)).toBe(true);
     }
   });
 
@@ -128,6 +126,34 @@ describe("validateCard", () => {
     expect(validateCard({ id: "v5", type: "approval", summary: "ok", details: [{ k: "A", v: 7 }] }).ok).toBe(false);
   });
 });
+
+describe("validateCard — restored rich types (mission control)", () => {
+  it("accepts a link card", () => {
+    const r = validateCard({ id: "l1", type: "link", url: "https://example.com", label: "Example" })
+    expect(r.ok).toBe(true)
+  })
+  it("rejects a link card without url", () => {
+    const r = validateCard({ id: "l1", type: "link", label: "Example" })
+    expect(r.ok).toBe(false)
+  })
+  it("accepts stat / list / image / image-grid / comparison / keyvalue / diff", () => {
+    const cards = [
+      { id: "s1", type: "stat", value: "42", label: "Users" },
+      { id: "li1", type: "list", items: [{ text: "one" }] },
+      { id: "i1", type: "image", src: "https://x/y.png" },
+      { id: "ig1", type: "image-grid", images: [{ src: "https://x/y.png" }] },
+      { id: "c1", type: "comparison", columns: ["A", "B"], rows: [{ label: "p", cells: ["1", "2"] }] },
+      { id: "k1", type: "keyvalue", rows: [{ k: "Uptime", v: "99%" }] },
+      { id: "d1", type: "diff", hunks: [{ before: "a", after: "b" }] },
+    ]
+    for (const c of cards) expect(validateCard(c).ok, c.type as string).toBe(true)
+  })
+  it("rejects malformed restored types", () => {
+    expect(validateCard({ id: "s1", type: "stat", value: "42" }).ok).toBe(false) // no label
+    expect(validateCard({ id: "i1", type: "image" }).ok).toBe(false) // no src
+    expect(validateCard({ id: "c1", type: "comparison", columns: "A", rows: [] }).ok).toBe(false)
+  })
+})
 
 describe("validateCardPatch", () => {
   it("accepts an empty patch and simple scalar patches", () => {
