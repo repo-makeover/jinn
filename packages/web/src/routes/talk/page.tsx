@@ -25,6 +25,8 @@ import { TalkEnginePicker } from "./talk-engine-picker"
 import { TalkVoiceIndicator } from "./talk-voice-indicator"
 import { WhisperDownloadModal } from "@/components/stt/whisper-download-modal"
 import { useTalkContext } from "./talk-provider"
+import "./talk-tokens.css"
+import "./talk-layout.css"
 
 export default function TalkPage() {
   const { theme, setTheme } = useTheme()

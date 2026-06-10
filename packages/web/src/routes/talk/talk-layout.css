@@ -1,0 +1,153 @@
+/**
+ * Jinn Talk — stage layout (stage redesign).
+ *
+ * The /talk page is ONE grid of flow rows. No region computes its own insets;
+ * space is allocated by the grid, so banner/cards/input growth reflows the
+ * stage automatically instead of overlapping it.
+ *
+ *   rows: top-bar / banner / orb-dock / main (stage + rail) / pinned / controls
+ */
+.talk-root {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* ---- row 1: top bar ---- */
+.talk-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(env(safe-area-inset-top), 14px) var(--space-4) var(--space-2);
+  position: relative;
+  z-index: var(--z-chrome);
+}
+
+/* ---- row 2: attach banner(s); empty row collapses to 0 ---- */
+.talk-banner-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
+}
+.talk-banner-row:not(:empty) {
+  padding-bottom: var(--space-2);
+}
+
+/* ---- row 3: orb dock — reserves space for the docked orb + whisper ---- */
+.talk-orbdock {
+  position: relative;
+  height: 0;
+  transition: height var(--motion-hero);
+}
+.talk-orbdock[data-active="true"] {
+  height: 64px;
+}
+/* 56px anchor box pinned to the row centre — the OrbLayer chases its rect. */
+.talk-orbdock__anchor {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+/* Whisper / status line beside the docked orb. */
+.talk-orbdock .talk-whisper {
+  position: absolute;
+  left: calc(50% + 44px);
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
+  max-width: min(38vw, 320px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- row 4: main = stage (transcript) + rail (WorkDock) ---- */
+.talk-main {
+  position: relative;
+  display: flex;
+  min-height: 0;
+}
+.talk-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  z-index: var(--z-stage);
+}
+.talk-rail {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding-right: max(env(safe-area-inset-right), 10px);
+}
+/* Narrow screens: the rail floats over the stage edge instead of stealing
+   column width (chips expand leftward over the transcript margin). */
+@media (max-width: 719px) {
+  .talk-rail {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: var(--z-rail);
+    pointer-events: none;
+  }
+  .talk-rail > * {
+    pointer-events: auto;
+  }
+}
+
+/* ---- row 5: pinned (blocking) cards; collapses to 0 when absent ---- */
+.talk-pinned {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--space-2) var(--space-4) 0;
+  max-height: 46dvh;
+  overflow: hidden;
+}
+
+/* ---- row 6: bottom controls ---- */
+.talk-controls {
+  position: relative;
+  z-index: var(--z-chrome);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 max(env(safe-area-inset-bottom), 22px);
+}
+
+/* ---- the persistent orb layer (Task 4) ---- */
+.talk-orb-layer {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--z-stage);
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+}
+
+/* ---- content stage: the pinned card is the focal point ---- */
+.talk-root[data-stage="content"] .cstream {
+  opacity: 0.5;
+}
+.talk-root[data-stage="content"] .talk-pinned .jt-card {
+  box-shadow:
+    var(--shadow-overlay),
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .talk-orbdock {
+    transition: none;
+  }
+}
