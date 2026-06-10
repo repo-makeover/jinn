@@ -2,8 +2,7 @@
  * Jinn Talk — rehydration transforms (server snapshot → UI state).
  */
 import { describe, it, expect } from "vitest"
-import { messagesToEntries, childrenToThreads } from "../rehydrate"
-import { channelHue } from "../channel-identity"
+import { messagesToEntries } from "../rehydrate"
 
 describe("messagesToEntries", () => {
   it("maps user/assistant messages to finalized entries (markdown stripped)", () => {
@@ -114,46 +113,5 @@ describe("messagesToEntries", () => {
     expect(messagesToEntries(undefined)).toEqual([])
     expect(messagesToEntries({})).toEqual([])
     expect(messagesToEntries({ messages: "nope" })).toEqual([])
-  })
-})
-
-describe("childrenToThreads", () => {
-  it("rebuilds parked idle threads with stable hue", () => {
-    const threads = childrenToThreads([
-      { id: "c1", title: "content-lead", createdAt: "2026-06-07T10:00:00Z" },
-    ])
-    expect(threads).toEqual([
-      {
-        id: "c1",
-        label: "content-lead",
-        hue: channelHue("content-lead"),
-        state: "idle",
-        orbiting: false,
-        ts: Date.parse("2026-06-07T10:00:00Z"),
-      },
-    ])
-  })
-
-  it("applies a label override over the server title", () => {
-    const threads = childrenToThreads([{ id: "c1", title: "raw title" }], {
-      c1: "My Topic",
-    })
-    expect(threads[0].label).toBe("My Topic")
-    // Hue is still keyed off the server title (stable identity), not the override.
-    expect(threads[0].hue).toBe(channelHue("raw title"))
-  })
-
-  it("skips entries without an id and returns [] for non-arrays", () => {
-    expect(childrenToThreads([{ title: "x" }])).toEqual([])
-    expect(childrenToThreads(undefined)).toEqual([])
-  })
-
-  it("filters out dismissed (tombstoned) thread ids", () => {
-    const threads = childrenToThreads(
-      [{ id: "c1", title: "keep" }, { id: "c2", title: "gone" }],
-      {},
-      ["c2"],
-    )
-    expect(threads.map((t) => t.id)).toEqual(["c1"])
   })
 })

@@ -39,8 +39,8 @@ import { graphReducer, type GraphNode, type GraphAction } from "./graph-store"
 import type { AvatarState, Card } from "./types"
 import { useConversation, type StreamRow } from "./use-conversation"
 import { channelHue } from "./channel-identity"
-import { threadReducer, type TalkThread, type ThreadAction } from "./thread-store"
-import { messagesToEntries, childrenToThreads } from "./rehydrate"
+import { focusNode, deriveLabel, type DockSideMap, type DockSideState } from "./work-dock-layout"
+import { messagesToEntries } from "./rehydrate"
 import {
   loadTargetThread,
   saveTargetThread,
@@ -51,7 +51,23 @@ import {
   addDismissedThread,
 } from "./talk-storage"
 
-export type { TalkThread } from "./thread-store"
+/**
+ * Build the dock side-state map from the existing talk-storage localStorage
+ * (label overrides + dismiss tombstones). Reusing the same keys migrates any
+ * previously-persisted thread renames/dismissals onto the graph-node dock with
+ * no data conversion. Hue is derived (channel-identity), not persisted; the
+ * route target is the separate `targetThreadId`, so neither lives here.
+ */
+function loadSideState(): DockSideMap {
+  const m: DockSideMap = new Map()
+  for (const [id, labelOverride] of Object.entries(loadThreadLabels())) {
+    m.set(id, { ...(m.get(id) ?? {}), labelOverride })
+  }
+  for (const id of loadDismissedThreads()) {
+    m.set(id, { ...(m.get(id) ?? {}), dismissed: true })
+  }
+  return m
+}
 
 /** Most recent cards kept on the surface at once (older ones drift out). */
 const MAX_CARDS = 6
@@ -84,14 +100,18 @@ export interface UseTalkReturn {
   state: AvatarState
   /** The persistent conversation: user lines, AURA replies, delegation chips. */
   rows: StreamRow[]
-  /** Persistent COO threads (satellite orbs + the thread panel). */
-  threads: TalkThread[]
   /**
    * Full delegation-graph: every session in the talk tree at any depth. Depth-1
-   * nodes mirror threads (COO satellites); depth-2+ are employee grandchildren.
-   * Nodes persist and NEVER auto-hide — idle nodes are dimmed by the renderer.
+   * nodes are the COO threads (WorkDock chips); depth-2+ are employee
+   * grandchildren (mini-dots). Nodes persist and NEVER auto-hide — idle nodes
+   * are dimmed by the renderer. This is the SINGLE source for the work rail.
    */
   graph: GraphNode[]
+  /** Per-node UI side-state (rename overrides + dismiss tombstones) for the dock. */
+  sideState: DockSideMap
+  /** Hue of the focused (most-recent running depth-1) node — drives the orb
+   *  morph; undefined → AURA's amber identity. */
+  focusHue: number | undefined
   /** The thread the next dispatch is routed to continue (null → new thread). */
   targetThreadId: string | null
   /** Detail cards the orchestrator pushed for the current answer(s). */
@@ -171,7 +191,9 @@ export function useTalk(): UseTalkReturn {
     addSystem,
     rehydrate: rehydrateRows,
   } = useConversation()
-  const [threads, setThreads] = useState<TalkThread[]>([])
+  // Dock side-state (rename overrides + dismiss tombstones), lazy-init from the
+  // existing talk-storage localStorage so renames/dismissals survive a reload.
+  const [sideState, setSideState] = useState<DockSideMap>(() => loadSideState())
   // Lazy-init from localStorage so a routed-thread selection survives a reload.
   const [targetThreadId, setTargetThreadId] = useState<string | null>(() => loadTargetThread())
   const [cards, setCards] = useState<Card[]>([])
@@ -233,14 +255,16 @@ export function useTalk(): UseTalkReturn {
     setGraph((prev) => graphReducer(prev, a))
   }, [])
 
-  // Known session ids (threads + graph) so we can route child stream events.
-  // Synced from `threads` and `graph` each render AND added immediately on
-  // focus/graph deltas (so a child delta arriving the same tick still routes).
+  // Known session ids (graph) so we can route child stream events. Synced from
+  // `graph` each render AND added immediately on focus/graph deltas (so a child
+  // delta arriving the same tick still routes).
   const threadIdsRef = useRef<Set<string>>(new Set())
-  threadIdsRef.current = new Set([...threads.map((t) => t.id), ...graph.map((g) => g.id)])
+  threadIdsRef.current = new Set(graph.map((g) => g.id))
   // Live mirrors for WS-callback / send closures.
-  const threadsRef = useRef<TalkThread[]>(threads)
-  threadsRef.current = threads
+  const graphRef = useRef<GraphNode[]>(graph)
+  graphRef.current = graph
+  const sideStateRef = useRef<DockSideMap>(sideState)
+  sideStateRef.current = sideState
   // Live mirror of the conversation rows so rehydrate can guard "seed only when
   // empty" without re-creating itself every time a row streams in.
   const rowsRef = useRef<StreamRow[]>(rows)
@@ -325,29 +349,35 @@ export function useTalk(): UseTalkReturn {
     appendAssistantRow(asstIdRef.current, stripMarkdown(turnTextRef.current))
   }, [appendAssistantRow])
 
-  // ---- COO thread bookkeeping ----------------------------------------------
-  // Threads persist and NEVER auto-hide; idle threads dim (Mission Control).
-  // The park machinery has been removed — finished threads stay orbiting.
-  const dispatchThread = useCallback((a: ThreadAction) => {
-    setThreads((prev) => threadReducer(prev, a))
+  // ---- Dock side-state mutators --------------------------------------------
+  // The WorkDock reads the graph directly; these layer user renames + dismiss
+  // tombstones over it (persisted to the existing talk-storage keys). Nodes
+  // NEVER auto-hide — idle/done dims (Mission Control); only an explicit dismiss
+  // removes a chip (the gateway child stays alive).
+  const patchSide = useCallback((id: string, patch: Partial<DockSideState>) => {
+    setSideState((prev) => {
+      const next = new Map(prev)
+      next.set(id, { ...(next.get(id) ?? {}), ...patch })
+      return next
+    })
   }, [])
 
-  // ---- Thread controls (panel) ---------------------------------------------
+  // ---- Thread controls (work rail) -----------------------------------------
   const selectThread = useCallback((id: string | null) => setTargetThreadId(id), [])
   const renameThread = useCallback((id: string, label: string) => {
     if (label.trim()) {
-      dispatchThread({ type: "label", id, label })
+      patchSide(id, { labelOverride: label.trim() })
       saveThreadLabel(id, label.trim()) // persist override so it survives reload
     }
-  }, [dispatchThread])
+  }, [patchSide])
   const dismissThread = useCallback((id: string) => {
-    dispatchThread({ type: "dismiss", id })
+    patchSide(id, { dismissed: true, labelOverride: undefined })
     setTargetThreadId((cur) => (cur === id ? null : cur))
     // Tombstone it (so rehydrate won't resurrect the chip from the still-alive
     // gateway child) and prune its now-dead label override.
     addDismissedThread(id)
     removeThreadLabel(id)
-  }, [dispatchThread])
+  }, [patchSide])
 
   // ---- Detail-card surface (orchestrator pushes via POST /api/talk/card) ----
   // talk:card upserts by id (re-posting the same id updates it in place);
@@ -486,16 +516,21 @@ export function useTalk(): UseTalkReturn {
       if (event === TALK_EVENTS.focus) {
         const ev = payload as TalkFocusEvent
         if (ev.parentId === orchestratorIdRef.current) {
-          threadIdsRef.current.add(ev.cooId) // route this child's stream immediately
-          dispatchThread({ type: "focus", id: ev.cooId, label: ev.label, ts: Date.now() })
+          // Register for stream routing now (the dock node itself comes from the
+          // talk:graph "added" delta — graph is the single source).
+          threadIdsRef.current.add(ev.cooId)
         }
         return
       }
 
       if (event === TALK_EVENTS.threadLabel) {
         const ev = payload as TalkThreadLabelEvent
-        if (ev.sessionId === orchestratorIdRef.current) {
-          dispatchThread({ type: "label", id: ev.threadId, label: ev.label })
+        if (ev.sessionId === orchestratorIdRef.current && ev.label.trim()) {
+          // Server-refined topic label: apply as a transient label override so it
+          // shows live on the dock chip. NOT persisted (the graph snapshot carries
+          // the label on reload) and it never clobbers a user rename.
+          const userSet = loadThreadLabels()[ev.threadId]
+          if (!userSet) patchSide(ev.threadId, { labelOverride: ev.label.trim() })
         }
         return
       }
@@ -507,18 +542,8 @@ export function useTalk(): UseTalkReturn {
           if (ev.change === "removed" || ev.change === "detached")
             dispatchGraph({ type: "remove", id: ev.node.id })
           else dispatchGraph({ type: "upsert", node: ev.node })
-          // Depth-1 graph changes also drive the legacy thread chips so the
-          // panel/constellation stay in sync without a second event source.
-          // Attachments are soft links, not owned threads — they never become chips.
-          if (ev.node.depth === 1 && !ev.node.attached) {
-            if (ev.change === "added" || ev.change === "status") {
-              dispatchThread({ type: "focus", id: ev.node.id, label: ev.node.label, ts: Date.now() })
-            } else if (ev.change === "completed") {
-              dispatchThread({ type: "done", id: ev.node.id, ts: Date.now() })
-            } else if (ev.change === "removed") {
-              dispatchThread({ type: "dismiss", id: ev.node.id })
-            }
-          }
+          // The dock renders depth-1 nodes straight from the graph — no second
+          // mirror to keep in sync. Below we still emit conversation chips.
           // Conversation delegation chips. Owned children: "added" → delegated,
           // "completed" → reported (no live notification WS event exists, so the
           // completed graph delta is the cleanest "child reported back" signal).
@@ -553,8 +578,7 @@ export function useTalk(): UseTalkReturn {
               setState((st) => (st === "speaking" ? st : "thinking"))
             }
           } else if (isChild && s) {
-            dispatchThread({ type: "activity", id: s, ts: Date.now() }) // keep alive/working
-            dispatchGraph({ type: "setStatus", id: s, status: "running" })
+            dispatchGraph({ type: "setStatus", id: s, status: "running" }) // keep working
           }
           break
         }
@@ -600,7 +624,6 @@ export function useTalk(): UseTalkReturn {
             asstIdRef.current = null
             speakReplyIfNeeded(finishedId)
           } else if (isChild && s) {
-            dispatchThread({ type: "done", id: s, ts: Date.now() })
             dispatchGraph({ type: "setStatus", id: s, status: "idle" })
           }
           break
@@ -609,7 +632,7 @@ export function useTalk(): UseTalkReturn {
     })
 
     return () => { unsub() }
-  }, [gateway, appendAssistantText, appendAssistantRow, finalizeAssistant, markSpoken, addSystem, dispatchThread, dispatchGraph, startLevelLoop, stopLevelLoop, upsertCard, patchCard, dismissCard, clearCards])
+  }, [gateway, appendAssistantText, appendAssistantRow, finalizeAssistant, markSpoken, addSystem, patchSide, dispatchGraph, startLevelLoop, stopLevelLoop, upsertCard, patchCard, dismissCard, clearCards])
 
   // ---- Server rehydration --------------------------------------------------
   // Replay the reused orchestrator session so the transcript + COO thread chips
@@ -620,9 +643,8 @@ export function useTalk(): UseTalkReturn {
   // orchestrator re-pushes any decision card it still wants on screen.
   const rehydrate = useCallback(async (orchId: string) => {
     try {
-      const [session, children, graphSnap] = await Promise.all([
+      const [session, graphSnap] = await Promise.all([
         api.getSession(orchId).catch(() => undefined),
-        api.getSessionChildren(orchId).catch(() => [] as Record<string, unknown>[]),
         api.getTalkGraph(orchId).catch(() => undefined),
       ])
       if (orchestratorIdRef.current !== orchId) return // superseded
@@ -632,25 +654,15 @@ export function useTalk(): UseTalkReturn {
       const allEntries = messagesToEntries(session as Record<string, unknown> | undefined)
       if (allEntries.length && rowsRef.current.length === 0) rehydrateRows(allEntries)
 
-      const rebuilt = childrenToThreads(
-        children as Record<string, unknown>[],
-        loadThreadLabels(),
-        loadDismissedThreads(),
-      )
-      if (rebuilt.length) {
-        setThreads((cur) => {
-          if (!cur.length) return rebuilt
-          const known = new Set(cur.map((t) => t.id))
-          const adds = rebuilt.filter((t) => !known.has(t.id))
-          return adds.length ? [...cur, ...adds] : cur
-        })
-      }
-      if (graphSnap?.nodes?.length) dispatchGraph({ type: "snapshot", nodes: graphSnap.nodes })
-      // Drop a persisted target selection that no longer maps to any thread.
+      // The dock rebuilds straight from the graph snapshot — the single source.
+      // (Child sessions are no longer mirrored into a separate thread store.)
+      const snapNodes = graphSnap?.nodes ?? []
+      if (snapNodes.length) dispatchGraph({ type: "snapshot", nodes: snapNodes })
+      // Drop a persisted target selection that no longer maps to a live node.
       setTargetThreadId((cur) => {
         if (!cur) return cur
         const exists =
-          rebuilt.some((t) => t.id === cur) || threadsRef.current.some((t) => t.id === cur)
+          snapNodes.some((n) => n.id === cur) || graphRef.current.some((n) => n.id === cur)
         return exists ? cur : null
       })
     } catch {
@@ -786,12 +798,15 @@ export function useTalk(): UseTalkReturn {
     appendUser(`u${Date.now()}`, stripMarkdown(text))
     // Switch override: if a thread is selected, prepend a machine route hint so
     // the orchestrator CONTINUES that COO session instead of spawning a new one.
-    // The transcript keeps the clean text; only the engine sees the hint.
-    const target = targetThreadIdRef.current
-      ? threadsRef.current.find((t) => t.id === targetThreadIdRef.current)
+    // The transcript keeps the clean text; only the engine sees the hint. The
+    // target's label is resolved from the graph (single source) + any user
+    // rename override, matching exactly what the dock chip shows.
+    const targetId = targetThreadIdRef.current
+    const targetNode = targetId
+      ? graphRef.current.find((n) => n.id === targetId)
       : null
-    const outbound = target
-      ? `[Route this to the existing "${target.label}" COO thread: session ${target.id}. Continue that thread instead of spawning a new one.]\n${text}`
+    const outbound = targetNode
+      ? `[Route this to the existing "${sideStateRef.current.get(targetNode.id)?.labelOverride ?? deriveLabel(targetNode.label || targetNode.id)}" COO thread: session ${targetNode.id}. Continue that thread instead of spawning a new one.]\n${text}`
       : text
     setState("thinking")
     api.sendMessage(orch, { message: outbound }).catch(() => {
@@ -868,9 +883,16 @@ export function useTalk(): UseTalkReturn {
 
   const listening = stt.state === "recording"
 
+  // The focused channel hue drives the main-orb morph: the most-recent running
+  // depth-1 node's identity hue (undefined → AURA's amber when nothing runs).
+  const focusHue = useMemo(() => {
+    const n = focusNode(graph)
+    return n ? channelHue(n.label || n.id) : undefined
+  }, [graph])
+
   return useMemo(
     () => ({
-      state, rows, threads, graph, targetThreadId, cards, level,
+      state, rows, graph, sideState, focusHue, targetThreadId, cards, level,
       connected: gateway.connected,
       listening,
       sttAvailable: stt.available,
@@ -888,6 +910,6 @@ export function useTalk(): UseTalkReturn {
       activate, cardAction,
       startListening, stop, stopSpeaking,
     }),
-    [state, rows, threads, graph, targetThreadId, cards, level, gateway.connected, listening, stt.available, stt.error, stt.state, stt.downloadProgress, stt.startDownload, ttsStatus, voiceMode, muted, toggleMute, sendText, dismissSttDownload, engineInfo, switchEngine, switchModel, selectThread, renameThread, dismissThread, activate, cardAction, startListening, stop, stopSpeaking],
+    [state, rows, graph, sideState, focusHue, targetThreadId, cards, level, gateway.connected, listening, stt.available, stt.error, stt.state, stt.downloadProgress, stt.startDownload, ttsStatus, voiceMode, muted, toggleMute, sendText, dismissSttDownload, engineInfo, switchEngine, switchModel, selectThread, renameThread, dismissThread, activate, cardAction, startListening, stop, stopSpeaking],
   )
 }

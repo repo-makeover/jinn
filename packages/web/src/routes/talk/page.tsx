@@ -2,21 +2,21 @@
  * Jinn Talk — /talk route (AURA voice surface).
  *
  * Mobile-first. The orchestrator orb sits center; when it spawns COO child
- * sessions they appear as satellite orbs (see Constellation). One big mic button
- * drives the loop (tap to talk, tap to send). TTS is browser SpeechSynthesis by
- * default, so it speaks aloud on the phone with no server deps.
+ * sessions they appear as chips in the WorkDock rail (right edge). One big mic
+ * button drives the loop (tap to talk, tap to send). TTS is browser
+ * SpeechSynthesis by default, so it speaks aloud on the phone with no server deps.
  */
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { ArrowLeft, Mic, Square, Sun, Moon, Keyboard, Volume2, VolumeX, Send } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { mainButtonMode } from "./main-button"
 import { useTheme } from "@/routes/providers"
-import { Constellation } from "./constellation"
+import { AuraAvatar } from "./aura-avatar"
 import { ConversationStream } from "./conversation-stream"
 import { CardStack } from "./cards/card-stack"
 import { ErrorBoundary } from "@/components/error-boundary"
-import { ThreadPanel } from "./thread-panel"
+import { WorkDock } from "./work-dock"
 import { ChildSessionModal } from "./child-session-modal"
 import { TalkEnginePicker } from "./talk-engine-picker"
 import { TalkVoiceIndicator } from "./talk-voice-indicator"
@@ -159,30 +159,23 @@ export default function TalkPage() {
         onOpenThread={setChatSessionId}
       />
 
-      {/* The constellation fills the surface: orchestrator + COO satellites */}
-      <Constellation
-        state={talk.state}
-        level={talk.level}
-        threads={talk.threads}
-        graph={talk.graph}
-        onOpenSession={setChatSessionId}
-      />
+      {/* The orchestrator orb sits centered, morphing toward the focused (most-
+          recent running) COO channel's hue. */}
+      <CenteredOrb state={talk.state} level={talk.level} channelHue={talk.focusHue} />
 
-      {/* COO thread panel — visibility + manual switch/rename/dismiss. Top-left,
-          below the bar, so it never fights the orb, mic, or cards. */}
-      <div
-        className="absolute left-3 z-20"
-        style={{ top: "calc(max(env(safe-area-inset-top), 14px) + 46px)" }}
-      >
-        <ThreadPanel
-          threads={talk.threads}
-          targetThreadId={talk.targetThreadId}
-          onSelect={talk.selectThread}
-          onRename={talk.renameThread}
-          onDismiss={talk.dismissThread}
-          onOpenSession={setChatSessionId}
-        />
-      </div>
+      {/* WorkDock — the single graph-driven work rail (right edge, centered).
+          Replaces the constellation satellites + the thread panel: one chip per
+          depth-1 node, mini-dots for employees, ⋯ menu for rename/dismiss/pin. */}
+      <WorkDock
+        graph={talk.graph}
+        sideState={talk.sideState}
+        targetThreadId={talk.targetThreadId}
+        onOpenThread={setChatSessionId}
+        onSelectTarget={talk.selectThread}
+        onRename={talk.renameThread}
+        onDismiss={talk.dismissThread}
+        idle={talk.state === "idle"}
+      />
 
       {/* Detail cards — a lower band that sits below the orb centre and above the
           mic so it never covers the avatar or the control on mobile. The deck is
@@ -312,6 +305,46 @@ export default function TalkPage() {
         onDownload={talk.startSttDownload}
         onCancel={talk.dismissSttDownload}
       />
+    </div>
+  )
+}
+
+/**
+ * The orchestrator orb, centered on the surface and sized to the viewport. Its
+ * own container is pointer-events:none so taps fall through to the controls; the
+ * orb morphs toward `channelHue` (the focused COO channel) and eases back to
+ * AURA's amber when nothing is running.
+ */
+function CenteredOrb({
+  state,
+  level,
+  channelHue,
+}: {
+  state: ReturnType<typeof useTalkContext>["state"]
+  level: number | undefined
+  channelHue: number | undefined
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState(280)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const measure = () => {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      setSize(Math.max(160, Math.min(Math.min(w, h || w) * 0.6, 360)))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return (
+    <div
+      ref={ref}
+      className="pointer-events-none absolute inset-0 z-0 grid place-items-center"
+    >
+      <AuraAvatar state={state} level={level} size={Math.round(size)} channelHue={channelHue} />
     </div>
   )
 }
