@@ -220,12 +220,22 @@ export function sseEventToDeltas(e: SseDataEvent): StreamDelta[] {
   }
 }
 
+const STOP_FAILURE_GRACE_MS = 20_000;
+/** StopFailure error types the interactive CLI routinely survives and retries
+ *  (the PTY keeps working) — eligible for the grace window. rate_limit /
+ *  billing_error / authentication_failed / max_output_tokens settle
+ *  immediately: the CLI genuinely stops on those, and manager.ts's wait/retry/
+ *  fallback machinery keys off the prompt settle. */
+const GRACE_ELIGIBLE_ERRORS = new Set(["invalid_request", "server_error", "unknown"]);
+
 export interface TurnResolverOpts {
   fallbackSessionId: string | undefined;
   /** When true (warm-PTY reuse / post-idle-spawn), the resolver skips waiting for
    *  SessionStart (it already fired once at process start) and pre-fills the
    *  Claude session id from fallbackSessionId. */
   assumeStarted?: boolean;
+  /** Test override for the StopFailure grace window (default 20s). */
+  stopFailureGraceMs?: number;
 }
 
 /** State machine for one interactive turn: resolves after BOTH SessionStart + Stop, or on StopFailure/interrupt. */
@@ -237,6 +247,7 @@ export class TurnResolver {
   private gotSessionStart = false;
   private stopPayload: HookPayload | undefined;
   private stopFailurePayload: HookPayload | undefined;
+  private graceTimer: NodeJS.Timeout | undefined;
 
   constructor(private opts: TurnResolverOpts) {
     this.promise = new Promise((res) => { this.resolve = res; });
@@ -253,21 +264,29 @@ export class TurnResolver {
       if (typeof h.session_id === "string") this.claudeSessionId = h.session_id;
       this.maybeComplete();
     } else if (h.hook_event_name === "Stop") {
+      // A Stop supersedes any pending StopFailure — the CLI retried and finished.
+      this.clearGrace();
+      this.stopFailurePayload = undefined;
       this.stopPayload = h;
       if (typeof h.session_id === "string" && !this.claudeSessionId) this.claudeSessionId = h.session_id;
       this.maybeComplete();
     } else if (h.hook_event_name === "StopFailure") {
-      // API error ended the turn (rate_limit, billing_error, …). Settle immediately
-      // with an error — do NOT wait for SessionStart (an early failure may never
-      // produce one). numTurns:1 keeps isDeadSessionError from false-positiving.
+      // API error ended the turn. In interactive mode the CLI survives
+      // invalid_request/server_error/unknown and usually retries — hold the
+      // failure in a grace window instead of settling: a later Stop supersedes
+      // it, activity re-arms it, the PTY-death watchdog still fails fast.
+      // Other error types (rate_limit, billing, auth) settle immediately.
+      // numTurns:1 keeps isDeadSessionError from false-positiving.
       this.stopFailurePayload = h;
       if (typeof h.session_id === "string" && !this.claudeSessionId) this.claudeSessionId = h.session_id;
-      this.settle({
-        sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "",
-        result: "",
-        error: `Interactive turn failed: ${h.error ?? "unknown"}`,
-        numTurns: 1,
-      });
+      if (GRACE_ELIGIBLE_ERRORS.has(String(h.error ?? "unknown"))) {
+        this.armGrace();
+      } else {
+        this.settleWithFailure();
+      }
+    } else {
+      // PreToolUse/PostToolUse/etc — proof of life while a failure is pending.
+      this.noteActivity();
     }
   }
 
@@ -294,6 +313,12 @@ export class TurnResolver {
   }
 
   interrupt(reason: string): void {
+    // PTY died while a StopFailure was held in grace — the API error is the
+    // real cause; report it instead of the generic "process exited".
+    if (this.stopFailurePayload && !this.settled) {
+      this.settleWithFailure();
+      return;
+    }
     this.settle({ sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "", result: "", error: reason });
   }
 
@@ -306,9 +331,39 @@ export class TurnResolver {
     this.settle({ sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "", result: text, numTurns: 1 });
   }
 
+  /** Proof of life (SSE delta / tool hook) while a StopFailure is pending —
+   *  re-arms the grace window. No-op when no failure is pending. */
+  noteActivity(): void {
+    if (this.graceTimer) this.armGrace();
+  }
+
+  private armGrace(): void {
+    this.clearGrace();
+    const ms = this.opts.stopFailureGraceMs ?? STOP_FAILURE_GRACE_MS;
+    this.graceTimer = setTimeout(() => this.settleWithFailure(), ms);
+    this.graceTimer.unref?.();
+  }
+
+  private clearGrace(): void {
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = undefined;
+    }
+  }
+
+  private settleWithFailure(): void {
+    this.settle({
+      sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "",
+      result: "",
+      error: `Interactive turn failed: ${this.stopFailurePayload?.error ?? "unknown"}`,
+      numTurns: 1,
+    });
+  }
+
   private settle(r: EngineResult): void {
     if (this.settled) return;
     this.settled = true;
+    this.clearGrace();
     this.resolve(r);
   }
 }
