@@ -69,6 +69,7 @@ import { readJsonlTail } from "./jsonl-tail.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
 import { handleHookPost, isLoopback } from "./hook-endpoint.js";
+import { scheduleOnLoadTailSync } from "./external-turns.js";
 import { handleTalkApi } from "../talk/routes.js";
 import { getOrchestratorPersona } from "../talk/orchestrator-persona.js";
 import { feedTalkText, flushTalkSpeech, discardTalkSpeech } from "../talk/tts-stream.js";
@@ -102,6 +103,10 @@ export interface ApiContext {
    *  spawn sees the new persona/model immediately, rather than waiting ~800ms for
    *  the chokidar watcher. Wired in server.ts; same body as the watcher's onOrgChange. */
   reloadOrg?: () => void;
+  /** In-memory (never persisted) post-settle background activity per session,
+   *  maintained in server.ts from the interactive engine's onBackgroundActivity
+   *  callback. lastActivityAt is epoch ms; serializeSession converts to ISO. */
+  backgroundActivity?: Map<string, { activeStreams: number; lastActivityAt: number }>;
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -397,10 +402,14 @@ function serializeSession(session: Session, context: ApiContext): Session {
   const queue = context.sessionManager.getQueue();
   const queueDepth = queue.getPendingCount(session.sessionKey || session.sourceRef);
   const transportState = queue.getTransportState(session.sessionKey || session.sourceRef, session.status);
+  const bg = context.backgroundActivity?.get(session.id);
   return {
     ...session,
     queueDepth,
     transportState,
+    backgroundActivity: bg
+      ? { activeStreams: bg.activeStreams, lastActivityAt: new Date(bg.lastActivityAt).toISOString() }
+      : null,
   };
 }
 
@@ -522,6 +531,12 @@ export async function handleApiRequest(
       // once the backfill finishes; this one returns whatever is in DB now.
       if (messages.length === 0 && session.engineSessionId) {
         scheduleTranscriptBackfill(params.id, session.engineSessionId, context);
+      } else if (session.engine === "claude") {
+        // On-load safety net for PTY-native (CLI-typed) turns whose unclaimed
+        // Stop was missed entirely: fire-and-forget a transcript tail sync.
+        // Cheap (one stat() in the common case) and never delays this GET —
+        // the frontend refetches on `session:external-turn`.
+        scheduleOnLoadTailSync(params.id, context.emit);
       }
 
       // Support ?last=N to return only the N most recent messages

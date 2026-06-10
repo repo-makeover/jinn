@@ -98,7 +98,7 @@ export function mergeTransportMeta(
   const merged: Record<string, unknown> = { ...baseExisting, ...baseIncoming };
 
   // Preserve Jinn internal keys from being overwritten by transport adapters.
-  for (const key of ["engineOverride", "engineSessions", "claudeSyncSince"]) {
+  for (const key of ["engineOverride", "engineSessions", "claudeSyncSince", "transcriptSyncedThrough"]) {
     if (baseExisting[key] !== undefined) merged[key] = baseExisting[key];
   }
 

@@ -174,6 +174,10 @@ export interface Session {
   lastContextTokens: number | null;
   queueDepth?: number;
   transportState?: "idle" | "queued" | "running" | "error" | "interrupted";
+  /** Serialize-time only (in-memory, never persisted): post-settle background
+   *  work — the CLI still has upstream API requests in flight (background
+   *  subagents/tasks) after the turn settled. Null when none. */
+  backgroundActivity?: { activeStreams: number; lastActivityAt: string } | null;
   createdAt: string;
   lastActivity: string;
   lastError: string | null;

@@ -11,7 +11,7 @@ import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
 import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
 import type { PtyControlEvent, PtyViewEngine, PtyIdleSpawnOpts } from "./pty-view-engine.js";
 import type { HookRegistry, HookPayload } from "../gateway/hook-registry.js";
-import { SsePtyProxy, MAIN_AGENT_SENTINEL, type SseDataEvent } from "./sse-pty-proxy.js";
+import { SsePtyProxy, MAIN_AGENT_SENTINEL, type SseDataEvent, type UpstreamActivityInfo } from "./sse-pty-proxy.js";
 import { neutralizeForPaste } from "../shared/skill-commands.js";
 
 export type { PtyControlEvent } from "./pty-view-engine.js";
@@ -371,6 +371,12 @@ export class TurnResolver {
   }
 }
 
+/** How long activeStreams must sit at 0 (post-settle) before the engine reports
+ *  the session's background activity as cleared. Background subagents fire
+ *  consecutive API requests with small gaps between them — a quiet window keeps
+ *  the indicator from flapping null↔active on every inter-request beat. */
+const BACKGROUND_CLEAR_QUIET_MS = 10_000;
+
 const NATIVE_COMMAND_QUIET_MS = 1800;
 const NATIVE_COMMAND_MIN_MS = 3000;
 const NATIVE_COMMAND_MAX_MS = 90_000;
@@ -425,6 +431,14 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
   /** Sessions with a post-failure recovery listener armed (turn settled as an
    *  API error, but the CLI may still finish — a late Stop supersedes). */
   private lateRecovery = new Map<string, { timer: NodeJS.Timeout }>();
+  /** Post-settle background work per session: the CLI's SSE proxy still has
+   *  upstream requests in flight (background subagents/tasks) after the Stop
+   *  hook settled the turn. `emitted` tracks whether the gateway was told, so a
+   *  cleared (null) notification is only sent when there's something to clear. */
+  private bgActivity = new Map<string, { info: UpstreamActivityInfo; clearTimer?: NodeJS.Timeout; emitted: boolean }>();
+  private backgroundActivityCb?: (jinnSessionId: string, info: UpstreamActivityInfo | null) => void;
+  /** Test override for the post-settle clear quiet window (default 10s). */
+  backgroundClearQuietMs = BACKGROUND_CLEAR_QUIET_MS;
 
   constructor(
     private lifecycle: PtyLifecycleManager,
@@ -438,7 +452,83 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     this.lifecycle.onRelease((id) => {
       this.lastOutputAt.delete(id);
       this.spawnParams.delete(id);
+      // The PTY (and its SSE proxy) died — any in-flight counts are moot.
+      this.clearBackground(id);
     });
+  }
+
+  /** Single-registration callback for post-settle background activity. `info` is
+   *  the live in-flight snapshot; `null` means cleared (quiet for
+   *  backgroundClearQuietMs, or the session's PTY was released). Never fires
+   *  while a run() is in flight for the session — the turn is already "running";
+   *  only post-settle activity matters. */
+  onBackgroundActivity(cb: (jinnSessionId: string, info: UpstreamActivityInfo | null) => void): void {
+    this.backgroundActivityCb = cb;
+  }
+
+  /** Per-PTY SSE proxy reported an in-flight change. Always record it (counts
+   *  must stay truthful across the run boundary); emission is gated downstream. */
+  private handleUpstreamActivity(jinnSessionId: string, info: UpstreamActivityInfo): void {
+    let st = this.bgActivity.get(jinnSessionId);
+    if (!st) {
+      st = { info, emitted: false };
+      this.bgActivity.set(jinnSessionId, st);
+    } else {
+      st.info = info;
+    }
+    this.maybeEmitBackground(jinnSessionId);
+  }
+
+  /** Emit the session's background state if it's post-settle and changed:
+   *  active streams emit immediately (cancelling any pending clear); zero
+   *  streams arm a quiet-window timer that emits `null` once, only if activity
+   *  was previously reported. Suppressed entirely while a run() is in flight. */
+  private maybeEmitBackground(jinnSessionId: string): void {
+    const st = this.bgActivity.get(jinnSessionId);
+    if (!st) return;
+    if (this.active.has(jinnSessionId)) return; // in-flight turn — already "running"
+    if (st.info.activeStreams > 0) {
+      if (st.clearTimer) { clearTimeout(st.clearTimer); st.clearTimer = undefined; }
+      st.emitted = true;
+      this.backgroundActivityCb?.(jinnSessionId, { ...st.info });
+      return;
+    }
+    if (!st.emitted) {
+      // Reached 0 without ever being reported post-settle — nothing to clear.
+      this.bgActivity.delete(jinnSessionId);
+      return;
+    }
+    if (st.clearTimer) return; // quiet window already armed
+    st.clearTimer = setTimeout(() => {
+      const cur = this.bgActivity.get(jinnSessionId);
+      if (cur !== st) return; // state was recreated/cleared since arming
+      if (cur.info.activeStreams > 0) { cur.clearTimer = undefined; return; }
+      this.bgActivity.delete(jinnSessionId);
+      this.backgroundActivityCb?.(jinnSessionId, null);
+    }, this.backgroundClearQuietMs);
+    st.clearTimer.unref?.();
+  }
+
+  /** A new run() is taking the session: retract any reported background state
+   *  (the session is about to be "running") but KEEP the live counts — the proxy
+   *  persists across turns, and run()'s finally re-checks them post-settle. */
+  private suppressBackground(jinnSessionId: string): void {
+    const st = this.bgActivity.get(jinnSessionId);
+    if (!st) return;
+    if (st.clearTimer) { clearTimeout(st.clearTimer); st.clearTimer = undefined; }
+    const wasEmitted = st.emitted;
+    st.emitted = false;
+    if (wasEmitted) this.backgroundActivityCb?.(jinnSessionId, null);
+  }
+
+  /** Drop all background state for a session (PTY released / killed), emitting
+   *  the cleared notification if activity had been reported. */
+  private clearBackground(jinnSessionId: string): void {
+    const st = this.bgActivity.get(jinnSessionId);
+    if (!st) return;
+    if (st.clearTimer) clearTimeout(st.clearTimer);
+    this.bgActivity.delete(jinnSessionId);
+    if (st.emitted) this.backgroundActivityCb?.(jinnSessionId, null);
   }
 
   async run(opts: EngineRunOpts): Promise<EngineResult> {
@@ -453,6 +543,9 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     // A previous turn may have left a late-recovery listener armed; this new
     // turn owns the session (and the hook registration) now.
     this.cancelLateRecovery(jinnSessionId);
+    // Retract any reported post-settle background activity — the session is
+    // about to be "running", which supersedes the background indicator.
+    this.suppressBackground(jinnSessionId);
 
     let warm = this.lifecycle.getWarm(jinnSessionId);
     // Mid-chat model/effort switch: `--model`/`--effort` bind at spawn, so a warm
@@ -595,6 +688,10 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       this.hookRegistry.unregister(jinnSessionId);
       this.active.delete(jinnSessionId);
       this.lifecycle.turnEnded(jinnSessionId); // manager decides kill vs keep-warm
+      // Turn settled — if the CLI still has upstream requests in flight
+      // (background subagents/tasks), report them now; emission was suppressed
+      // while this run owned the session.
+      this.maybeEmitBackground(jinnSessionId);
     }
 
     // Reconstruct cost from the transcript (the Stop hook carries no cost).
@@ -680,7 +777,11 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  ANTHROPIC_BASE_URL (direct to Anthropic): the turn still works, only live
    *  word-by-word streaming degrades. */
   private async startProxy(jinnSessionId: string): Promise<{ proxy: SsePtyProxy; port: number }> {
-    const proxy = new SsePtyProxy(jinnSessionId, (e) => this.handleSseEvent(jinnSessionId, e));
+    const proxy = new SsePtyProxy(jinnSessionId, (e) => this.handleSseEvent(jinnSessionId, e), {
+      // ALL requests (main + subagent + background tasks) count here — this is
+      // how the gateway knows the CLI is still working after the turn settled.
+      onUpstreamActivity: (info) => this.handleUpstreamActivity(jinnSessionId, info),
+    });
     try {
       const port = await proxy.start();
       return { proxy, port };

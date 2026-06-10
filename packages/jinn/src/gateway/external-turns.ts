@@ -1,0 +1,216 @@
+import fs from "node:fs";
+import { logger } from "../shared/logger.js";
+import { getSession, getMessages, insertMessage, updateSession, initDb } from "../sessions/registry.js";
+import { findTranscriptForSession } from "../engines/claude-interactive.js";
+import type { HookPayload } from "./hook-registry.js";
+
+/**
+ * External-turn sync: persist turns that happened OUTSIDE a gateway run() —
+ * i.e. typed directly into the CLI/xterm PTY view — into the gateway messages
+ * DB, so chat mode shows them.
+ *
+ * Anchor mechanism: `transportMeta.transcriptSyncedThrough` holds the ISO
+ * timestamp of the newest transcript entry already persisted by this sync.
+ * Each sync reads the Claude transcript tail (entries strictly newer than the
+ * anchor), inserts the user+assistant messages in order, and advances the
+ * anchor — so a repeated Stop (or a sync racing the on-load safety net) can
+ * never double-insert. NOTE: this is deliberately NOT `claudeSyncSince` — that
+ * key drives the opposite direction (DB messages → injected into Claude's
+ * prompt after a rate-limit engine-override revert) and is consumed/deleted by
+ * the next Claude run, so it can't serve as a durable transcript anchor.
+ *
+ * When the anchor is absent (first external turn for a session), the last DB
+ * message's insert time is used instead: every transcript entry of an already-
+ * persisted turn predates the DB insert of that turn's final assistant message,
+ * so gateway-run history is never re-inserted.
+ */
+export const TRANSCRIPT_SYNC_META_KEY = "transcriptSyncedThrough";
+
+/** One user/assistant text entry from the transcript tail. */
+export interface TranscriptTailEntry {
+  role: "user" | "assistant";
+  content: string;
+  /** Entry's transcript timestamp (epoch ms). */
+  timestampMs: number;
+  /** Same timestamp, original ISO form (becomes the new anchor). */
+  timestampIso: string;
+}
+
+/**
+ * Parse the user/assistant text entries of a Claude transcript newer than
+ * `sinceMs`. Sidechain (sub-agent) and meta entries are skipped; array content
+ * is reduced to its text blocks (tool_use/tool_result blocks drop out, exactly
+ * like the full-transcript backfill in api.ts). Returns `null` when the file
+ * can't be read — callers distinguish "unreadable" from "nothing new".
+ */
+export function readTranscriptTail(transcriptPath: string, sinceMs: number): TranscriptTailEntry[] | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return null;
+  }
+  const entries: TranscriptTailEntry[] = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let obj: any;
+    try { obj = JSON.parse(t); } catch { continue; }
+    const type = obj?.type;
+    if (type !== "user" && type !== "assistant") continue;
+    if (obj.isSidechain === true || obj.isMeta === true) continue;
+    const iso = obj.timestamp;
+    if (typeof iso !== "string") continue;
+    const ms = new Date(iso).getTime();
+    if (!Number.isFinite(ms) || ms <= sinceMs) continue;
+    let content = obj?.message?.content;
+    if (Array.isArray(content)) {
+      content = content
+        .filter((b: Record<string, unknown>) => b?.type === "text")
+        .map((b: Record<string, unknown>) => String(b.text ?? ""))
+        .join("");
+    }
+    if (typeof content !== "string" || !content.trim()) continue;
+    entries.push({ role: type, content: content.trim(), timestampMs: ms, timestampIso: iso });
+  }
+  return entries;
+}
+
+function anchorMsFor(session: { transportMeta: unknown }, sessionId: string): number {
+  const meta = (session.transportMeta || {}) as Record<string, unknown>;
+  const anchorIso = meta[TRANSCRIPT_SYNC_META_KEY];
+  if (typeof anchorIso === "string") {
+    const ms = new Date(anchorIso).getTime();
+    if (Number.isFinite(ms)) return ms;
+  }
+  // No anchor yet — fall back to the newest DB message's insert time (0 = empty
+  // session, i.e. sync the whole transcript, equivalent to a backfill).
+  const messages = getMessages(sessionId);
+  return messages.length > 0 ? messages[messages.length - 1].timestamp : 0;
+}
+
+function setAnchor(sessionId: string, anchorIso: string): void {
+  const live = getSession(sessionId);
+  if (!live) return;
+  const meta = (live.transportMeta && typeof live.transportMeta === "object" && !Array.isArray(live.transportMeta))
+    ? { ...(live.transportMeta as Record<string, unknown>) }
+    : {};
+  meta[TRANSCRIPT_SYNC_META_KEY] = anchorIso;
+  updateSession(sessionId, {
+    transportMeta: meta as any,
+    lastActivity: new Date().toISOString(),
+  });
+}
+
+/**
+ * Persist any un-synced transcript tail for a session into the messages DB.
+ * Primary trigger: an unclaimed Stop hook (PTY-native turn — no run() in
+ * flight). Also callable without a payload as the on-load safety net.
+ *
+ * Returns the number of messages inserted. Emits `session:external-turn`
+ * `{ sessionId }` when anything was persisted (the frontend refetches messages
+ * on it).
+ */
+export function syncExternalTurn(
+  sessionId: string,
+  emit: (event: string, payload: unknown) => void,
+  payload?: HookPayload,
+): number {
+  const session = getSession(sessionId);
+  if (!session) {
+    logger.info(`External-turn sync skipped: session ${sessionId} not found`);
+    return 0;
+  }
+  // A run() owns the session — its completion path persists the turn.
+  if (session.status === "running") return 0;
+
+  const engineSessionId =
+    (typeof payload?.session_id === "string" && payload.session_id) ||
+    session.engineSessionId ||
+    undefined;
+  const transcriptPath =
+    (typeof payload?.transcript_path === "string" && fs.existsSync(payload.transcript_path)
+      ? payload.transcript_path
+      : undefined) ?? (engineSessionId ? findTranscriptForSession(engineSessionId) : undefined);
+
+  const anchorMs = anchorMsFor(session, sessionId);
+  const entries = transcriptPath ? readTranscriptTail(transcriptPath, anchorMs) : null;
+
+  if (entries === null) {
+    // Transcript missing/unreadable. Better than dropping the turn: persist the
+    // assistant text straight from the hook payload (no user prompt available)
+    // and advance the anchor to now so a redelivered Stop can't duplicate it.
+    const hookText = String(payload?.last_assistant_message ?? "").trim();
+    if (!hookText) return 0;
+    // Anchor can't dedup this path (no transcript timestamps) — guard against a
+    // redelivered Stop by comparing against the newest persisted message.
+    const existing = getMessages(sessionId);
+    const newest = existing[existing.length - 1];
+    if (newest && newest.role === "assistant" && newest.content === hookText) return 0;
+    insertMessage(sessionId, "assistant", hookText);
+    setAnchor(sessionId, new Date().toISOString());
+    emit("session:external-turn", { sessionId });
+    logger.info(
+      `External turn persisted for session ${sessionId} from hook payload (transcript unreadable: ${transcriptPath ?? "not found"})`,
+    );
+    return 1;
+  }
+  if (entries.length === 0) return 0; // tail already synced — dedup no-op
+
+  // One transaction for the whole tail (mirrors the transcript backfill).
+  const db = initDb();
+  const txn = db.transaction((items: TranscriptTailEntry[]) => {
+    for (const e of items) insertMessage(sessionId, e.role, e.content);
+  });
+  txn(entries);
+  // A PTY-native first turn means the DB may not know the engine session yet —
+  // adopt it so future resumes/backfills/syncs target the right transcript.
+  if (!session.engineSessionId && engineSessionId) {
+    updateSession(sessionId, { engineSessionId });
+  }
+  const newAnchor = entries[entries.length - 1].timestampIso;
+  setAnchor(sessionId, newAnchor);
+  emit("session:external-turn", { sessionId });
+  logger.info(
+    `Synced ${entries.length} external (CLI-native) message(s) for session ${sessionId} (anchor → ${newAnchor})`,
+  );
+  return entries.length;
+}
+
+/** Sessions with an in-flight on-load tail sync (mirrors backfillInProgress). */
+const onLoadSyncInProgress = new Set<string>();
+
+/**
+ * On-load safety net: when serving session detail, fire-and-forget a tail sync
+ * so a PTY-native turn whose Stop was missed entirely still lands. Cheap in the
+ * common case — the transcript's mtime is compared against the anchor BEFORE
+ * any parsing, so an untouched transcript costs one stat(). The GET itself is
+ * never delayed; the frontend refetches on `session:external-turn`.
+ */
+export function scheduleOnLoadTailSync(
+  sessionId: string,
+  emit: (event: string, payload: unknown) => void,
+): void {
+  if (onLoadSyncInProgress.has(sessionId)) return;
+  onLoadSyncInProgress.add(sessionId);
+  setImmediate(() => {
+    try {
+      const session = getSession(sessionId);
+      if (!session || session.engine !== "claude" || session.status === "running") return;
+      if (!session.engineSessionId) return;
+      const transcriptPath = findTranscriptForSession(session.engineSessionId);
+      if (!transcriptPath) return;
+      const anchorMs = anchorMsFor(session, sessionId);
+      try {
+        if (fs.statSync(transcriptPath).mtimeMs <= anchorMs) return; // nothing new
+      } catch {
+        return;
+      }
+      syncExternalTurn(sessionId, emit);
+    } catch (err) {
+      logger.warn(`On-load transcript tail sync failed for session ${sessionId}: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      onLoadSyncInProgress.delete(sessionId);
+    }
+  });
+}

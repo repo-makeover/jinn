@@ -25,6 +25,7 @@ import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js"
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { startStatusReconciler } from "./status-reconciler.js";
+import { syncExternalTurn } from "./external-turns.js";
 import { pickEncoding, isCompressibleExt, compressStream } from "./compress.js";
 import { attachPtyWebSocket } from "./pty-ws.js";
 import { startWsHeartbeat, trackHeartbeat } from "./ws-heartbeat.js";
@@ -696,6 +697,35 @@ export async function startGateway(
     emit("org:changed", {});
   };
 
+  // Post-settle background activity (in-memory only): the interactive engine
+  // reports when the CLI still has upstream API requests in flight (background
+  // subagents/tasks) AFTER the Stop hook settled the turn — so the UI can show
+  // "still working" instead of lying "idle". Mirrored into serializeSession via
+  // apiContext.backgroundActivity and pushed live as `session:background`.
+  const backgroundActivity = new Map<string, { activeStreams: number; lastActivityAt: number }>();
+  interactiveClaudeEngine.onBackgroundActivity((sessionId, info) => {
+    if (info) backgroundActivity.set(sessionId, info);
+    else backgroundActivity.delete(sessionId);
+    emit("session:background", {
+      sessionId,
+      backgroundActivity: info
+        ? { activeStreams: info.activeStreams, lastActivityAt: new Date(info.lastActivityAt).toISOString() }
+        : null,
+    });
+  });
+
+  // Unsolicited-Stop consumer: a Stop hook nobody claims within the registry's
+  // grace delay means a PTY-native turn (typed straight into the CLI/xterm
+  // view — no run() in flight) or a Stop past the late-recovery window. Persist
+  // that turn into the messages DB from the transcript tail so chat mode sees it.
+  hookRegistry.setUnclaimedHookHandler((jinnSessionId, payload) => {
+    try {
+      syncExternalTurn(jinnSessionId, emit, payload);
+    } catch (err) {
+      logger.warn(`Unclaimed-Stop sync failed for session ${jinnSessionId}: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
   // API context
   const apiContext: ApiContext = {
     config: currentConfig,
@@ -710,6 +740,7 @@ export async function startGateway(
     interactiveClaudeEngine,
     ptyViewEngines,
     reloadOrg,
+    backgroundActivity,
   };
 
   // Re-read config.yaml into memory. Used by both the file-watcher (debounced)
