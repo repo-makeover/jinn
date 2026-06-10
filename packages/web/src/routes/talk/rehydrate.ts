@@ -32,7 +32,7 @@ export function messagesToEntries(
     const text = stripMarkdown(String(m.content ?? m.text ?? "")).trim()
     if (!text) continue
     const id = typeof m.id === "string" && m.id ? m.id : `${role}-${out.length}`
-    out.push({ id, role, text, partial: false })
+    out.push({ id, role, text, partial: false, full: text })
   }
   return out
 }

@@ -33,6 +33,8 @@ export interface TranscriptEntry {
    * instead of appending into a growing blob.
    */
   seg?: number
+  /** Full reply text (history rail); `text` stays the live caption sentence. */
+  full?: string
 }
 
 export interface TranscriptProps {

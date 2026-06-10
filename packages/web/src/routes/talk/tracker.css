@@ -380,6 +380,91 @@
 }
 
 /* ============================================================================
+ * HISTORY RAIL — collapsible scrollable conversation log (Mission Control)
+ * ========================================================================== */
+
+.history-rail {
+  position: absolute;
+  inset: calc(env(safe-area-inset-top, 0px) + 56px) 12px calc(env(safe-area-inset-bottom, 0px) + 120px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  color: var(--text-primary);
+  /* pointer-events must be enabled so links and the close button are tappable */
+  pointer-events: auto;
+}
+
+.history-rail__scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--separator) transparent;
+}
+
+.history-rail__scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.history-rail__scroll::-webkit-scrollbar-thumb {
+  background: var(--separator);
+  border-radius: 999px;
+}
+
+.history-rail__row {
+  max-width: 88%;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--text-primary);
+}
+
+.history-rail__row--user {
+  align-self: flex-end;
+  opacity: 0.75;
+  text-align: right;
+  color: var(--text-secondary);
+}
+
+.history-rail__row--assistant {
+  align-self: flex-start;
+}
+
+.history-rail__close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 1;
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  opacity: 0.6;
+  color: var(--text-primary);
+  line-height: 1;
+  padding: 4px 6px;
+}
+
+.history-rail__close:hover {
+  opacity: 1;
+}
+
+.talk-link {
+  pointer-events: auto;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  color: var(--accent);
+}
+
+/* ============================================================================
  * REDUCED MOTION — opacity only, no transforms / blur / pulses anywhere.
  * ========================================================================== */
 @media (prefers-reduced-motion: reduce) {

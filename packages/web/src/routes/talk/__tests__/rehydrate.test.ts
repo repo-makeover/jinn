@@ -14,8 +14,8 @@ describe("messagesToEntries", () => {
       ],
     }
     expect(messagesToEntries(session)).toEqual([
-      { id: "u1", role: "user", text: "hello there", partial: false },
-      { id: "a1", role: "assistant", text: "Hi\nbold reply", partial: false },
+      { id: "u1", role: "user", text: "hello there", partial: false, full: "hello there" },
+      { id: "a1", role: "assistant", text: "Hi\nbold reply", partial: false, full: "Hi\nbold reply" },
     ])
   })
 
@@ -28,14 +28,14 @@ describe("messagesToEntries", () => {
       ],
     }
     expect(messagesToEntries(session)).toEqual([
-      { id: "a2", role: "assistant", text: "kept", partial: false },
+      { id: "a2", role: "assistant", text: "kept", partial: false, full: "kept" },
     ])
   })
 
   it("falls back to .history and synthesizes ids", () => {
     const session = { history: [{ role: "user", text: "no id here" }] }
     expect(messagesToEntries(session)).toEqual([
-      { id: "user-0", role: "user", text: "no id here", partial: false },
+      { id: "user-0", role: "user", text: "no id here", partial: false, full: "no id here" },
     ])
   })
 

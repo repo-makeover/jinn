@@ -412,9 +412,15 @@ export function useTalk(): UseTalkReturn {
     // (`mute`, when Kokoro audio is already playing). Markdown is stripped so
     // the TTS never reads syntax aloud.
     const speakReplyIfNeeded = (asstId: string | null) => {
+      const mutedNow = mutedRef.current
+      const kokoro = audioThisTurnRef.current && !mutedNow
+      audioThisTurnRef.current = false
+      const text = stripMarkdown(turnTextRef.current).trim()
       const finalize = () => {
         if (!asstId) return
-        setEntries((prev) => prev.map((e) => (e.id === asstId ? { ...e, partial: false } : e)))
+        setEntries((prev) =>
+          prev.map((e) => (e.id === asstId ? { ...e, partial: false, full: text || e.text } : e)),
+        )
       }
       const captionSentence = ({ text: sentence, index }: { text: string; index: number }) => {
         if (!asstId) return
@@ -424,10 +430,6 @@ export function useTalk(): UseTalkReturn {
           ),
         )
       }
-      const mutedNow = mutedRef.current
-      const kokoro = audioThisTurnRef.current && !mutedNow
-      audioThisTurnRef.current = false
-      const text = stripMarkdown(turnTextRef.current).trim()
       if (!text) {
         finalize()
         setState("idle")

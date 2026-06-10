@@ -22,6 +22,7 @@ import { TalkEnginePicker } from "./talk-engine-picker"
 import { TalkVoiceIndicator } from "./talk-voice-indicator"
 import { WhisperDownloadModal } from "@/components/stt/whisper-download-modal"
 import { useTalkContext } from "./talk-provider"
+import { HistoryRail } from "./history-rail"
 
 export default function TalkPage() {
   const { theme, setTheme } = useTheme()
@@ -30,6 +31,8 @@ export default function TalkPage() {
   const talk = useTalkContext()
   const { activate } = talk
   useEffect(() => { activate() }, [activate])
+  // History rail: collapsible scrollable log of every exchange.
+  const [historyOpen, setHistoryOpen] = useState(false)
   // Which COO child session's chat the modal is showing (null → closed).
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
   // Type-to-talk: a tucked-away text input for when you can't (or don't want to)
@@ -124,6 +127,26 @@ export default function TalkPage() {
             onSwitchEngine={onSwitchEngine}
             onSwitchModel={talk.switchModel}
           />
+          {/* History rail toggle — icon-only, matches the gear + theme buttons. */}
+          <button
+            onClick={() => setHistoryOpen((v) => !v)}
+            aria-pressed={historyOpen}
+            aria-label="Conversation history"
+            title="Conversation history"
+            className={cn(
+              "inline-flex size-9 items-center justify-center rounded-full border backdrop-blur-md transition-colors",
+              historyOpen
+                ? "border-[var(--accent)] bg-[var(--accent-fill)] text-[var(--accent)]"
+                : "border-[var(--separator)] bg-[var(--material-regular)] text-[var(--text-secondary)] active:bg-[var(--fill-secondary)]",
+            )}
+          >
+            {/* Three-line list glyph */}
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="2" y="4" width="12" height="1.5" rx="0.75" fill="currentColor" />
+              <rect x="2" y="7.25" width="12" height="1.5" rx="0.75" fill="currentColor" />
+              <rect x="2" y="10.5" width="12" height="1.5" rx="0.75" fill="currentColor" />
+            </svg>
+          </button>
           {/* Mute (silent/read mode) — icon-only, matches the gear + theme buttons. */}
           <button
             onClick={talk.toggleMute}
@@ -148,6 +171,13 @@ export default function TalkPage() {
           </button>
         </div>
       </div>
+
+      {/* History rail — collapsible scrollable log of every exchange */}
+      <HistoryRail
+        entries={talk.entries}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+      />
 
       {/* Transcript overlay (upper area) */}
       <div className="pointer-events-none absolute inset-x-0 top-[12%] z-20 flex justify-center px-5">
