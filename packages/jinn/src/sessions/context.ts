@@ -398,18 +398,13 @@ function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy):
         }
         const emp = node.employee;
         const indent = "  ".repeat(node.depth);
-        let entry = `${indent}- **${emp.displayName}** (${name}) — ${emp.department}, ${emp.rank}`;
-        if (emp.persona) {
-          const firstLine = emp.persona.trim().split("\n")[0].trim().slice(0, 120);
-          entry += `\n${indent}  _${firstLine}_`;
-        }
-        lines.push(entry);
+        lines.push(`${indent}- **${emp.displayName}** (${name}) — ${emp.department}, ${emp.rank}`);
       }
       if (deepCount > 0) {
         lines.push(`${"  ".repeat(MAX_DEPTH)}- ... and ${deepCount} more at deeper levels`);
       }
 
-      lines.push(`\nYou can create new employees by writing YAML files to \`${ORG_DIR}/\``);
+      lines.push(`\nFull persona/details: \`GET /api/org/employees/:name\` or the YAML under \`${ORG_DIR}/\`. Create new employees by writing YAML files there.`);
       return lines.join("\n");
     }
 
@@ -441,14 +436,9 @@ function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy):
       const displayMatch = content.match(/displayName:\s*(.+)/);
       const deptMatch = content.match(/department:\s*(.+)/);
       const rankMatch = content.match(/rank:\s*(.+)/);
-      const personaMatch = content.match(/persona:\s*[|>]?\s*\n?\s*(.+)/);
-      let entry = `- **${displayMatch?.[1] || name}** (${name}) — ${deptMatch?.[1] || "unassigned"}, ${rankMatch?.[1] || "employee"}`;
-      if (personaMatch?.[1]) {
-        entry += `\n  _${personaMatch[1].trim().slice(0, 120)}_`;
-      }
-      lines.push(entry);
+      lines.push(`- **${displayMatch?.[1] || name}** (${name}) — ${deptMatch?.[1] || "unassigned"}, ${rankMatch?.[1] || "employee"}`);
     }
-    lines.push(`\nYou can create new employees by writing YAML files to \`${ORG_DIR}/\``);
+    lines.push(`\nFull persona/details: \`GET /api/org/employees/:name\` or the YAML under \`${ORG_DIR}/\`. Create new employees by writing YAML files there.`);
     return lines.join("\n");
   } catch {
     return null;

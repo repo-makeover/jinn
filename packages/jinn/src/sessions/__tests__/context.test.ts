@@ -216,6 +216,32 @@ describe("buildContext — self-evolution appears ONLY for a fresh install", () 
   });
 });
 
+describe("buildContext — compact org roster", () => {
+  const emp = (name: string, rank: Employee["rank"], persona: string): Employee => ({
+    name, displayName: name, department: "eng", rank, engine: "claude", model: "opus", persona,
+  });
+  const hierarchy = {
+    nodes: {
+      lead: { employee: emp("lead", "manager", "Secret persona preview text"), parentName: null, directReports: ["dev"], depth: 0, chain: [] },
+      dev: { employee: emp("dev", "employee", "Another secret persona"), parentName: "lead", directReports: [], depth: 1, chain: ["lead"] },
+    },
+    sorted: ["lead", "dev"],
+  } as any;
+
+  it("lists name/dept/rank but NOT persona previews", () => {
+    const out = buildContext({ ...baseOpts, hierarchy });
+    expect(out).toContain("## Organization (2 employee(s))");
+    expect(out).toContain("- **lead** (lead) — eng, manager");
+    expect(out).not.toContain("Secret persona preview");
+    expect(out).not.toContain("Another secret persona");
+  });
+
+  it("points at the employee-detail endpoint for full personas", () => {
+    const out = buildContext({ ...baseOpts, hierarchy });
+    expect(out).toContain("GET /api/org/employees/:name");
+  });
+});
+
 describe("buildContext — maxChars trimming", () => {
   it("stays within a configured maxChars cap by trimming optional/standard sections", () => {
     const cap = 1200;
