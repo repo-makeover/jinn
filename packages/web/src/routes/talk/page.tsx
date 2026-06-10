@@ -159,6 +159,7 @@ export default function TalkPage() {
         state={talk.state}
         level={talk.level}
         threads={talk.threads}
+        graph={talk.graph}
         onOpenSession={setChatSessionId}
       />
 

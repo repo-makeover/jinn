@@ -4,26 +4,31 @@
  * The big orb is the orchestrator. When it spawns COO child sessions, it lifts
  * up and shrinks, and each child appears as a satellite orb in a row below it,
  * with an animated link conveying knowledge flowing down (main → child) and
- * results returning (child → main). Children spread out as their count grows and
- * fade out shortly after they finish.
+ * results returning (child → main). All threads always render — idle ones are
+ * dimmed rather than hidden (Mission Control). Each satellite can carry a row
+ * of mini-dots for its depth-2+ employee descendants.
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react"
 import { AuraAvatar } from "./aura-avatar"
 import type { AvatarState } from "./types"
 import type { TalkThread } from "./use-talk"
+import { isWorking, type GraphNode } from "./graph-store"
+import { visibleThreads, miniDotsFor } from "./constellation-layout"
 import "./constellation.css"
 
 interface ConstellationProps {
   state: AvatarState
   level: number | undefined
   threads: TalkThread[]
+  /** Full delegation graph (depth-1 = COO threads, depth-2+ = employee children). */
+  graph: GraphNode[]
   /** Open the read-only chat popup for a satellite (COO child) session. */
   onOpenSession?: (id: string) => void
 }
 
 interface Pt { x: number; y: number }
 
-export function Constellation({ state, level, threads, onOpenSession }: ConstellationProps) {
+export function Constellation({ state, level, threads, graph, onOpenSession }: ConstellationProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [dims, setDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
   // Track which child ids have already mounted, so only NEW ones pop in.
@@ -41,9 +46,9 @@ export function Constellation({ state, level, threads, onOpenSession }: Constell
 
   const { w, h } = dims
   const ready = w > 0 && h > 0
-  // Only currently-orbiting threads show as satellites; parked ones live on in
-  // the thread panel. Each carries its own stable channel hue.
-  const sats = threads.filter((t) => t.orbiting)
+  // All threads render as satellites — idle ones are dimmed, never hidden.
+  // Working threads float to the front; overflow beyond MAX_SATELLITES shows a chip.
+  const { shown: sats, overflow } = visibleThreads(threads)
   const hasKids = sats.length > 0
 
   // The channel in focus = the most recently active orbiting thread still
@@ -124,6 +129,7 @@ export function Constellation({ state, level, threads, onOpenSession }: Constell
             key={c.id}
             className={`cst-orb ${isNew ? "cst-orb-enter" : ""}${clickable ? " cst-orb-clickable" : ""}`}
             data-focused={isFocused}
+            data-idle={c.state === "idle"}
             style={{
               left: center.x,
               top: center.y,
@@ -152,9 +158,32 @@ export function Constellation({ state, level, threads, onOpenSession }: Constell
               <AuraAvatar state={c.state === "idle" ? "idle" : "thinking"} size={Math.round(childSize)} channelHue={c.hue} />
             </div>
             {c.label && <span className="cst-orb-label">{c.label}</span>}
+            {(() => {
+              const dots = miniDotsFor(graph, c.id)
+              if (dots.length === 0) return null
+              return (
+                <div className="cst-minis" aria-label={`${dots.length} sub-agents`}>
+                  {dots.map((d) => (
+                    <span
+                      key={d.id}
+                      className={`cst-mini${isWorking(d) ? " cst-mini-working" : ""}`}
+                      title={`${d.label}${d.employee ? ` (${d.employee})` : ""} — ${d.status}`}
+                      style={{ background: `hsl(${c.hue} 64% ${isWorking(d) ? 62 : 38}%)` }}
+                      onClick={(e) => { e.stopPropagation(); onOpenSession?.(d.id) }}
+                    />
+                  ))}
+                </div>
+              )
+            })()}
           </div>
         )
       })}
+
+      {ready && overflow > 0 && (
+        <div className="cst-overflow" style={{ left: w / 2, top: rowY + childSize * 0.85 }}>
+          +{overflow} more
+        </div>
+      )}
     </div>
   )
 }

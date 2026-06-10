@@ -107,9 +107,48 @@
 }
 .cst-orb[data-focused="true"] .cst-orb-label { opacity: 1; }
 
+.cst-orb[data-idle="true"] { filter: saturate(0.55); }
+
+/* Mini-dots: depth-2+ employee descendants of a satellite. Placed below the
+   label chip (which sits at calc(100% + 6px) and is ~18px tall) to avoid
+   collision when the focused orb shows its label. */
+.cst-minis {
+  position: absolute;
+  top: calc(100% + 28px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+.cst-mini {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+.cst-mini-working {
+  opacity: 1;
+  animation: cst-mini-pulse 1.6s ease-in-out infinite;
+}
+@keyframes cst-mini-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+}
+.cst-overflow {
+  position: absolute;
+  transform: translate(-50%, 0);
+  font-size: 11px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cst-link-flow, .cst-link-return { animation: none; }
   .cst-orb { transition: opacity 200ms ease; }
   .cst-orb-enter { animation: none; }
   .cst-orb-scale { transition: none; }
+  .cst-mini-working { animation: none; }
 }
