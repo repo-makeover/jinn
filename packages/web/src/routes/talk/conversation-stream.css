@@ -21,11 +21,6 @@
   transition: opacity 480ms var(--ease-smooth, cubic-bezier(0.4, 0, 0.2, 1));
 }
 
-/* At idle the conversation recedes — the orb is the focus. */
-.cstream[data-state="idle"] {
-  opacity: 0.6;
-}
-
 .cstream__scroll {
   /* Re-enable interaction on the actual content column so it can be scrolled and
      chips/links tapped, while the wrapper margins keep falling through. */
