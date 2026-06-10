@@ -314,8 +314,10 @@ export class TurnResolver {
 
   interrupt(reason: string): void {
     // PTY died while a StopFailure was held in grace — the API error is the
-    // real cause; report it instead of the generic "process exited".
-    if (this.stopFailurePayload && !this.settled) {
+    // real cause; report it instead of the generic "process exited". Other
+    // interrupt reasons (user abort, engine switch, preemption) keep their
+    // "Interrupted: …" text so the quiet-interrupt handling downstream engages.
+    if (this.stopFailurePayload && !this.settled && reason === "Interrupted: claude process exited") {
       this.settleWithFailure();
       return;
     }
@@ -549,6 +551,10 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       const startedAt = Date.now();
       lostStopRecoveryTimer = setInterval(() => {
         if (resolver.isSettled) return;
+        // A StopFailure is held in the grace window — the turn's fate is the
+        // grace timer's call (Stop supersedes / expiry fails). Recovering
+        // intermediate transcript text here would fabricate a wrong success.
+        if (resolver.stopFailure) return;
         const now = Date.now();
         const elapsed = now - startedAt;
         const quietFor = now - (this.lastOutputAt.get(jinnSessionId) ?? startedAt);

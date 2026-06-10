@@ -97,4 +97,36 @@ describe("TurnResolver — StopFailure grace window", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(get()?.error).toBe("Interactive turn failed: server_error");
   });
+
+  it("a user interrupt during grace keeps the Interrupted reason (quiet-interrupt path)", async () => {
+    const r = new TurnResolver({ fallbackSessionId: "sid", assumeStarted: true, stopFailureGraceMs: 1000 });
+    const get = probe(r);
+    r.onHook({ hook_event_name: "StopFailure", error: "server_error", session_id: "sid" });
+    r.interrupt("Interrupted: user stopped the turn");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get()?.error).toBe("Interrupted: user stopped the turn");
+  });
+
+  it("a late Stop after grace expiry does not mutate the settled failure", async () => {
+    const r = new TurnResolver({ fallbackSessionId: "sid", assumeStarted: true, stopFailureGraceMs: 1000 });
+    const get = probe(r);
+    r.onHook({ hook_event_name: "StopFailure", error: "invalid_request", session_id: "sid" });
+    await vi.advanceTimersByTimeAsync(1100);
+    r.onHook({ hook_event_name: "Stop", session_id: "sid", last_assistant_message: "too late" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get()?.error).toBe("Interactive turn failed: invalid_request");
+    expect(get()?.result).toBe("");
+  });
+
+  it("a second StopFailure during grace re-arms and expiry reports the newer error", async () => {
+    const r = new TurnResolver({ fallbackSessionId: "sid", assumeStarted: true, stopFailureGraceMs: 1000 });
+    const get = probe(r);
+    r.onHook({ hook_event_name: "StopFailure", error: "invalid_request", session_id: "sid" });
+    await vi.advanceTimersByTimeAsync(800);
+    r.onHook({ hook_event_name: "StopFailure", error: "server_error", session_id: "sid" });
+    await vi.advanceTimersByTimeAsync(800); // past original deadline, within re-armed window
+    expect(r.isSettled).toBe(false);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(get()?.error).toBe("Interactive turn failed: server_error");
+  });
 });
