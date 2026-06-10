@@ -278,6 +278,11 @@ export const api = {
    */
   talkCreateSession: (fresh = false) =>
     post<{ sessionId: string; reused: boolean }>("/api/talk/session", { fresh }),
+  /** Talk: full delegation-tree snapshot under the orchestrator (Mission Control). */
+  getTalkGraph: (rootId: string) =>
+    get<{ rootId: string; nodes: Array<{ id: string; parentId: string | null; depth: number; label: string; employee: string | null; status: string; lastActivity: string }> }>(
+      `/api/talk/graph?root=${encodeURIComponent(rootId)}`,
+    ),
   /** Talk: TTS/loop readiness + the active orchestrator engine/model. */
   talkStatus: () =>
     get<{

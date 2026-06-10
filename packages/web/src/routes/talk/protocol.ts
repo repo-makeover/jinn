@@ -28,6 +28,7 @@ export const TALK_EVENTS = {
   ttsDownloadComplete: "talk:tts:download:complete",
   ttsDownloadError: "talk:tts:download:error",
   engine: "talk:engine",
+  graph: "talk:graph",
 } as const
 
 /** Task as it arrives on the wire (backend uses `label`). */
@@ -78,3 +79,14 @@ export interface SessionDeltaEvent {
   toolId?: string
 }
 export interface SessionCompletedEvent { sessionId: string; result?: string | null; error?: string | null }
+
+/** One node of the delegation tree under the orchestrator (Mission Control). */
+export interface TalkGraphNodeWire {
+  id: string; parentId: string | null; depth: number; label: string
+  employee: string | null; status: string; lastActivity: string
+}
+export interface TalkGraphEvent {
+  rootId: string
+  change: "added" | "status" | "completed" | "removed"
+  node: TalkGraphNodeWire
+}
