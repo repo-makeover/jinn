@@ -6,11 +6,12 @@
  * narrate what the orchestrator did. Replaces the old single-exchange transcript
  * AND the hidden history rail.
  *
- * Layout follows the same non-blocking pattern as the transcript/cards overlay:
- * the positioning wrapper is pointer-events:none (taps fall through to the orb),
- * and the interactive children (the scroll viewport, links, chips, the jump
- * pill) re-enable pointer-events on themselves. Auto-scrolls to the live edge
- * unless the user scrolls up, in which case a "jump to live" pill appears.
+ * Layout: the stream fills the `.talk-stage` grid cell (absolute inset:0 — the
+ * grid allocates the space, so banner/cards/input growth reflows it instead of
+ * overlapping). The positioning wrapper is pointer-events:none; the interactive
+ * children (the scroll viewport, links, chips, the jump pill) re-enable
+ * pointer-events on themselves. Auto-scrolls to the live edge unless the user
+ * scrolls up, in which case a "jump to live" pill appears.
  *
  * Themed entirely from Ledger tokens (light + dark). Honors reduced motion.
  */
@@ -39,7 +40,6 @@ export interface ConversationStreamProps {
   cardAnchorFor?: (cardId: string) => string | null
   /** Action channel for any interactive card rendered inline. */
   onCardAction?: (message: string) => void
-  className?: string
 }
 
 const EASE_VARS: CSSProperties = {
@@ -166,7 +166,6 @@ export function ConversationStream({
   inlineCards,
   cardAnchorFor,
   onCardAction,
-  className,
 }: ConversationStreamProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
@@ -213,11 +212,7 @@ export function ConversationStream({
   }
 
   return (
-    <div
-      className={`cstream${className ? ` ${className}` : ""}`}
-      data-state={state}
-      style={EASE_VARS}
-    >
+    <div className="cstream" data-state={state} style={EASE_VARS}>
       <div
         ref={scrollRef}
         className="cstream__scroll"

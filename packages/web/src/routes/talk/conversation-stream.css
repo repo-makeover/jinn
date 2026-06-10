@@ -1,9 +1,9 @@
 /**
  * Jinn Talk — ConversationStream styles (Task 9).
  *
- * The persistent conversation overlay. Reads only Ledger theme tokens so it
- * adapts to light + dark with zero hardcoded colors. The positioning wrapper is
- * pointer-events:none (taps fall through to the orb); the scroll viewport + the
+ * The persistent conversation, filling the `.talk-stage` grid cell. Reads only
+ * Ledger theme tokens so it adapts to light + dark with zero hardcoded colors.
+ * The positioning wrapper is pointer-events:none; the scroll viewport + the
  * interactive children (links, chips, jump pill) re-enable pointer-events.
  */
 

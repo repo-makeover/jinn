@@ -16,6 +16,7 @@
 }
 
 /* ---- row 1: top bar ---- */
+/* 14px = no-notch floor for the safe-area inset (carried from the legacy bar). */
 .talk-topbar {
   display: flex;
   align-items: center;
@@ -44,6 +45,7 @@
   transition: height var(--motion-hero);
 }
 .talk-orbdock[data-active="true"] {
+  /* Geometry: 56px anchor + 4px breathing each side. */
   height: 64px;
 }
 /* 56px anchor box pinned to the row centre — the OrbLayer chases its rect. */
@@ -56,7 +58,8 @@
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
-/* Whisper / status line beside the docked orb. */
+/* Whisper / status line beside the docked orb. Geometry: 44px = half the 56px
+   anchor (28px) + a 16px gap; 320px caps the line on wide screens. */
 .talk-orbdock .talk-whisper {
   position: absolute;
   left: calc(50% + 44px);
@@ -86,6 +89,7 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  /* 10px = no-inset floor for the safe-area right edge. */
   padding-right: max(env(safe-area-inset-right), 10px);
 }
 /* Narrow screens: the rail floats over the stage edge instead of stealing
@@ -114,6 +118,7 @@
   align-items: flex-end;
   justify-content: center;
   padding: var(--space-2) var(--space-4) 0;
+  /* Cap so a tall blocking card can never push the controls off-screen. */
   max-height: 46dvh;
   overflow: hidden;
 }
@@ -126,6 +131,7 @@
   flex-direction: column;
   align-items: center;
   gap: var(--space-3);
+  /* 22px = no-inset floor for the home bar (carried from the legacy controls). */
   padding: var(--space-2) 0 max(env(safe-area-inset-bottom), 22px);
 }
 
