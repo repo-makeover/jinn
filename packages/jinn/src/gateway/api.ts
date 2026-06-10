@@ -2338,9 +2338,12 @@ async function runWebSession(
           lastActivity: new Date().toISOString(),
           lastError: null,
         });
+        // The parent/channel already saw this turn fail — label the late answer
+        // so it reads as a supersede, not a fresh unprompted turn.
+        const labelled = `(recovered — this supersedes the earlier reported failure)\n\n${lateText}`;
         if (recovered) {
-          notifyParentSession(recovered, { result: lateText, error: null }, { alwaysNotify: employee?.alwaysNotify });
-          void deliverConnectorReply(recovered, lateText, context.connectors);
+          notifyParentSession(recovered, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify });
+          void deliverConnectorReply(recovered, labelled, context.connectors);
         }
         context.emit("session:completed", {
           sessionId: currentSession.id,
@@ -2418,6 +2421,14 @@ async function runWebSession(
             notifyDiscordChannel(
               `⚠️ Claude usage limit reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} switching to GPT.`,
             );
+
+            // Switching away from Claude — drop any warm Claude PTY AND its armed
+            // late-recovery listener so the abandoned claude turn can't double-answer
+            // after the GPT fallback delivers.
+            const claudeEngine = context.sessionManager.getEngines().get("claude");
+            if (claudeEngine && isInterruptibleEngine(claudeEngine)) {
+              claudeEngine.kill(currentSession.id, "Interrupted: engine switched");
+            }
           },
           onFallbackStream: emitDelta,
           onFallbackComplete: (fallbackResult) => {

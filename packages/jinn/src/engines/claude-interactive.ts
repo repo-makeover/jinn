@@ -1000,8 +1000,9 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     return this.active.has(sessionId) || this.lifecycle.getWarm(sessionId) !== undefined;
   }
 
-  /** Keep listening for a late Stop after an API-error settle. Public for run(),
-   *  kill(), and tests. No-op when the caller didn't provide onLateRecovery. */
+  /** Keep listening for a late Stop after an API-error settle. Public visibility
+   *  is for tests; used by run() and kill(). No-op when the caller didn't provide
+   *  onLateRecovery. */
   armLateRecovery(jinnSessionId: string, opts: EngineRunOpts): void {
     if (!opts.onLateRecovery) return;
     this.cancelLateRecovery(jinnSessionId);
@@ -1016,6 +1017,8 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       if (text.trim()) {
         logger.info(`InteractiveClaudeEngine: late Stop superseded failed turn for ${jinnSessionId}`);
         opts.onLateRecovery?.({ result: text, sessionId: sid });
+      } else {
+        logger.info(`InteractiveClaudeEngine: late Stop with no text for ${jinnSessionId} — recovery abandoned`);
       }
     });
   }

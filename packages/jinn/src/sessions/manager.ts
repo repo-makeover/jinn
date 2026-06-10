@@ -384,13 +384,17 @@ export class SessionManager {
           const live = getSession(session.id);
           if (!live || live.status === "running") return;
           insertMessage(session.id, "assistant", lateText);
-          updateSession(session.id, {
+          const recovered = updateSession(session.id, {
             ...(engineSid.trim() ? { engineSessionId: engineSid } : {}),
             status: "idle",
             lastActivity: new Date().toISOString(),
             lastError: null,
           });
-          void connector.replyMessage(target, lateText).catch(() => {});
+          // The parent/channel already saw this turn fail — label the late answer
+          // so it reads as a supersede, not a fresh unprompted turn.
+          const labelled = `(recovered — this supersedes the earlier reported failure)\n\n${lateText}`;
+          notifyParentSession(recovered ?? live, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify });
+          void connector.replyMessage(target, labelled).catch(() => {});
           logger.info(`Session ${session.id} recovered by late Stop after a failed turn`);
         },
       });

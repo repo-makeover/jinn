@@ -41,6 +41,19 @@ describe("InteractiveClaudeEngine — late-recovery supersede", () => {
     registry.deliver("jinn-1", { hook_event_name: "PostToolUse", tool_name: "Bash" });
     registry.deliver("jinn-1", { hook_event_name: "Stop", last_assistant_message: "   " });
     expect(recovered).toEqual([]);
+    // The blank Stop tore the listener down — a later real Stop must NOT fire.
+    registry.deliver("jinn-1", { hook_event_name: "Stop", last_assistant_message: "real text" });
+    expect(recovered).toEqual([]);
+  });
+
+  it("re-arming replaces the previous listener — only the second callback fires", () => {
+    const first: string[] = [];
+    const second: string[] = [];
+    engine.armLateRecovery("jinn-1", { prompt: "x", cwd: "/tmp", onLateRecovery: (i) => first.push(i.result) });
+    engine.armLateRecovery("jinn-1", { prompt: "x", cwd: "/tmp", onLateRecovery: (i) => second.push(i.result) });
+    registry.deliver("jinn-1", { hook_event_name: "Stop", last_assistant_message: "answer" });
+    expect(first).toEqual([]);
+    expect(second).toEqual(["answer"]);
   });
 
   it("cancelLateRecovery stops the listener (a new turn owns the session)", () => {
@@ -61,8 +74,10 @@ describe("InteractiveClaudeEngine — late-recovery supersede", () => {
 
   it("does nothing when opts.onLateRecovery is absent", () => {
     engine.armLateRecovery("jinn-1", { prompt: "x", cwd: "/tmp" });
-    // No listener registered → delivery is buffered by the registry, not crashed on.
     registry.deliver("jinn-1", { hook_event_name: "Stop", last_assistant_message: "ignored" });
-    expect(true).toBe(true);
+    // Nothing consumed the hook — it must still be buffered for the next listener.
+    const drained: string[] = [];
+    registry.register("jinn-1", (h) => drained.push(String(h.last_assistant_message ?? "")));
+    expect(drained).toEqual(["ignored"]);
   });
 });
