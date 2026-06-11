@@ -88,28 +88,24 @@
   min-width: 0;
   z-index: var(--z-stage);
 }
+/* The rail floats over the stage edge at ALL widths so it never steals column
+   width — the transcript column centers on the VIEWPORT, not a shrunken cell.
+   (Operator requirement: chat horizontally centered on screen.) The wrapper is
+   pointer-events:none so the transcript margin stays scrollable through it. */
 .talk-rail {
-  position: relative;
-  flex: 0 0 auto;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: var(--z-rail);
   display: flex;
   align-items: center;
   /* 10px = no-inset floor for the safe-area right edge. */
   padding-right: max(env(safe-area-inset-right), 10px);
+  pointer-events: none;
 }
-/* Narrow screens: the rail floats over the stage edge instead of stealing
-   column width (chips expand leftward over the transcript margin). */
-@media (max-width: 719px) {
-  .talk-rail {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    z-index: var(--z-rail);
-    pointer-events: none;
-  }
-  .talk-rail > * {
-    pointer-events: auto;
-  }
+.talk-rail > * {
+  pointer-events: auto;
 }
 
 /* ---- row 5: pinned (blocking) cards; collapses to 0 when absent ---- */
