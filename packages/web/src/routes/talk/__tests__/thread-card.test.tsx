@@ -72,6 +72,48 @@ describe("ThreadCard", () => {
     expect(screen.getByText(/AURA → Old Thread/)).toBeTruthy()
   })
 
+  it("a user rename override (sideState) wins over the server label on the head", () => {
+    render(
+      <ThreadCard
+        threadId="t1"
+        graph={[node({})]}
+        activity={new Map()}
+        fallbackLabel="Movekit Lead"
+        sideState={new Map([["t1", { labelOverride: "My audit" }]])}
+      />,
+    )
+    expect(screen.getByText(/AURA → My audit/)).toBeTruthy()
+    expect(screen.queryByText(/AURA → Movekit Lead/)).toBeNull()
+  })
+
+  it("a user rename override (sideState) wins on a sub-row label", () => {
+    const graph = [
+      node({}),
+      node({ id: "g1", parentId: "t1", depth: 2, label: "Funnel Analyst", status: "running" }),
+    ]
+    render(
+      <ThreadCard
+        threadId="t1"
+        graph={graph}
+        activity={new Map()}
+        fallbackLabel="Movekit Lead"
+        sideState={new Map([["g1", { labelOverride: "Renamed Analyst" }]])}
+      />,
+    )
+    expect(screen.getByText(/→ Renamed Analyst/)).toBeTruthy()
+    expect(screen.queryByText(/→ Funnel Analyst/)).toBeNull()
+  })
+
+  it("labels pass through deriveLabel (long labels truncate like the work tree)", () => {
+    const longLabel = "This is a very long session label that exceeds the limit"
+    render(
+      <ThreadCard threadId="t1" graph={[node({ label: longLabel })]} activity={new Map()} fallbackLabel="L" />,
+    )
+    // deriveLabel caps at 32 chars with an ellipsis — same vocabulary as WorkTree.
+    expect(screen.queryByText(new RegExp(longLabel))).toBeNull()
+    expect(screen.getByText(/AURA → This is a very long session lab…/)).toBeTruthy()
+  })
+
   it("sub-row click calls onOpenThread with the sub-thread id", () => {
     const onOpenThread = vi.fn()
     const graph = [

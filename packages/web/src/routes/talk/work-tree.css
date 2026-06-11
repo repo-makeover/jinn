@@ -63,9 +63,9 @@
   background: var(--fill-tertiary);
   transition: border-color 200ms ease, background 200ms ease, opacity 200ms ease, width 220ms ease;
 }
-/* Done/idle nodes dim; working + pinned + hover restore full presence. */
-.wt__item--root[data-status="idle"] .wt__row { opacity: 0.55; }
-.wt__item--root[data-status="idle"]:hover .wt__row,
+/* Done nodes dim (statusOf vocabulary: working/waiting/done/error); working + pinned + hover restore full presence. */
+.wt__item--root[data-status="done"] .wt__row { opacity: 0.55; }
+.wt__item--root[data-status="done"]:hover .wt__row,
 .wt__item--root[data-pinned="true"] .wt__row { opacity: 1; }
 .wt__item--root[data-pinned="true"] .wt__row {
   border-color: hsl(var(--wt-hue) 70% 55%);
@@ -178,8 +178,8 @@
   transition: background var(--motion-exit), opacity 200ms ease;
 }
 .wt__item--sub:hover { background: var(--fill-secondary); }
-.wt__item--sub[data-status="idle"] { opacity: 0.55; }
-.wt__item--sub[data-status="idle"]:hover { opacity: 1; }
+.wt__item--sub[data-status="done"] { opacity: 0.55; }
+.wt__item--sub[data-status="done"]:hover { opacity: 1; }
 /* Inner button: full-width grid matching the original sub-row layout. */
 .wt__sub-btn {
   display: grid;

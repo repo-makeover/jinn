@@ -21,6 +21,7 @@ import type { AvatarState, Card } from "./types"
 import type { StreamRow, SystemEvent } from "./use-conversation"
 import type { GraphNode } from "./graph-store"
 import type { ActivityMap } from "./thread-activity"
+import type { DockSideMap } from "./work-dock-layout"
 import { InlineCards } from "./cards/card-stack"
 import { Linkified } from "./linkify"
 import { ThreadCard } from "./thread-card"
@@ -41,6 +42,8 @@ export interface ConversationStreamProps {
   graph?: GraphNode[]
   /** Per-node live activity / report excerpts (advisory overlay). */
   activity?: ActivityMap
+  /** User side-state (rename overrides) so ThreadCards honor renames like the rail. */
+  sideState?: DockSideMap
   /**
    * Inline cards (already filtered to NON-pinned cards) to render anchored under
    * the turn that pushed them. Blocking approval/choice cards are excluded here
@@ -176,6 +179,7 @@ export function ConversationStream({
   onOpenThread,
   graph,
   activity,
+  sideState,
   inlineCards,
   cardAnchorFor,
   onCardAction,
@@ -250,6 +254,7 @@ export function ConversationStream({
                     activity={activity ?? new Map()}
                     fallbackLabel={row.label}
                     hue={row.hue}
+                    sideState={sideState}
                     onOpenThread={onOpenThread}
                   />
                 </div>

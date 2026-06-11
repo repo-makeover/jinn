@@ -124,6 +124,43 @@ describe("WorkTree — hierarchy rendering", () => {
   })
 })
 
+describe("WorkTree — unified status vocabulary (statusOf)", () => {
+  it("a completed node reads 'done' (not 'idle') — same vocabulary as the thread card", () => {
+    const { container } = renderTree({
+      graph: [
+        d1("t1", { label: "Lead", status: "idle" }),
+        sub("g1", "t1", 2, { label: "Analyst", status: "idle" }),
+      ],
+    })
+    expect(container.querySelector(".wt__item--root")?.getAttribute("data-status")).toBe("done")
+    // Sub-row pills carry the status text — "done", never "idle".
+    expect(screen.getByText("done")).toBeTruthy()
+    expect(screen.queryByText("idle")).toBeNull()
+  })
+
+  it("a waiting node reads 'waiting' and still shows its live line", () => {
+    renderTree({
+      graph: [
+        d1("t1", { label: "Lead", status: "running" }),
+        sub("g1", "t1", 2, { label: "Analyst", status: "waiting" }),
+      ],
+      activity: new Map([["g1", { activity: "awaiting reply…" }]]),
+    })
+    expect(screen.getByText("waiting")).toBeTruthy()
+    expect(screen.getByText("awaiting reply…")).toBeTruthy()
+  })
+
+  it("a failed sub-row reads 'error'", () => {
+    const { container } = renderTree({
+      graph: [
+        d1("t1", { label: "Lead", status: "running" }),
+        sub("g1", "t1", 2, { label: "Analyst", status: "failed" }),
+      ],
+    })
+    expect(container.querySelector('.wt__item--sub[data-status="error"]')).toBeTruthy()
+  })
+})
+
 describe("WorkTree — ported dock behaviors", () => {
   it("orders roots working-first", () => {
     const { container } = renderTree({

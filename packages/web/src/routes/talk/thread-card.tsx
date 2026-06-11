@@ -17,6 +17,7 @@ import type { GraphNode } from "./graph-store"
 import { isWorking, childrenOf } from "./graph-store"
 import type { ActivityMap } from "./thread-activity"
 import { channelHue } from "./channel-identity"
+import { deriveLabel, type DockSideMap } from "./work-dock-layout"
 import "./thread-card.css"
 
 export interface ThreadCardProps {
@@ -26,6 +27,12 @@ export interface ThreadCardProps {
   /** Label from the stream row — used when the node left the graph. */
   fallbackLabel: string
   hue?: number
+  /**
+   * User side-state (rename overrides) — a labelOverride wins over the server
+   * label, exactly like WorkTree's labelFor, so a renamed thread reads the same
+   * in the rail and on the card.
+   */
+  sideState?: DockSideMap
   onOpenThread?: (id: string) => void
 }
 
@@ -68,16 +75,20 @@ function SubRow({
   node,
   baseDepth,
   activity,
+  sideState,
   onOpenThread,
 }: {
   node: GraphNode
   baseDepth: number
   activity: ActivityMap
+  sideState?: DockSideMap
   onOpenThread?: (id: string) => void
 }) {
   const kind = statusOf(node)
+  const label = deriveLabel(sideState?.get(node.id)?.labelOverride ?? node.label)
   const live = kind === "working" || kind === "waiting" ? activity.get(node.id)?.activity : undefined
   const indent = Math.min(Math.max(node.depth - baseDepth, 1), 3)
+  // Hue stays keyed on the server identity (label/id) so a rename never shifts a thread's color.
   const hue = channelHue(node.label || node.id)
   // Wrapper div owns the listitem role so the inner button retains full button semantics for assistive tech.
   return (
@@ -90,7 +101,7 @@ function SubRow({
       <button
         type="button"
         className="tcard__sub-btn"
-        aria-label={`Open thread: ${node.label} — ${kind}`}
+        aria-label={`Open thread: ${label} — ${kind}`}
         onClick={onOpenThread ? () => onOpenThread(node.id) : undefined}
       >
         <span className="tcard__connector" aria-hidden="true">
@@ -98,7 +109,7 @@ function SubRow({
         </span>
         <span className="tcard__dot" aria-hidden="true" />
         <span className="tcard__sub-main">
-          <span className="tcard__sub-route">→ {node.label}</span>
+          <span className="tcard__sub-route">→ {label}</span>
           {live ? (
             <span className="tcard__live" key={live}>
               {live}
@@ -111,11 +122,16 @@ function SubRow({
   )
 }
 
-export function ThreadCard({ threadId, graph, activity, fallbackLabel, hue, onOpenThread }: ThreadCardProps) {
+export function ThreadCard({ threadId, graph, activity, fallbackLabel, hue, sideState, onOpenThread }: ThreadCardProps) {
   const node = graph.find((n) => n.id === threadId)
   const kind = statusOf(node)
-  const label = node?.label || fallbackLabel
-  const cardHue = hue ?? channelHue(label || threadId)
+  // Label resolution mirrors WorkTree's labelFor: user rename override → server
+  // label, both through deriveLabel. Gone-from-graph cards settle on fallbackLabel.
+  const label = node
+    ? deriveLabel(sideState?.get(threadId)?.labelOverride ?? (node.label || fallbackLabel))
+    : deriveLabel(fallbackLabel)
+  // Hue stays keyed on the raw server identity so a rename never shifts the color.
+  const cardHue = hue ?? channelHue(node?.label || fallbackLabel || threadId)
   const entry = activity.get(threadId)
   const live = kind === "working" || kind === "waiting" ? entry?.activity : undefined
   const report = entry?.reportExcerpt
@@ -153,6 +169,7 @@ export function ThreadCard({ threadId, graph, activity, fallbackLabel, hue, onOp
               node={sub}
               baseDepth={node?.depth ?? 1}
               activity={activity}
+              sideState={sideState}
               onOpenThread={onOpenThread}
             />
           ))}

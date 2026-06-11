@@ -23,7 +23,7 @@ import type { CSSProperties } from "react"
 import { MoreHorizontal, Pencil, X, Target, ArrowLeftRight } from "lucide-react"
 import type { GraphNode } from "./graph-store"
 import { isWorking } from "./graph-store"
-import { subtreeRows } from "./thread-card"
+import { subtreeRows, statusOf } from "./thread-card"
 import type { ActivityMap } from "./thread-activity"
 import { orderDockNodes, nodeHue, deriveLabel, type DockSideMap } from "./work-dock-layout"
 import "./work-tree.css"
@@ -55,14 +55,6 @@ function labelFor(node: GraphNode, side: DockSideMap): string {
   return override ? deriveLabel(override) : deriveLabel(node.label || node.id)
 }
 
-type StatusKind = "working" | "error" | "idle"
-
-function statusKind(node: GraphNode): StatusKind {
-  if (node.status === "error" || node.status === "failed") return "error"
-  if (isWorking(node)) return "working"
-  return "idle"
-}
-
 function SubRow({
   node,
   baseDepth,
@@ -78,9 +70,9 @@ function SubRow({
   activity: ActivityMap
   onOpenThread: (id: string) => void
 }) {
-  const kind = statusKind(node)
+  const kind = statusOf(node)
   const label = labelFor(node, sideState)
-  const live = kind === "working" ? activity.get(node.id)?.activity : undefined
+  const live = kind === "working" || kind === "waiting" ? activity.get(node.id)?.activity : undefined
   const indent = Math.min(Math.max(node.depth - baseDepth, 1), 3)
   // Wrapper div owns the listitem role so the inner button retains full button semantics for assistive tech.
   return (
@@ -193,12 +185,12 @@ export function WorkTree({
       >
         {trees.map(({ root, subs }) => {
           const hue = sideState.get(root.id)?.hue ?? nodeHue(root)
-          const kind = statusKind(root)
+          const kind = statusOf(root)
           const label = labelFor(root, sideState)
           const attached = root.attached === true
           const pinned = root.id === targetThreadId
           const editing = editingId === root.id
-          const live = kind === "working" ? activity.get(root.id)?.activity : undefined
+          const live = kind === "working" || kind === "waiting" ? activity.get(root.id)?.activity : undefined
           const openLabel = `Open thread: ${label} — ${kind}`
           const index = rowIndex++
           return (
