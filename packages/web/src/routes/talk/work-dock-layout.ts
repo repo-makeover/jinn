@@ -22,9 +22,9 @@ export const MAX_DOCK_NODES = 8
 /**
  * Per-node UI side-state, layered over the server-authoritative graph and
  * persisted to localStorage (talk-storage keys). `dismissed` tombstones a chip;
- * `labelOverride` is a user rename; `pinned`/`hue` are reserved for forward
- * compatibility (the live route target is the separate `targetThreadId`, and the
- * hue is derived from channel-identity — neither is read here).
+ * `labelOverride` is a user rename; `pinned` is reserved for forward compatibility
+ * (the live route target is the separate `targetThreadId`). `hue` is a persisted
+ * user-chosen tint read by WorkTree to override the channel-identity default.
  */
 export interface DockSideState {
   hue?: number

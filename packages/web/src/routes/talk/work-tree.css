@@ -39,7 +39,7 @@
 .wt__item {
   position: relative;
   animation: wt-row-in var(--motion-enter) both;
-  animation-delay: calc(var(--wt-i, 0) * 40ms);
+  animation-delay: calc(min(var(--wt-i), 12) * 40ms); /* clamped: rows past index 12 share the max delay */
 }
 @keyframes wt-row-in {
   from { opacity: 0; transform: translateX(6px); }
@@ -283,7 +283,7 @@
   font-size: 11px;
   color: var(--text-tertiary);
   animation: wt-row-in var(--motion-enter) both;
-  animation-delay: calc(var(--wt-i, 0) * 40ms);
+  animation-delay: calc(min(var(--wt-i), 12) * 40ms); /* matches .wt__item clamp */
 }
 
 /* ---- collapsed: nothing running + idle → bare dots, no labels ----
@@ -297,7 +297,9 @@
 .wt[data-collapsed="true"] .wt__live,
 .wt[data-collapsed="true"] .wt__connector,
 .wt[data-collapsed="true"] .wt__sub-main,
-.wt[data-collapsed="true"] .wt__pill { display: none; }
+.wt[data-collapsed="true"] .wt__pill,
+.wt[data-collapsed="true"] .wt__overflow,
+.wt[data-collapsed="true"] .wt__menu { display: none; }
 .wt[data-collapsed="true"] .wt__item--sub {
   width: auto;
 }
@@ -309,20 +311,22 @@
 
 .wt[data-collapsed="true"]:hover .wt__row,
 .wt[data-collapsed="true"]:focus-within .wt__row { width: min(240px, 60vw); }
-.wt[data-collapsed="true"]:hover .wt__label,
-.wt[data-collapsed="true"]:hover .wt__pin,
+/* Restore each element's authored display value individually — display:revert resolves to the UA
+   stylesheet, not the author stylesheet, and would wrongly give display:inline for flex/block rules. */
 .wt[data-collapsed="true"]:hover .wt__live,
-.wt[data-collapsed="true"]:hover .wt__connector,
+.wt[data-collapsed="true"]:focus-within .wt__live { display: block; }          /* .wt__live { display:block } */
 .wt[data-collapsed="true"]:hover .wt__sub-main,
+.wt[data-collapsed="true"]:focus-within .wt__sub-main { display: flex; }       /* .wt__sub-main { display:flex } */
+.wt[data-collapsed="true"]:hover .wt__label,
+.wt[data-collapsed="true"]:focus-within .wt__label { display: inline-block; }  /* <button> UA default */
+.wt[data-collapsed="true"]:hover .wt__pin,
+.wt[data-collapsed="true"]:hover .wt__connector,
 .wt[data-collapsed="true"]:hover .wt__pill,
-.wt[data-collapsed="true"]:focus-within .wt__label,
 .wt[data-collapsed="true"]:focus-within .wt__pin,
-.wt[data-collapsed="true"]:focus-within .wt__live,
 .wt[data-collapsed="true"]:focus-within .wt__connector,
-.wt[data-collapsed="true"]:focus-within .wt__sub-main,
-.wt[data-collapsed="true"]:focus-within .wt__pill { display: revert; }
+.wt[data-collapsed="true"]:focus-within .wt__pill { display: inline; }         /* <span>/<svg> UA default */
 .wt[data-collapsed="true"]:hover .wt__more,
-.wt[data-collapsed="true"]:focus-within .wt__more { display: grid; }
+.wt[data-collapsed="true"]:focus-within .wt__more { display: grid; }           /* .wt__more { display:grid } */
 .wt[data-collapsed="true"]:hover .wt__item--sub,
 .wt[data-collapsed="true"]:focus-within .wt__item--sub {
   width: min(240px, 60vw);

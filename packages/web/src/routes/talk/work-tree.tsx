@@ -151,6 +151,13 @@ export function WorkTree({
     return () => document.removeEventListener("mousedown", onDoc)
   }, [menuId])
 
+  // Prune stale menuId / editingId when a node is evicted by cap or user dismiss.
+  useEffect(() => {
+    const ids = new Set(shown.map((n) => n.id))
+    if (menuId !== null && !ids.has(menuId)) setMenuId(null)
+    if (editingId !== null && !ids.has(editingId)) setEditingId(null)
+  }, [shown, menuId, editingId])
+
   if (shown.length === 0) return null
 
   // Each shown root + its full subtree (any depth, DFS order from thread-card).
@@ -164,7 +171,8 @@ export function WorkTree({
   const startEdit = (node: GraphNode) => {
     setMenuId(null)
     setEditingId(node.id)
-    setDraft(labelFor(node, sideState))
+    // Seed from the raw override/label (bypass deriveLabel truncation so editing a long label doesn't bake in the "…").
+    setDraft(sideState.get(node.id)?.labelOverride ?? node.label ?? node.id)
   }
   const commitEdit = () => {
     if (editingId && draft.trim()) onRename(editingId, draft.trim())

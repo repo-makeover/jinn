@@ -217,6 +217,31 @@ describe("WorkTree — ported dock behaviors", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /dismiss/i }))
     expect(props.onDismiss).toHaveBeenCalledWith("t1")
   })
+
+  it("clears menuId when the node is evicted from the shown list (stale state prune)", () => {
+    const twoRoots = [
+      d1("t1", { label: "Movekit Lead", status: "running", lastActivity: at(9) }),
+      d1("t2", { label: "Other Thread", status: "idle", lastActivity: at(1) }),
+    ]
+    const { rerender, props } = renderTree({ graph: twoRoots })
+    // Open the context menu for t1
+    fireEvent.click(screen.getByRole("button", { name: /actions for movekit lead/i }))
+    expect(screen.getByRole("menu")).toBeTruthy()
+    // Dismiss t1 — it leaves the shown list while t2 remains
+    rerender(<WorkTree {...props} graph={twoRoots} sideState={new Map([["t1", { dismissed: true }]])} />)
+    // Stale menuId for t1 should be pruned
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+
+  it("rename seeds untruncated draft when the label exceeds 32 chars", () => {
+    const longLabel = "This is a very long session label that exceeds the limit"
+    renderTree({ graph: [d1("t1", { label: longLabel })] })
+    fireEvent.click(screen.getByRole("button", { name: /actions for/i }))
+    fireEvent.click(screen.getByRole("menuitem", { name: /rename/i }))
+    const input = screen.getByLabelText("Rename thread") as HTMLInputElement
+    // Draft must be the raw full label, not the truncated "This is a very long session la…"
+    expect(input.value).toBe(longLabel)
+  })
 })
 
 describe("WorkTree — collapse", () => {
