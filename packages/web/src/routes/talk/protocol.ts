@@ -69,6 +69,8 @@ export interface SessionCompletedEvent { sessionId: string; result?: string | nu
 export interface TalkGraphNodeWire {
   id: string; parentId: string | null; depth: number; label: string
   employee: string | null; status: string; lastActivity: string
+  /** First ~140 chars of the session's prompt — "what was asked" of this node. */
+  briefExcerpt?: string
   /** Present (true) when the node is an attachment (soft link), not an owned descendant. */
   attached?: true
   /** Attachment mode — only on attached nodes. */

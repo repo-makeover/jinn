@@ -23,6 +23,8 @@ export interface TalkGraphNode {
   employee: string | null;
   status: string;
   lastActivity: string;
+  /** First ~140 chars of the session's prompt — "what was asked" of this node. */
+  briefExcerpt?: string;
   /** True when this node is an ATTACHMENT (soft link), not an owned descendant. */
   attached?: true;
   /** Attachment mode — only present on attached nodes. */
@@ -53,6 +55,7 @@ export function toGraphNode(s: Session, depth: number): TalkGraphNode {
     employee: s.employee ?? null,
     status: s.status,
     lastActivity: s.lastActivity,
+    ...(s.promptExcerpt ? { briefExcerpt: s.promptExcerpt } : {}),
   };
 }
 

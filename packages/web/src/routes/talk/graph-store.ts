@@ -19,6 +19,8 @@ export interface GraphNode {
   employee: string | null
   status: string
   lastActivity: string
+  /** First ~140 chars of the session's prompt — "what was asked" of this node. */
+  briefExcerpt?: string
   /** Present (true) when this node is an attachment (soft link), not an owned descendant. */
   attached?: true
   /** Attachment mode — only on attached nodes. */

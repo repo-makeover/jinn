@@ -4,6 +4,7 @@ import {
   buildGraphSnapshot,
   maybeEmitTalkGraph,
   emitAttachmentChange,
+  toGraphNode,
 } from "../graph.js";
 import { attach, __resetAttachmentsForTest } from "../attachments.js";
 import type { Session } from "../../shared/types.js";
@@ -80,6 +81,21 @@ describe("buildGraphSnapshot", () => {
     expect(coo.depth).toBe(1);
     expect(coo.label).toBe("Pravko");
     expect(coo.status).toBe("running");
+  });
+});
+
+describe("briefExcerpt", () => {
+  const base = s("c1", { parentSessionId: "root", title: "Lead", status: "running" });
+
+  it("carries the session's persisted promptExcerpt", () => {
+    const sess = { ...base, promptExcerpt: "Audit the funnel and split the fixes" } as Session;
+    expect(toGraphNode(sess, 1).briefExcerpt).toBe("Audit the funnel and split the fixes");
+  });
+
+  it("omits the field when the session has no promptExcerpt", () => {
+    expect(toGraphNode(base, 1).briefExcerpt).toBeUndefined();
+    const sess = { ...base, promptExcerpt: null } as Session;
+    expect(toGraphNode(sess, 1).briefExcerpt).toBeUndefined();
   });
 });
 

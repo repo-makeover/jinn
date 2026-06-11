@@ -166,6 +166,8 @@ export interface Session {
   employee: string | null;
   model: string | null;
   title: string | null;
+  /** ≤140-char whitespace-flattened excerpt of the creation prompt — "what was asked". */
+  promptExcerpt?: string | null;
   parentSessionId: string | null;
   /** Forwarded SSO identity captured from an auth proxy (opt-in via
    *  `gateway.userHeader`). Null/undefined for single-user installs. */

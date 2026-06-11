@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   employee TEXT,
   model TEXT,
   title TEXT,
+  prompt_excerpt TEXT,
   parent_session_id TEXT,
   user_id TEXT,
   status TEXT DEFAULT 'idle',
@@ -132,6 +133,7 @@ function rowToSession(row: Record<string, unknown>): Session {
     employee: (row.employee as string) ?? null,
     model: (row.model as string) ?? null,
     title: (row.title as string) ?? null,
+    promptExcerpt: (row.prompt_excerpt as string) ?? null,
     parentSessionId: (row.parent_session_id as string) ?? null,
     userId: (row.user_id as string) ?? null,
     effortLevel: (row.effort_level as string) ?? null,
@@ -451,6 +453,8 @@ export function migrateSessionsSchema(database: Database.Database): void {
     ['effort_level', 'TEXT'],
     ['last_context_tokens', 'INTEGER'],
     ['user_id', 'TEXT'],
+    // No backfill: pre-existing sessions stay NULL (no excerpt); only new sessions populate it.
+    ['prompt_excerpt', 'TEXT'],
   ];
 
   for (const [name, type, defaultVal] of missingColumns) {
@@ -504,11 +508,20 @@ function generateTitle(prompt?: string): string {
   return `#${num} - ${summary}${cleaned.length > 30 ? '...' : ''}`;
 }
 
+/** Whitespace-flattened, ≤140-char excerpt of a prompt (undefined when empty). */
+export function promptExcerptOf(prompt: string | undefined): string | undefined {
+  if (!prompt) return undefined;
+  const flat = prompt.replace(/\s+/g, ' ').trim();
+  if (!flat) return undefined;
+  return flat.length > 140 ? flat.slice(0, 139).trimEnd() + '…' : flat;
+}
+
 export function createSession(opts: CreateSessionOpts & { prompt?: string; portalName?: string }): Session {
   const db = initDb();
   const now = new Date().toISOString();
   const id = uuidv4();
   const title = opts.title ?? generateTitle(opts.prompt);
+  const promptExcerpt = promptExcerptOf(opts.prompt) ?? null;
   const sessionKey = opts.sessionKey ?? opts.sourceRef;
   const connector = opts.connector ?? opts.source;
   const replyContext = opts.replyContext ? JSON.stringify(opts.replyContext) : null;
@@ -517,9 +530,9 @@ export function createSession(opts: CreateSessionOpts & { prompt?: string; porta
   const stmt = db.prepare(`
     INSERT INTO sessions (
       id, engine, source, source_ref, connector, session_key, reply_context, message_id, transport_meta,
-      employee, model, title, parent_session_id, user_id, effort_level, status, created_at, last_activity
+      employee, model, title, prompt_excerpt, parent_session_id, user_id, effort_level, status, created_at, last_activity
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
   `);
   stmt.run(
     id,
@@ -534,6 +547,7 @@ export function createSession(opts: CreateSessionOpts & { prompt?: string; porta
     opts.employee ?? null,
     opts.model ?? null,
     title,
+    promptExcerpt,
     opts.parentSessionId ?? null,
     opts.userId ?? null,
     opts.effortLevel ?? null,
@@ -555,6 +569,7 @@ export function createSession(opts: CreateSessionOpts & { prompt?: string; porta
     employee: opts.employee ?? null,
     model: opts.model ?? null,
     title,
+    promptExcerpt,
     parentSessionId: opts.parentSessionId ?? null,
     userId: opts.userId ?? null,
     effortLevel: opts.effortLevel ?? null,
