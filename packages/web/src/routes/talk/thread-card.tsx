@@ -1,0 +1,155 @@
+/**
+ * Jinn Talk — ThreadCard (delegation as communication).
+ *
+ * A live delegation row in the conversation stream, replacing the one-line
+ * "⟶ delegated" chip. Shows the route (AURA → lead), what was asked (brief
+ * excerpt), what the worker is doing right now (live activity line), nested
+ * sub-threads as indented rows (any depth — grandchildren included), and the
+ * report excerpt once the thread completes. Clicking the head or any sub-row
+ * opens that session in the thread drawer.
+ *
+ * Structural data comes from the live graph (single source); the live/report
+ * lines come from the advisory thread-activity overlay. A node missing from
+ * the graph (dismissed/aged out) renders a settled head from fallbackLabel.
+ */
+import type { CSSProperties } from "react"
+import type { GraphNode } from "./graph-store"
+import { isWorking, childrenOf } from "./graph-store"
+import type { ActivityMap } from "./thread-activity"
+import { channelHue } from "./channel-identity"
+import "./thread-card.css"
+
+export interface ThreadCardProps {
+  threadId: string
+  graph: GraphNode[]
+  activity: ActivityMap
+  /** Label from the stream row — used when the node left the graph. */
+  fallbackLabel: string
+  hue?: number
+  onOpenThread?: (id: string) => void
+}
+
+type StatusKind = "working" | "waiting" | "done" | "error"
+
+function statusOf(node: GraphNode | undefined): StatusKind {
+  if (!node) return "done"
+  if (node.status === "error" || node.status === "failed") return "error"
+  if (node.status === "waiting") return "waiting"
+  if (isWorking(node)) return "working"
+  return "done"
+}
+
+/** DFS the subtree under `rootId` (excluding the root), depth-first order. */
+export function subtreeRows(rootId: string, graph: GraphNode[]): GraphNode[] {
+  const out: GraphNode[] = []
+  const walk = (id: string) => {
+    for (const child of childrenOf(graph, id)) {
+      out.push(child)
+      walk(child.id)
+    }
+  }
+  walk(rootId)
+  return out
+}
+
+function StatusPill({ kind }: { kind: StatusKind }) {
+  return (
+    <span className="tcard__pill" data-kind={kind} key={kind}>
+      {kind === "working" ? "working" : kind === "waiting" ? "waiting" : kind === "error" ? "error" : "done"}
+    </span>
+  )
+}
+
+function SubRow({
+  node,
+  baseDepth,
+  activity,
+  onOpenThread,
+}: {
+  node: GraphNode
+  baseDepth: number
+  activity: ActivityMap
+  onOpenThread?: (id: string) => void
+}) {
+  const kind = statusOf(node)
+  const live = kind === "working" || kind === "waiting" ? activity.get(node.id)?.activity : undefined
+  const indent = Math.min(Math.max(node.depth - baseDepth, 1), 3)
+  const hue = channelHue(node.label || node.id)
+  return (
+    <button
+      type="button"
+      className="tcard__sub"
+      style={{ ["--tc-indent" as string]: String(indent), ["--tc-hue" as string]: String(hue) } as CSSProperties}
+      data-status={kind}
+      aria-label={`Open thread: ${node.label}`}
+      onClick={onOpenThread ? () => onOpenThread(node.id) : undefined}
+    >
+      <span className="tcard__connector" aria-hidden="true">
+        ↳
+      </span>
+      <span className="tcard__dot" aria-hidden="true" />
+      <span className="tcard__sub-main">
+        <span className="tcard__sub-route">→ {node.label}</span>
+        {live ? (
+          <span className="tcard__live" key={live}>
+            {live}
+          </span>
+        ) : null}
+      </span>
+      <StatusPill kind={kind} />
+    </button>
+  )
+}
+
+export function ThreadCard({ threadId, graph, activity, fallbackLabel, hue, onOpenThread }: ThreadCardProps) {
+  const node = graph.find((n) => n.id === threadId)
+  const kind = statusOf(node)
+  const label = node?.label || fallbackLabel
+  const cardHue = hue ?? channelHue(label || threadId)
+  const entry = activity.get(threadId)
+  const live = kind === "working" || kind === "waiting" ? entry?.activity : undefined
+  const report = entry?.reportExcerpt
+  const subs = node ? subtreeRows(threadId, graph) : []
+
+  return (
+    <div
+      className="tcard"
+      data-status={kind}
+      style={{ ["--tc-hue" as string]: String(cardHue) } as CSSProperties}
+    >
+      <button
+        type="button"
+        className="tcard__head"
+        aria-label={`Open thread: ${label}`}
+        onClick={onOpenThread ? () => onOpenThread(threadId) : undefined}
+      >
+        <span className={`tcard__dot${kind === "working" ? " tcard__dot--working" : ""}`} aria-hidden="true" />
+        <span className="tcard__route">AURA → {label}</span>
+        <StatusPill kind={kind} />
+      </button>
+
+      {node?.briefExcerpt ? <p className="tcard__brief">“{node.briefExcerpt}”</p> : null}
+      {live ? (
+        <p className="tcard__live tcard__live--head" key={live}>
+          {live}
+        </p>
+      ) : null}
+
+      {subs.length > 0 ? (
+        <div className="tcard__subs" role="list" aria-label={`${subs.length} sub-threads`}>
+          {subs.map((sub) => (
+            <SubRow
+              key={sub.id}
+              node={sub}
+              baseDepth={node?.depth ?? 1}
+              activity={activity}
+              onOpenThread={onOpenThread}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {report ? <p className="tcard__report">⟵ “{report}”</p> : null}
+    </div>
+  )
+}

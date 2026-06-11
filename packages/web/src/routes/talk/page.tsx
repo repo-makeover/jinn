@@ -230,6 +230,8 @@ export default function TalkPage() {
             rows={talk.rows}
             state={talk.state}
             onOpenThread={setChatSessionId}
+            graph={talk.graph}
+            activity={talk.activity}
             inlineCards={inlineCards}
             cardAnchorFor={talk.cardAnchorFor}
             onCardAction={talk.cardAction}

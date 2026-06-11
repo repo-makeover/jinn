@@ -19,8 +19,11 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties, JSX } from "react"
 import type { AvatarState, Card } from "./types"
 import type { StreamRow, SystemEvent } from "./use-conversation"
+import type { GraphNode } from "./graph-store"
+import type { ActivityMap } from "./thread-activity"
 import { InlineCards } from "./cards/card-stack"
 import { Linkified } from "./linkify"
+import { ThreadCard } from "./thread-card"
 import { EASING } from "./motion"
 import "./conversation-stream.css"
 
@@ -34,6 +37,10 @@ export interface ConversationStreamProps {
   state: AvatarState
   /** Open a child session's chat (clicking a chip that carries a threadId). */
   onOpenThread?: (sessionId: string) => void
+  /** Live delegation graph — drives the ThreadCards rendered for `delegated` rows. */
+  graph?: GraphNode[]
+  /** Per-node live activity / report excerpts (advisory overlay). */
+  activity?: ActivityMap
   /**
    * Inline cards (already filtered to NON-pinned cards) to render anchored under
    * the turn that pushed them. Blocking approval/choice cards are excluded here
@@ -167,6 +174,8 @@ export function ConversationStream({
   rows,
   state,
   onOpenThread,
+  graph,
+  activity,
   inlineCards,
   cardAnchorFor,
   onCardAction,
@@ -233,6 +242,17 @@ export function ConversationStream({
                 <UserRow row={row} />
               ) : row.kind === "aura" ? (
                 <AuraRow row={row} />
+              ) : row.event === "delegated" && row.threadId ? (
+                <div className="cstream__row cstream__row--thread">
+                  <ThreadCard
+                    threadId={row.threadId}
+                    graph={graph ?? []}
+                    activity={activity ?? new Map()}
+                    fallbackLabel={row.label}
+                    hue={row.hue}
+                    onOpenThread={onOpenThread}
+                  />
+                </div>
               ) : (
                 <SystemChip row={row} onOpenThread={onOpenThread} />
               )}

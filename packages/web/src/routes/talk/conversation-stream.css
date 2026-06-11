@@ -187,6 +187,11 @@
   align-self: center;
   align-items: center;
 }
+
+/* ---- delegation ThreadCard row ------------------------------------------- */
+.cstream__row--thread {
+  align-items: stretch;
+}
 .cstream__chip {
   display: inline-flex;
   align-items: center;
