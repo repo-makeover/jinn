@@ -31,7 +31,11 @@ export function excerpt(text: string, max: number): string {
     .replace(/\s+/g, " ")
     .trim()
   if (!flat) return ""
-  return flat.length > max ? flat.slice(0, max - 1).trimEnd() + "…" : flat
+  // Surrogate-pair-safe truncation: after slicing, strip a trailing lone high
+  // surrogate that would result from splitting an astral codepoint in two.
+  return flat.length > max
+    ? flat.slice(0, max - 1).trimEnd().replace(/[\uD800-\uDBFF]$/, "") + "…"
+    : flat
 }
 
 export interface ActivityDeltaLike {
@@ -45,13 +49,17 @@ export function activityFor(delta: ActivityDeltaLike): string {
   const name = typeof delta.toolName === "string" ? delta.toolName : ""
   const input = typeof delta.input === "string" ? delta.input : ""
   const hay = `${name} ${typeof delta.content === "string" ? delta.content : ""} ${input}`.toLowerCase()
-  // Spawning a sub-session — the moment nested delegation begins.
-  if (hay.includes("/api/sessions") && hay.includes("parentsessionid")) return "delegating…"
-  if (/^(read|glob|grep)$/i.test(name)) return "reading…"
-  if (/^(write|edit|notebookedit)$/i.test(name)) return "editing…"
+  // Spawning a sub-session — scoped to shell-ish tools (or no tool name) so an
+  // Edit whose old_string happens to contain gateway tokens isn't misclassified.
+  const isShellish = name === "" || /^(bash|shell|command_execution)$/i.test(name)
+  if (isShellish && hay.includes("/api/sessions") && hay.includes("parentsessionid")) return "delegating…"
+  // Codex-interactive emits file_read / file_edit / command_execution / shell in
+  // addition to the standard Claude Read/Write/Edit/Bash/Glob/Grep tool names.
+  if (/^(read|glob|grep|file_read)$/i.test(name)) return "reading…"
+  if (/^(write|edit|notebookedit|file_edit)$/i.test(name)) return "editing…"
   if (/^(websearch|webfetch)$/i.test(name)) return "searching the web…"
   if (/^(task|agent)$/i.test(name)) return "delegating…"
-  if (/^bash$/i.test(name)) return "running commands…"
+  if (/^(bash|shell|command_execution)$/i.test(name)) return "running commands…"
   return "working…"
 }
 

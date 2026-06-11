@@ -13,6 +13,14 @@ describe("excerpt", () => {
   it("returns empty string for empty/noise-only input", () => {
     expect(excerpt("``` ```", 140)).toBe("")
   })
+  it("produces well-formed output when truncation falls on a surrogate pair", () => {
+    // Each 👍 is U+1F44D — a two-code-unit astral char. Truncating naively in the
+    // middle of one leaves a lone high surrogate before the "…".
+    const out = excerpt("okk " + "👍".repeat(100), 40)
+    expect(out.endsWith("…")).toBe(true)
+    // The slice before "…" must not end with a lone high surrogate (D800–DBFF).
+    expect(/[\uD800-\uDBFF]$/.test(out.slice(0, -1))).toBe(false)
+  })
 })
 
 describe("activityFor", () => {
@@ -27,6 +35,19 @@ describe("activityFor", () => {
     expect(activityFor({ toolName: "WebSearch" })).toBe("searching the web…")
     expect(activityFor({ toolName: "Bash", input: "ls -la" })).toBe("running commands…")
     expect(activityFor({ toolName: "SomethingNew" })).toBe("working…")
+  })
+  it("maps codex-interactive tool aliases", () => {
+    expect(activityFor({ toolName: "file_edit" })).toBe("editing…")
+    expect(activityFor({ toolName: "file_read" })).toBe("reading…")
+    expect(activityFor({ toolName: "shell" })).toBe("running commands…")
+    expect(activityFor({ toolName: "command_execution" })).toBe("running commands…")
+  })
+  it("does not treat an Edit with gateway tokens in its input as delegation", () => {
+    // Fix: spawn heuristic is scoped to shell-ish tools so gateway source code
+    // in old_string/new_string doesn't misclassify an Edit as "delegating…".
+    expect(
+      activityFor({ toolName: "Edit", input: 'old_string: "/api/sessions parentSessionId"' }),
+    ).toBe("editing…")
   })
 })
 
@@ -46,5 +67,11 @@ describe("threadActivityReducer", () => {
     let m = threadActivityReducer(new Map(), { type: "activity", id: "a", text: "x" })
     m = threadActivityReducer(m, { type: "report", id: "a", text: "" })
     expect(m.get("a")).toEqual({})
+  })
+  it("surfaces error text in reportExcerpt (mirrors use-talk ev.error fallback)", () => {
+    // use-talk dispatches: text: ev.result ?? ev.error ?? ""
+    // This test verifies the reducer correctly stores an error message as the excerpt.
+    const m = threadActivityReducer(new Map(), { type: "report", id: "e", text: "Boom: stack overflow" })
+    expect(m.get("e")?.reportExcerpt).toBe("Boom: stack overflow")
   })
 })

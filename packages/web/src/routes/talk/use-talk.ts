@@ -676,7 +676,7 @@ export function useTalk(): UseTalkReturn {
             // Surface what the worker is doing — the delegation-card live line.
             if (ev.type === "tool_use") {
               dispatchActivity({ type: "activity", id: s, text: activityFor({ toolName: ev.toolName, content: ev.content, input: ev.input }) })
-            } else if (ev.type === "text") {
+            } else if (ev.type === "text" || ev.type === "text_snapshot") {
               dispatchActivity({ type: "activity", id: s, text: "writing…" })
             }
           }
@@ -726,7 +726,8 @@ export function useTalk(): UseTalkReturn {
           } else if (isChild && s) {
             dispatchGraph({ type: "setStatus", id: s, status: "idle" })
             // The live line ends; keep a sanitized excerpt of the final report.
-            dispatchActivity({ type: "report", id: s, text: ev.result ?? "" })
+            // Fall back to ev.error so a failed child shows something instead of blank.
+            dispatchActivity({ type: "report", id: s, text: ev.result ?? ev.error ?? "" })
           }
           break
         }
