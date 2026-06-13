@@ -6,11 +6,13 @@ import { buildSessionSettings, writeSessionSettings, sessionSettingsPath, seedTr
 
 describe("claude-settings", () => {
   it("buildSessionSettings registers Stop/SessionStart/StopFailure hooks pointing at the relay with the session id", () => {
-    const s = buildSessionSettings({ sessionId: "jinn-abc", relayScript: "/h/relay.mjs", appendSystemPrompt: "SYS" });
+    const s = buildSessionSettings({ sessionId: "jinn-abc", relayScript: "/h/relay.mjs", statusLineDir: "/tmp/limits", appendSystemPrompt: "SYS" });
     const stop = s.hooks.Stop[0].hooks[0];
     expect(stop.type).toBe("command");
     expect(stop.command).toMatch(/relay\.mjs.*jinn-abc/);
     expect(s.hooks.SessionStart && s.hooks.PreToolUse && s.hooks.PostToolUse && s.hooks.StopFailure).toBeTruthy();
+    expect(s.statusLine?.command).toMatch(/jinn-abc/);
+    expect(s.statusLine?.command).toMatch(/\/tmp\/limits/);
     expect(s.appendSystemPrompt).toBe("SYS");
   });
 

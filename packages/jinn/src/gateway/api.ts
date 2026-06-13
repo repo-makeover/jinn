@@ -56,6 +56,7 @@ import { JINN_HOME } from "../shared/paths.js";
 import { resolveEffort } from "../shared/effort.js";
 import { detectRateLimit } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt } from "../shared/usageAwareness.js";
+import { collectEngineLimits } from "../shared/engine-limits.js";
 import { handleRateLimit } from "../sessions/rate-limit-handler.js";
 import { pickEncoding, compressBuffer, MIN_COMPRESS_BYTES } from "./compress.js";
 import { loadJobs, saveJobs } from "../cron/jobs.js";
@@ -1354,6 +1355,22 @@ export async function handleApiRequest(
       const config = context.getConfig();
       await refreshPiModels(config);
       return json(res, { default: config.engines.default, engines: getModelRegistry(config) });
+    }
+
+    // GET /api/engine-limits — live/snapshot quota windows and static capability
+    // metadata for each engine. Some CLIs expose full quota buckets (Codex), some
+    // only expose session snapshots (Claude), and some expose no aggregate quota.
+    if (method === "GET" && pathname === "/api/engine-limits") {
+      const engine = url.searchParams.get("engine") || undefined;
+      return json(res, await collectEngineLimits(context.getConfig(), { engine }));
+    }
+
+    // POST /api/engine-limits/refresh — currently identical to GET for live
+    // sources. Kept as a command-shaped endpoint so the UI/CLI can request a
+    // deliberate refresh without changing the public contract later.
+    if (method === "POST" && pathname === "/api/engine-limits/refresh") {
+      const engine = url.searchParams.get("engine") || undefined;
+      return json(res, await collectEngineLimits(context.getConfig(), { engine }));
     }
 
     // GET /api/config

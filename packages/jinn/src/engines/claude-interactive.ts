@@ -4,7 +4,7 @@ import os from "node:os";
 import * as pty from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, EngineRateLimitInfo, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
-import { JINN_HOME, CLAUDE_SETTINGS_DIR, HOOK_RELAY_SCRIPT } from "../shared/paths.js";
+import { JINN_HOME, CLAUDE_SETTINGS_DIR, HOOK_RELAY_SCRIPT, CLAUDE_LIMITS_DIR } from "../shared/paths.js";
 import { writeSessionSettings } from "../shared/claude-settings.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
@@ -595,6 +595,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     const settingsPath = writeSessionSettings(CLAUDE_SETTINGS_DIR, jinnSessionId, {
       sessionId: jinnSessionId,
       relayScript: HOOK_RELAY_SCRIPT,
+      statusLineDir: CLAUDE_LIMITS_DIR,
     });
     const resolver = new TurnResolver({
       fallbackSessionId: opts.resumeSessionId,
@@ -905,6 +906,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     const settingsPath = writeSessionSettings(CLAUDE_SETTINGS_DIR, jinnSessionId, {
       sessionId: jinnSessionId,
       relayScript: HOOK_RELAY_SCRIPT,
+      statusLineDir: CLAUDE_LIMITS_DIR,
     });
     const args: string[] = [
       "--chrome",

@@ -434,6 +434,70 @@ export interface EngineRegistryEntry {
 /** Resolved registry, keyed by engine name. */
 export type ModelRegistry = Record<string, EngineRegistryEntry>;
 
+// --- Engine quota/limit snapshots ---
+
+export interface EngineLimitWindow {
+  name: string;
+  usedPercent?: number;
+  windowDurationMins?: number;
+  /** Unix timestamp in seconds. */
+  resetsAt?: number;
+  resetsAtIso?: string;
+}
+
+export interface EngineLimitContext {
+  usedPercent?: number;
+  remainingPercent?: number;
+  contextWindowSize?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+}
+
+export interface EngineLimitCredits {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  balance?: string;
+  limit?: number;
+  used?: number;
+  remainingPercent?: number;
+  resetsAt?: number;
+  resetsAtIso?: string;
+}
+
+export interface EngineLimitBucket {
+  id: string;
+  name?: string;
+  planType?: string;
+  primary?: EngineLimitWindow;
+  secondary?: EngineLimitWindow;
+  credits?: EngineLimitCredits;
+}
+
+export interface EngineLimitEngineSnapshot {
+  name: string;
+  available: boolean;
+  status: "live" | "snapshot" | "static" | "unsupported" | "error";
+  source: string;
+  refreshedAt: string;
+  defaultModel?: string;
+  models: ModelInfo[];
+  accountPlan?: string;
+  windows?: EngineLimitWindow[];
+  buckets?: EngineLimitBucket[];
+  credits?: EngineLimitCredits;
+  context?: EngineLimitContext;
+  costUsd?: number;
+  unsupportedReason?: string;
+  error?: string;
+  stale?: boolean;
+}
+
+export interface EngineLimitsResponse {
+  generatedAt: string;
+  default: string;
+  engines: Record<string, EngineLimitEngineSnapshot>;
+}
+
 // --- config.yaml `models:` block shapes (all fields optional/forgiving) ---
 
 export interface ModelConfigEntry {
