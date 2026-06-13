@@ -4,6 +4,7 @@ import path from "node:path";
 export interface SessionSettingsOpts {
   sessionId: string;
   relayScript: string;
+  statusLineDir?: string;
   appendSystemPrompt?: string;
 }
 
@@ -15,7 +16,32 @@ interface HookMatcher { hooks: HookCommand[]; }
 // structured rate-limit signal, so it must be registered alongside Stop.
 export interface ClaudeSettings {
   hooks: Record<"SessionStart" | "Stop" | "StopFailure" | "PreToolUse" | "PostToolUse", HookMatcher[]>;
+  statusLine?: HookCommand;
   appendSystemPrompt?: string;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildStatusLineRecorderCommand(sessionId: string, dir: string): string {
+  const script = [
+    `const fs=require("fs"),path=require("path");`,
+    `let s="";`,
+    `process.stdin.setEncoding("utf8");`,
+    `process.stdin.on("data",d=>s+=d);`,
+    `process.stdin.on("end",()=>{try{`,
+    `const dir=process.argv[1],id=process.argv[2];`,
+    `fs.mkdirSync(dir,{recursive:true});`,
+    `const parsed=JSON.parse(s||"{}");`,
+    `const safe={captured_at:new Date().toISOString(),jinn_session_id:id,model:parsed.model,version:parsed.version,rate_limits:parsed.rate_limits,context_window:parsed.context_window,cost:parsed.cost};`,
+    `const file=path.join(dir,id+".json"),tmp=file+".tmp";`,
+    `fs.writeFileSync(tmp,JSON.stringify(safe,null,2),{mode:0o600});`,
+    `fs.renameSync(tmp,file);`,
+    `fs.chmodSync(file,0o600);`,
+    `}catch{}});`,
+  ].join("");
+  return `node -e ${shellQuote(script)} ${shellQuote(dir)} ${shellQuote(sessionId)}`;
 }
 
 export function buildSessionSettings(opts: SessionSettingsOpts): ClaudeSettings {
@@ -32,6 +58,7 @@ export function buildSessionSettings(opts: SessionSettingsOpts): ClaudeSettings 
       PreToolUse: [cmd()],
       PostToolUse: [cmd()],
     },
+    ...(opts.statusLineDir ? { statusLine: { type: "command", command: buildStatusLineRecorderCommand(opts.sessionId, opts.statusLineDir) } } : {}),
     ...(opts.appendSystemPrompt ? { appendSystemPrompt: opts.appendSystemPrompt } : {}),
   };
 }
