@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import type { Message } from '@/lib/conversations'
 import { parseMedia, stripAttachedFilesBlock } from '@/lib/conversations'
 import { MessageMedia } from './message-media'
 import { useOpenFile } from '@/components/chat/file-open-context'
+import { useStickToBottom } from '@/hooks/use-stick-to-bottom'
 
 /* ── Tool grouping ──────────────────────────────────────── */
 
@@ -596,101 +597,12 @@ interface ChatMessagesProps {
 }
 
 export function ChatMessages({ messages, loading, streamingText, onRetry }: ChatMessagesProps) {
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const prevMsgIdRef = useRef<string | null>(null)
-  const prevMsgCount = useRef(0)
-  const isAtBottomRef = useRef(true)
-  const [showScrollButton, setShowScrollButton] = useState(false)
-  const scrollButtonTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const rafRef = useRef<number | null>(null)
-
-  // IntersectionObserver: track whether the bottom sentinel is visible
-  useEffect(() => {
-    const sentinel = bottomRef.current
-    const container = scrollContainerRef.current
-    if (!sentinel || !container) return
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        isAtBottomRef.current = entry.isIntersecting
-        // Debounce the button visibility to avoid flicker during fast scrolling
-        clearTimeout(scrollButtonTimer.current)
-        scrollButtonTimer.current = setTimeout(() => {
-          setShowScrollButton(!entry.isIntersecting)
-        }, 100)
-      },
-      {
-        root: container,
-        rootMargin: '0px 0px 80px 0px', // "near bottom" zone
-        threshold: 0,
-      }
-    )
-
-    observer.observe(sentinel)
-    return () => {
-      observer.disconnect()
-      clearTimeout(scrollButtonTimer.current)
-    }
-  }, [])
-
-  // ResizeObserver: auto-scroll when content grows (new messages, streaming, image loads)
-  // rAF-batched to avoid calling scrollIntoView on every resize during streaming
-  useEffect(() => {
-    const content = contentRef.current
-    if (!content) return
-
-    const observer = new ResizeObserver(() => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
-      rafRef.current = requestAnimationFrame(() => {
-        if (isAtBottomRef.current && bottomRef.current) {
-          bottomRef.current.scrollIntoView({ behavior: 'auto' })
-        }
-      })
-    })
-
-    observer.observe(content)
-    return () => {
-      observer.disconnect()
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-    }
-  }, [])
-
-  // Session switch / initial load: snap to bottom instantly before paint
-  useLayoutEffect(() => {
-    if (messages.length === 0) {
-      prevMsgCount.current = 0
-      prevMsgIdRef.current = null
-      return
-    }
-
-    const currentFirstId = messages[0]?.id || null
-    const isSessionSwitch = prevMsgIdRef.current !== null && currentFirstId !== prevMsgIdRef.current
-    const isInitialLoad = prevMsgCount.current === 0 && messages.length > 0
-
-    if (isInitialLoad || isSessionSwitch) {
-      if (scrollContainerRef.current) {
-        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
-      }
-      isAtBottomRef.current = true
-      setShowScrollButton(false)
-    }
-
-    prevMsgCount.current = messages.length
-    prevMsgIdRef.current = currentFirstId
-  }, [messages])
-
-  const scrollToBottom = useCallback(() => {
-    if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
-    }
-    isAtBottomRef.current = true
-    setShowScrollButton(false)
-  }, [])
+  // Stick-to-bottom: one hook owns follow-intent, growth-follow, resize/keyboard,
+  // tab-return, mount-snap, and the jump affordance. See use-stick-to-bottom.ts.
+  const { containerRef, showJump, unreadCount, scrollToBottom } = useStickToBottom({
+    streamingText,
+    messageCount: messages.length,
+  })
 
   // Memoize grouped messages to avoid re-running on streaming-only re-renders
   const groupedMessages = useMemo(() => groupMessages(messages), [messages])
@@ -711,8 +623,8 @@ export function ChatMessages({ messages, loading, streamingText, onRetry }: Chat
   }
 
   return (
-    <div ref={scrollContainerRef} className="chat-messages-scroll relative flex-1 overflow-y-auto overflow-x-hidden bg-[var(--bg)] min-h-0">
-      <div ref={contentRef} className="py-[var(--space-3)] pb-[var(--space-6)]">
+    <div ref={containerRef} style={{ overflowAnchor: 'auto' }} className="chat-messages-scroll relative flex-1 overflow-y-auto overflow-x-hidden bg-[var(--bg)] min-h-0">
+      <div className="py-[var(--space-3)] pb-[var(--space-6)]">
       {groupedMessages.map((item) => {
         if (item.kind === 'tool-group') {
           const firstMsg = item.msgs[0]
@@ -755,20 +667,20 @@ export function ChatMessages({ messages, loading, streamingText, onRetry }: Chat
         </div>
       )}
 
-      <div ref={bottomRef} />
       </div>
 
-      {/* Scroll-to-bottom button */}
-      {showScrollButton && (
+      {/* Jump-to-latest — borderless (soft material + shadow, no hairline), with an
+          optional unread count. Shown only when the user has scrolled away. */}
+      {showJump && (
         <button
-          onClick={scrollToBottom}
-          aria-label="Scroll to bottom"
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 py-1.5 px-3 rounded-full bg-[var(--material-thick)] border border-[var(--separator)] text-[var(--text-secondary)] text-[length:var(--text-caption1)] shadow-[var(--shadow-elevated)] cursor-pointer transition-opacity duration-150 hover:bg-[var(--fill-secondary)]"
+          onClick={() => scrollToBottom('smooth')}
+          aria-label="Jump to latest"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 py-1.5 pl-3 pr-3.5 rounded-full bg-[var(--material-thick)] text-[var(--text-secondary)] text-[length:var(--text-caption1)] font-[var(--weight-medium)] shadow-[var(--shadow-card)] backdrop-blur-md cursor-pointer transition-opacity duration-150 hover:bg-[var(--fill-secondary)]"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="6 9 12 15 18 9" />
           </svg>
-          New messages
+          {unreadCount > 0 ? `${unreadCount} new message${unreadCount > 1 ? 's' : ''}` : 'Jump to latest'}
         </button>
       )}
 
