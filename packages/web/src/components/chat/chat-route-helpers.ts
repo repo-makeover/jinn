@@ -118,3 +118,35 @@ export function summarizeOlder(
   }
   return { chats, employees }
 }
+
+// ---------------------------------------------------------------------------
+// "Focused" filter — only the conversations the operator personally started.
+//
+// Verified against the live Session shape (packages/jinn/src/shared/types.ts +
+// the /api/sessions payload via rowToSession): the reliable discriminators are
+// `source`, `sourceRef` (cron marker) and `parentSessionId`. `userId` is null on
+// single-user installs, so it is NOT used. A session is "focused" iff:
+//   • it is NOT cron-triggered (source 'cron' or sourceRef 'cron:…'), AND
+//   • it is top-level — `parentSessionId` is empty (delegated/spawned CHILD
+//     sessions carry their parent's id and are hidden), AND
+//   • its source is a human-facing entry point (web / slack / talk).
+// The source allowlist means any unknown/internal source is hidden by default.
+// ---------------------------------------------------------------------------
+
+/** Sources that represent a human starting a conversation directly. */
+export const FOCUSED_SOURCES = new Set(['web', 'slack', 'talk'])
+
+export interface FocusableSession {
+  source?: string
+  sourceRef?: string
+  parentSessionId?: string | null
+}
+
+/** True for a top-level, user-initiated, non-cron conversation (see above). */
+export function isFocusedSession(s: FocusableSession): boolean {
+  const isCron = s.source === 'cron' || String(s.sourceRef ?? '').startsWith('cron:')
+  if (isCron) return false
+  const parent = s.parentSessionId
+  if (parent != null && String(parent).trim() !== '') return false
+  return FOCUSED_SOURCES.has(s.source ?? '')
+}

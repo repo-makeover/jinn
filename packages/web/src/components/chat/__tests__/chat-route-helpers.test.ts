@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveDeepLink, mergeSidebarEmployees, bucketByDay, summarizeOlder } from '../chat-route-helpers'
+import { resolveDeepLink, mergeSidebarEmployees, bucketByDay, summarizeOlder, isFocusedSession } from '../chat-route-helpers'
 
 describe('resolveDeepLink', () => {
   const link = (qs: string) => resolveDeepLink(new URLSearchParams(qs))
@@ -144,5 +144,33 @@ describe('summarizeOlder', () => {
 
   it('is empty when nothing is older', () => {
     expect(summarizeOlder({ a: 2, b: 1 }, { a: 2, b: 1 })).toEqual({ chats: 0, employees: 0 })
+  })
+})
+
+describe('isFocusedSession', () => {
+  it('includes top-level web / slack / talk conversations', () => {
+    expect(isFocusedSession({ source: 'web' })).toBe(true)
+    expect(isFocusedSession({ source: 'slack' })).toBe(true)
+    expect(isFocusedSession({ source: 'talk' })).toBe(true)
+    // a direct web chat the operator started with an employee (parentless)
+    expect(isFocusedSession({ source: 'web', sourceRef: 'web:123', parentSessionId: null })).toBe(true)
+  })
+
+  it('hides delegated / spawned CHILD sessions (parentSessionId set)', () => {
+    expect(isFocusedSession({ source: 'web', parentSessionId: 'abc123' })).toBe(false)
+    // whitespace-only parent id is treated as empty (still focused)
+    expect(isFocusedSession({ source: 'web', parentSessionId: '   ' })).toBe(true)
+  })
+
+  it('hides cron-triggered run sessions (by source or sourceRef marker)', () => {
+    expect(isFocusedSession({ source: 'cron' })).toBe(false)
+    expect(isFocusedSession({ source: 'web', sourceRef: 'cron:daily-report' })).toBe(false)
+  })
+
+  it('hides unknown / internal sources (allowlist)', () => {
+    expect(isFocusedSession({ source: 'discord' })).toBe(false)
+    expect(isFocusedSession({ source: 'whatsapp' })).toBe(false)
+    expect(isFocusedSession({ source: 'agent' })).toBe(false)
+    expect(isFocusedSession({})).toBe(false)
   })
 })
