@@ -38,6 +38,24 @@ export class TalkAudioPlayer {
   private ctx: AudioContext | null = null
   private analyserNode: AnalyserNode | null = null
   private gain: GainNode | null = null
+  /** False when the ctx was supplied externally (shared) — don't close it on dispose. */
+  private ownsCtx = true
+  /** Fired once when the first buffer of a run actually starts playing. */
+  private startCb: (() => void) | null = null
+  private startNotified = false
+
+  /**
+   * @param externalCtx Optional pre-created (and gesture-resumed) AudioContext to
+   *   share — e.g. the chat read-aloud primes one in the click gesture and passes
+   *   it here so playback is autoplay-unlocked. When omitted, the player creates
+   *   and owns its own context (the /talk usage).
+   */
+  constructor(externalCtx?: AudioContext) {
+    if (externalCtx) {
+      this.ctx = externalCtx
+      this.ownsCtx = false
+    }
+  }
 
   /** Serializes decode+schedule so arrival order and the playhead stay correct. */
   private chain: Promise<void> = Promise.resolve()
@@ -59,14 +77,14 @@ export class TalkAudioPlayer {
   /** Reused RMS scratch buffer for the level getter. */
   private rmsBuf: Uint8Array<ArrayBuffer> | null = null
 
-  /** Lazily create the AudioContext + analyser graph. */
+  /** Lazily build the analyser graph (on a supplied or freshly-created context). */
   private ensureContext(): AudioContext {
-    if (this.ctx) return this.ctx
+    if (this.ctx && this.analyserNode) return this.ctx
     const Ctor: typeof AudioContext =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext })
         .webkitAudioContext
-    const ctx = new Ctor()
+    const ctx = this.ctx ?? new Ctor()
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 256
     analyser.smoothingTimeConstant = 0.7
@@ -114,20 +132,33 @@ export class TalkAudioPlayer {
    */
   enqueue(_seq: number, _mime: string, dataBase64: string, last = false): void {
     this.ensureContext()
-
-    // A frame after a completed turn (`last:true`) is the next turn's first
-    // frame: re-arm so the playhead re-anchors and a suspended context resumes.
-    if (this.ended) {
-      this.ended = false
-      this.started = false
-    }
-
     let data: ArrayBuffer
     try {
       data = base64ToArrayBuffer(dataBase64)
     } catch {
       if (last) this.ended = true // still close the turn so the next frame re-arms
       return // bad base64 — skip
+    }
+    this.accept(data, last)
+  }
+
+  /**
+   * Enqueue a raw WAV ArrayBuffer (no base64) — the chat read-aloud's streamed
+   * per-sentence frames arrive as binary, so this skips the base64 round-trip.
+   */
+  enqueueBuffer(data: ArrayBuffer, last = false): void {
+    this.ensureContext()
+    this.accept(data, last)
+  }
+
+  /** Shared decode+schedule entry for both base64 and binary enqueues. */
+  private accept(data: ArrayBuffer, last: boolean): void {
+    // A frame after a completed turn (`last:true`) is the next turn's first
+    // frame: re-arm so the playhead re-anchors and a suspended context resumes.
+    if (this.ended) {
+      this.ended = false
+      this.started = false
+      this.startNotified = false
     }
 
     this._playing = true
@@ -142,6 +173,11 @@ export class TalkAudioPlayer {
     this.chain = this.chain
       .then(() => this.ensureResumed())
       .then(() => this.decodeAndSchedule(data))
+  }
+
+  /** Register a callback fired once when the first buffer of a run starts playing. */
+  onStart(cb: () => void): void {
+    this.startCb = cb
   }
 
   private async decodeAndSchedule(data: ArrayBuffer): Promise<void> {
@@ -187,6 +223,10 @@ export class TalkAudioPlayer {
       this.checkIdle()
     }
     source.start(startAt)
+    if (!this.startNotified) {
+      this.startNotified = true
+      this.startCb?.()
+    }
   }
 
   private checkIdle(): void {
@@ -234,6 +274,7 @@ export class TalkAudioPlayer {
     // Abandon the in-flight decode chain; future enqueues start a fresh chain.
     this.chain = Promise.resolve()
     this.started = false
+    this.startNotified = false
     this.inFlight = 0
     this._playing = false
     this.activeSources = 0
@@ -245,11 +286,14 @@ export class TalkAudioPlayer {
   dispose(): void {
     this.reset()
     this.idleCb = null
+    this.startCb = null
     const ctx = this.ctx
+    const owns = this.ownsCtx
     this.ctx = null
     this.analyserNode = null
     this.gain = null
     this.rmsBuf = null
-    if (ctx && ctx.state !== "closed") void ctx.close().catch(() => {})
+    // Only close a context we created — a shared/external one belongs to the caller.
+    if (owns && ctx && ctx.state !== "closed") void ctx.close().catch(() => {})
   }
 }

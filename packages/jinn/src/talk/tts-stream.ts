@@ -73,6 +73,48 @@ export function ttsStatus(opts?: KokoroOpts): { available: boolean; voice: strin
   return { available: s.available, voice: s.voice };
 }
 
+/**
+ * Split already-markdown-stripped prose into sentence-sized chunks for streamed
+ * read-aloud. Splits on sentence terminators (followed by whitespace) AND on
+ * newlines (list items / paragraphs), collapsing inner whitespace and dropping
+ * empties. Pure — unit-tested. Text with no terminator stays one chunk.
+ */
+export function splitTtsSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?…])\s+|\n+/)
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Synthesize `text` sentence-by-sentence, invoking `onFrame` with each sentence's
+ * WAV as soon as it's ready — so the client can PLAY sentence 1 while 2..N are
+ * still synthesizing (time-to-first-audio ≈ one sentence, not the whole message).
+ *
+ * Kokoro is one-request-at-a-time, so synthesis is naturally sequential; that's
+ * fine since playback is sequential too. `isCancelled` is checked before and
+ * after each synth so a paused/aborted client stops further synthesis promptly
+ * (we don't keep synthesizing a message nobody is listening to). Resolves with
+ * the number of frames emitted.
+ */
+export async function streamTtsSentences(
+  text: string,
+  opts: KokoroOpts | undefined,
+  onFrame: (wav: Buffer) => void,
+  isCancelled: () => boolean,
+): Promise<number> {
+  const sentences = splitTtsSentences(text);
+  let count = 0;
+  for (const sentence of sentences) {
+    if (isCancelled()) break;
+    const wav = await getTalkTts(opts).synthesize(sentence);
+    if (isCancelled()) break;
+    onFrame(wav);
+    count++;
+  }
+  return count;
+}
+
 interface TurnState {
   buffer: string;
   seq: number;
