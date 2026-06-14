@@ -78,7 +78,7 @@ import {
   feedTalkText,
   flushTalkSpeech,
   discardTalkSpeech,
-  synthesizeText,
+  streamTtsSentences,
   ttsStatus,
   validateTtsText,
 } from "../talk/tts-stream.js";
@@ -1860,8 +1860,11 @@ export async function handleApiRequest(
       return json(res, { available, voice });
     }
 
-    // POST /api/tts {text} — synthesize one WAV for the whole message. 503
-    // {available:false} when Kokoro can't run (client then falls back to Web Speech).
+    // POST /api/tts {text} — STREAM one length-prefixed WAV frame per sentence as
+    // each is synthesized, so the client plays sentence 1 while 2..N are still
+    // synthesizing (time-to-first-audio ≈ one sentence, not the whole message).
+    // Frame = 4-byte big-endian length + WAV bytes. 503 {available:false} when
+    // Kokoro can't run (client then falls back to browser Web Speech).
     if (method === "POST" && pathname === "/api/tts") {
       const kokoroOpts = context.getConfig().talk?.kokoro;
       if (!ttsStatus(kokoroOpts).available) {
@@ -1871,20 +1874,35 @@ export async function handleApiRequest(
       if (!parsed.ok) return;
       const valid = validateTtsText((parsed.body as { text?: unknown } | null)?.text);
       if (!valid.ok) return badRequest(res, valid.error);
+
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no", // don't let a proxy buffer the stream
+      });
+      // A client abort (pause / navigate) closes the request → stop synthesizing
+      // the rest of the message instead of wasting Kokoro on audio nobody hears.
+      let cancelled = false;
+      req.on("close", () => {
+        cancelled = true;
+      });
       try {
-        const wav = await synthesizeText(valid.text, kokoroOpts);
-        res.writeHead(200, {
-          "Content-Type": "audio/wav",
-          "Content-Length": String(wav.length),
-          "Cache-Control": "no-store",
-        });
-        res.end(wav);
-        return;
+        await streamTtsSentences(
+          valid.text,
+          kokoroOpts,
+          (wav) => {
+            const header = Buffer.allocUnsafe(4);
+            header.writeUInt32BE(wav.length, 0);
+            res.write(header);
+            res.write(wav);
+          },
+          () => cancelled || res.writableEnded,
+        );
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`TTS synthesis failed: ${msg}`);
-        return serverError(res, `TTS synthesis failed: ${msg}`);
+        logger.warn(`TTS stream failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+      if (!res.writableEnded) res.end();
+      return;
     }
 
     // ── Talk (/talk voice loop) ───────────────────────────────

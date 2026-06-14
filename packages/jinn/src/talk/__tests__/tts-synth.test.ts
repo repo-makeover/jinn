@@ -8,6 +8,8 @@ import {
   validateTtsText,
   synthesizeText,
   ttsStatus,
+  splitTtsSentences,
+  streamTtsSentences,
   TTS_MAX_CHARS,
   __setTalkTtsForTest,
 } from "../tts-stream.js"
@@ -77,5 +79,84 @@ describe("synthesizeText / ttsStatus", () => {
       status: () => ({ available: false, downloading: false, progress: 0, voice: "af_heart", ready: false }),
     } as never)
     expect(ttsStatus()).toEqual({ available: false, voice: "af_heart" })
+  })
+})
+
+describe("splitTtsSentences", () => {
+  it("splits on sentence terminators followed by whitespace", () => {
+    expect(splitTtsSentences("Hello there. How are you? I am fine!")).toEqual([
+      "Hello there.",
+      "How are you?",
+      "I am fine!",
+    ])
+  })
+
+  it("splits on newlines (list items / paragraphs)", () => {
+    expect(splitTtsSentences("First line\nSecond line\n\nThird")).toEqual([
+      "First line",
+      "Second line",
+      "Third",
+    ])
+  })
+
+  it("collapses inner whitespace and drops empties", () => {
+    expect(splitTtsSentences("  A   sentence.\n\n\n  Next.  ")).toEqual(["A sentence.", "Next."])
+  })
+
+  it("keeps a terminator-less line as one chunk", () => {
+    expect(splitTtsSentences("no terminator here")).toEqual(["no terminator here"])
+  })
+
+  it("does not split decimals (no whitespace after the dot)", () => {
+    expect(splitTtsSentences("Pi is 3.14 exactly.")).toEqual(["Pi is 3.14 exactly."])
+  })
+})
+
+describe("streamTtsSentences", () => {
+  afterEach(() => __setTalkTtsForTest(null))
+
+  it("synthesizes sentence-by-sentence IN ORDER, emitting a frame per sentence", async () => {
+    const synthesize = vi.fn(async (s: string) => Buffer.from(`wav:${s}`))
+    __setTalkTtsForTest({ synthesize } as never)
+    const frames: string[] = []
+    const n = await streamTtsSentences(
+      "One. Two. Three.",
+      undefined,
+      (wav) => frames.push(wav.toString()),
+      () => false,
+    )
+    expect(synthesize.mock.calls.map((c) => c[0])).toEqual(["One.", "Two.", "Three."])
+    expect(frames).toEqual(["wav:One.", "wav:Two.", "wav:Three."])
+    expect(n).toBe(3)
+  })
+
+  it("stops synthesizing the rest when cancelled (pause cancels in-flight synthesis)", async () => {
+    const synthesize = vi.fn(async (s: string) => Buffer.from(`wav:${s}`))
+    __setTalkTtsForTest({ synthesize } as never)
+    const frames: string[] = []
+    let cancelled = false
+    // Cancel right after the first frame is emitted.
+    const n = await streamTtsSentences(
+      "One. Two. Three. Four.",
+      undefined,
+      (wav) => {
+        frames.push(wav.toString())
+        cancelled = true
+      },
+      () => cancelled,
+    )
+    // Frame 1 emitted; the post-frame cancel check halts before synthesizing #2.
+    expect(frames).toEqual(["wav:One."])
+    expect(synthesize).toHaveBeenCalledTimes(1)
+    expect(n).toBe(1)
+  })
+
+  it("emits nothing for empty/whitespace input", async () => {
+    const synthesize = vi.fn()
+    __setTalkTtsForTest({ synthesize } as never)
+    const frames: Buffer[] = []
+    const n = await streamTtsSentences("   \n  ", undefined, (w) => frames.push(w), () => false)
+    expect(n).toBe(0)
+    expect(synthesize).not.toHaveBeenCalled()
   })
 })

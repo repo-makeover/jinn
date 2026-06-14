@@ -1,32 +1,47 @@
 /**
  * Read-aloud playback engine — the real `TtsStart` for the chat TTS controller.
  *
+ * Latency model: the server STREAMS one WAV frame per sentence (POST /api/tts,
+ * length-prefixed frames). We start playing sentence 1 the moment it arrives while
+ * 2..N are still synthesizing → time-to-first-audio ≈ one sentence, independent of
+ * message length. Playback reuses the /talk gapless sequential queue
+ * (TalkAudioPlayer), fed binary buffers as frames decode.
+ *
  * Strategy per message:
- *   1. Prime audio SYNCHRONOUSLY (resume the shared AudioContext) — this runs in
- *      the click gesture's call stack, which is what lets the browser's autoplay
- *      policy permit playback after the (async) fetch resolves. Skipping this is
- *      the classic "click play → stuck loading, no sound" bug: play() invoked
- *      after `await fetch()` is outside the gesture window → NotAllowedError.
- *   2. Strip markdown so we speak clean prose, not asterisks/backticks.
- *   3. Prefer our custom server TTS (Kokoro) via POST /api/tts → decode the WAV in
- *      the (gesture-unlocked) AudioContext and play it. Availability is probed once
- *      (GET /api/tts, cached) so we pick the browser fallback WITHOUT a failed POST.
- *   4. Fall back to the browser Web Speech API (speechSynthesis) when Kokoro is
- *      unavailable OR the synth request / WAV playback fails.
+ *   1. Prime audio SYNCHRONOUSLY (resume the shared player's AudioContext) inside
+ *      the click gesture — this is what lets the browser's autoplay policy permit
+ *      playback after the async stream begins. (The original "stuck loading, no
+ *      sound" bug was play() called outside the gesture window.)
+ *   2. Strip markdown so we speak clean prose.
+ *   3. Prefer Kokoro: open the streaming POST, decode each sentence frame, enqueue
+ *      it on the gapless player. Availability is probed once (GET /api/tts, cached)
+ *      so we pick the browser fallback WITHOUT a failed POST.
+ *   4. Fall back to browser Web Speech (speechSynthesis) when Kokoro is unavailable
+ *      OR the stream fails before any audio. It streams naturally.
  *
  * All browser touchpoints (fetch / AudioContext / speechSynthesis) are injected so
- * the selection + gesture logic is unit-testable without a DOM or network.
+ * the streaming, ordering, and fallback logic is unit-testable without a DOM.
  */
 import { stripMarkdown } from "@/lib/strip-markdown"
+import { TalkAudioPlayer } from "@/routes/talk/audio-player"
 import type { TtsStart, TtsStartCallbacks } from "./tts-controller"
+
+/** A gapless, ordered WAV-chunk player (subset of TalkAudioPlayer we depend on). */
+export interface StreamPlayer {
+  enqueueBuffer(data: ArrayBuffer): void
+  onStart(cb: () => void): void
+  onIdle(cb: () => void): void
+  reset(): void
+  readonly playing: boolean
+}
 
 export interface TtsEngineDeps {
   /** Probe whether the custom (Kokoro) TTS is available. Cached by the caller. */
   checkAvailable: () => Promise<boolean>
-  /** POST the text to the custom TTS; resolve with the WAV bytes, reject on failure. */
-  fetchAudio: (text: string) => Promise<ArrayBuffer>
-  /** Decode + play synthesized WAV bytes; resolve with stop(), reject if it can't play. */
-  playAudio: (audio: ArrayBuffer, cbs: TtsStartCallbacks) => Promise<() => void>
+  /** Open the streaming synth; resolve with the framed byte stream, reject on failure. */
+  openStream: (text: string, signal: AbortSignal) => Promise<ReadableStream<Uint8Array>>
+  /** Get the (reset) shared sequential player. */
+  getPlayer: () => StreamPlayer
   /** Browser Web Speech fallback; returns a stop() handle. */
   speak: (text: string, cbs: TtsStartCallbacks) => () => void
   /** Synchronous gesture-time unlock (resume the shared AudioContext). */
@@ -35,17 +50,43 @@ export interface TtsEngineDeps {
 
 const NOOP = () => {}
 
+/**
+ * Parse a length-prefixed frame stream: each frame is a 4-byte big-endian length
+ * followed by that many bytes. `push` returns whatever complete frames are now
+ * available; partial frames are buffered until the rest arrives. Pure (testable).
+ */
+export function createFrameReader(): { push: (chunk: Uint8Array) => ArrayBuffer[] } {
+  let buf = new Uint8Array(0)
+  return {
+    push(chunk: Uint8Array): ArrayBuffer[] {
+      const merged = new Uint8Array(buf.length + chunk.length)
+      merged.set(buf)
+      merged.set(chunk, buf.length)
+      buf = merged
+      const frames: ArrayBuffer[] = []
+      for (;;) {
+        if (buf.length < 4) break
+        const len = ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]) >>> 0
+        if (buf.length < 4 + len) break
+        // slice() copies into a fresh, exactly-sized buffer (safe for decodeAudioData).
+        frames.push(buf.slice(4, 4 + len).buffer)
+        buf = buf.slice(4 + len)
+      }
+      return frames
+    },
+  }
+}
+
 /** Build a `TtsStart` from injected playback dependencies. */
 export function createTtsStart(deps: TtsEngineDeps): TtsStart {
   return async (raw, cbs) => {
-    // MUST be the first thing we do — runs in the click gesture's synchronous
-    // stack so the browser unlocks audio for the post-fetch play() below.
+    // MUST be first — runs in the click gesture's synchronous stack so the browser
+    // unlocks audio for the streamed playback that begins after the fetch resolves.
     deps.primeAudio?.()
 
     const text = stripMarkdown(raw).trim()
     if (!text) {
-      // Nothing speakable (e.g. a media-only / code-only message) — end cleanly.
-      cbs.onEnd()
+      cbs.onEnd() // nothing speakable (media-/code-only message) — end cleanly
       return NOOP
     }
 
@@ -58,15 +99,79 @@ export function createTtsStart(deps: TtsEngineDeps): TtsStart {
 
     if (available) {
       try {
-        const audio = await deps.fetchAudio(text)
-        return await deps.playAudio(audio, cbs)
+        // openStream rejects on 503 / network error → fall through to Web Speech.
+        return await playKokoroStream(deps, text, cbs)
       } catch {
-        // Kokoro was advertised available but the request OR playback failed —
-        // degrade to the browser Web Speech voice.
+        /* Kokoro unavailable / connection failed at call time → browser fallback */
       }
     }
 
     return deps.speak(text, cbs)
+  }
+}
+
+/**
+ * Stream Kokoro audio: pump framed WAV chunks into the gapless player as they
+ * arrive. Resolves (with a stop handle) once the stream is open; playback proceeds
+ * in the background. stop() aborts the fetch — which cancels server-side synthesis
+ * of the remaining sentences — and clears the queue.
+ */
+async function playKokoroStream(
+  deps: TtsEngineDeps,
+  text: string,
+  cbs: TtsStartCallbacks,
+): Promise<() => void> {
+  const ac = new AbortController()
+  const stream = await deps.openStream(text, ac.signal) // may throw → caller falls back
+  const player = deps.getPlayer()
+
+  let started = false
+  let streamDone = false
+  let stopped = false
+  let frames = 0
+
+  player.onStart(() => {
+    if (!started && !stopped) {
+      started = true
+      cbs.onPlaying()
+    }
+  })
+  player.onIdle(() => {
+    if (streamDone && started && !stopped) cbs.onEnd()
+  })
+
+  // Background pump — read frames and enqueue them; never blocks the returned stop.
+  void (async () => {
+    const reader = stream.getReader()
+    const parser = createFrameReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value) for (const wav of parser.push(value)) {
+          frames++
+          player.enqueueBuffer(wav)
+        }
+      }
+    } catch {
+      /* aborted (pause) or network drop — fall through to settle below */
+    } finally {
+      streamDone = true
+      if (!stopped) {
+        if (frames === 0) {
+          cbs.onError() // produced no audio at all → controller resets to idle
+        } else if (started && !player.playing) {
+          cbs.onEnd() // already drained before the stream finished reading
+        }
+        // else: onIdle will fire onEnd when the queue drains
+      }
+    }
+  })()
+
+  return () => {
+    stopped = true
+    ac.abort() // cancels in-flight server synthesis of the remaining sentences
+    player.reset()
   }
 }
 
@@ -85,73 +190,40 @@ function checkAvailable(): Promise<boolean> {
   return availabilityPromise
 }
 
-async function fetchAudio(text: string): Promise<ArrayBuffer> {
+async function openStream(text: string, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
   const r = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
+    signal,
   })
-  if (!r.ok) throw new Error(`tts ${r.status}`)
-  return r.arrayBuffer()
+  if (!r.ok || !r.body) throw new Error(`tts ${r.status}`)
+  return r.body
 }
 
-/* A single shared AudioContext so priming on one message unlocks playback for all. */
-type AudioCtor = typeof AudioContext
-let sharedCtx: AudioContext | null = null
+/* One shared player so priming on the click unlocks playback for every message. */
+let sharedPlayer: TalkAudioPlayer | null = null
 
-function getAudioContext(): AudioContext | null {
+function getPlayerInstance(): TalkAudioPlayer | null {
   if (typeof window === "undefined") return null
-  const Ctor: AudioCtor | undefined =
+  const hasAudio =
     window.AudioContext ||
-    (window as unknown as { webkitAudioContext?: AudioCtor }).webkitAudioContext
-  if (!Ctor) return null
-  if (!sharedCtx) sharedCtx = new Ctor()
-  return sharedCtx
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!hasAudio) return null
+  if (!sharedPlayer) sharedPlayer = new TalkAudioPlayer()
+  return sharedPlayer
 }
 
-/** Resume the AudioContext from within the user gesture (autoplay unlock). */
+/** Resume the player's AudioContext from within the user gesture (autoplay unlock). */
 function primeAudio(): void {
-  const ctx = getAudioContext()
-  if (ctx && ctx.state === "suspended") void ctx.resume()
+  getPlayerInstance()?.resume()
 }
 
-async function playAudio(
-  audio: ArrayBuffer,
-  { onPlaying, onEnd }: TtsStartCallbacks,
-): Promise<() => void> {
-  const ctx = getAudioContext()
-  if (!ctx) throw new Error("AudioContext unavailable") // → caller falls back to Web Speech
-  if (ctx.state === "suspended") {
-    try {
-      await ctx.resume()
-    } catch {
-      /* primed in-gesture already; best effort */
-    }
-  }
-  // decodeAudioData detaches the input buffer — decode a copy so a retry/fallback
-  // still has the original bytes.
-  const buffer = await ctx.decodeAudioData(audio.slice(0))
-  const source = ctx.createBufferSource()
-  source.buffer = buffer
-  source.connect(ctx.destination)
-  let done = false
-  source.onended = () => {
-    if (!done) {
-      done = true
-      onEnd()
-    }
-  }
-  source.start(0)
-  onPlaying() // playback has begun (loading → playing)
-  return () => {
-    done = true
-    try {
-      source.stop()
-    } catch {
-      /* already stopped */
-    }
-    source.disconnect()
-  }
+function getPlayer(): StreamPlayer {
+  const p = getPlayerInstance()
+  if (!p) throw new Error("AudioContext unavailable") // → caller falls back to Web Speech
+  p.reset() // clear any prior message's queue (single-active)
+  return p
 }
 
 function speak(text: string, { onPlaying, onEnd, onError }: TtsStartCallbacks): () => void {
@@ -173,7 +245,7 @@ function speak(text: string, { onPlaying, onEnd, onError }: TtsStartCallbacks): 
   }
 }
 
-/** Production dependencies (browser fetch + AudioContext + Web Speech). */
+/** Production dependencies (browser fetch + shared AudioContext player + Web Speech). */
 export function defaultTtsDeps(): TtsEngineDeps {
-  return { checkAvailable, fetchAudio, playAudio, speak, primeAudio }
+  return { checkAvailable, openStream, getPlayer, speak, primeAudio }
 }
