@@ -84,10 +84,46 @@ built from the loaded payload; the "Older" summary count uses the authoritative
   + older-expanded-crop.png (Older drawer), mobile-sidebar.png (390, edge-to-edge).
 - Live data via `pnpm --filter @jinn/web dev --port 5199` (proxies API→7777).
 
+## Focused filter (added after sidebar approval)
+
+Default view shows ONLY the operator's own top-level chats; everything else is
+one tap away.
+
+**Predicate (verified against the live Session shape + real payload):**
+`isFocusedSession` = NOT cron (`source==='cron'` or `sourceRef` starts `cron:`)
+AND `parentSessionId` empty AND `source ∈ {web, slack, talk}`.
+- Verified on 575 live sessions: 68 focused (63 web + 5 talk); hidden = 457
+  delegated children (web w/ parentSessionId set) + 50 cron runs.
+- `userId` is uniformly null on this single-user install → NOT used; the reliable
+  top-level-vs-spawned signal is `parentSessionId`.
+- `talk` included (user-initiated voice). Brief said {web,slack}; flagged for
+  confirmation. Allowlist → unknown/internal sources hidden by default.
+
+**UX:** segmented **[Focused | All]** toggle under the "Chats" title (replaces the
+"All conversations" subtitle). Default Focused, persisted in
+`localStorage["jinn-sidebar-focus-mode"]`. One tap, reversible.
+- Focused gates Today/Yesterday/Older to focused sessions; **Older in focused mode
+  = older user-initiated chats as flat rows** (computed from loaded sessions; deep
+  tail via search). All mode = the authoritative counts-based per-employee drawer.
+- Cron RUN sessions never appear as Today/Yesterday rows (they're a separate
+  "Scheduled" section, which stays in BOTH modes — per the brief).
+- Empty focused view with hidden automated → inline "View all (N automated)" CTA.
+- Search still spans ALL sessions regardless of mode. Nothing destructive.
+
+Files: chat-route-helpers.ts (`isFocusedSession` + `FOCUSED_SOURCES`),
+chat-route-helpers.test.ts (+4 tests = 30), chat-sidebar.tsx (focusMode state,
+toggle, pool gating, focused-Older flat rows, nav/empty-state).
+
+## Verification (current)
+- `typecheck` clean · **461 web tests pass** (41 files; +4 isFocusedSession).
+- Screenshots in /tmp/chat-redesign/: focused-desktop-crop.png / all-desktop-crop.png,
+  focused-mobile.png / all-mobile.png (Focused TODAY 4 vs All TODAY 13).
+
 ## Status
 - [x] data-layer investigation (no backend change needed)
 - [x] date-bucketing helper + tests
-- [x] focused sidebar layout
-- [x] preview screenshots (desktop 1440 + mobile 390)
+- [x] focused sidebar layout (Variant A)
+- [x] focused-filter (user-initiated default + All toggle)
+- [x] preview screenshots — both states, desktop 1440 + mobile 390
 - [ ] report → STOP for review  ← HERE
 - [ ] header pills (after approval)
