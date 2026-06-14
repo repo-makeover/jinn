@@ -483,7 +483,7 @@ export interface CreateSessionOpts {
   replyContext?: ReplyContext | null;
   messageId?: string;
   transportMeta?: JsonObject | null;
-  employee?: string;
+  employee?: string | null;
   model?: string;
   title?: string;
   parentSessionId?: string;
@@ -723,37 +723,83 @@ export function listSessions(filter?: ListSessionsFilter): Session[] {
 export const CRON_GROUP = '__cron__';
 export const DIRECT_GROUP = '__direct__';
 const IS_CRON_SQL = `(source = 'cron' OR source_ref LIKE 'cron:%')`;
-const GROUP_KEY_SQL = `CASE
+
+/**
+ * A session whose `employee` equals the portal name (case-insensitively) is a
+ * direct/COO session that happened to be tagged with the portal slug — there is
+ * no org employee by that name. Collapse it to `null` so it buckets into the
+ * direct group instead of spawning a phantom pseudo-employee group that renders
+ * with the same title as the portal. Real org employees are unaffected.
+ */
+export function coercePortalEmployee(
+  employee: string | null | undefined,
+  portalName: string | null | undefined,
+): string | null {
+  const emp = employee?.trim();
+  if (!emp) return null;
+  const slug = portalName?.trim().toLowerCase();
+  if (slug && emp.toLowerCase() === slug) return null;
+  return emp;
+}
+
+// Build the CASE that maps a row to its sidebar group. When a portalSlug is
+// supplied, portal-slug-tagged rows fold into the direct group (defensive +
+// retroactive for any rows that predate coercePortalEmployee). Returns the SQL
+// plus the bound params it references so callers can splice them in order.
+function groupKeySql(portalSlug?: string | null): { sql: string; params: unknown[] } {
+  const slug = portalSlug?.trim().toLowerCase();
+  const directExtra = slug ? ` OR LOWER(employee) = ?` : '';
+  const sql = `CASE
   WHEN ${IS_CRON_SQL} THEN '${CRON_GROUP}'
-  WHEN employee IS NULL OR employee = '' THEN '${DIRECT_GROUP}'
+  WHEN employee IS NULL OR employee = ''${directExtra} THEN '${DIRECT_GROUP}'
   ELSE employee
 END`;
+  return { sql, params: slug ? [slug] : [] };
+}
 
-function groupFilter(group: string): { clause: string; params: unknown[] } {
+function groupFilter(group: string, portalSlug?: string | null): { clause: string; params: unknown[] } {
+  const slug = portalSlug?.trim().toLowerCase();
   if (group === CRON_GROUP) return { clause: IS_CRON_SQL, params: [] };
-  if (group === DIRECT_GROUP)
-    return { clause: `NOT ${IS_CRON_SQL} AND (employee IS NULL OR employee = '')`, params: [] };
-  return { clause: `NOT ${IS_CRON_SQL} AND employee = ?`, params: [group] };
+  if (group === DIRECT_GROUP) {
+    const directExtra = slug ? ` OR LOWER(employee) = ?` : '';
+    return {
+      clause: `NOT ${IS_CRON_SQL} AND (employee IS NULL OR employee = ''${directExtra})`,
+      params: slug ? [slug] : [],
+    };
+  }
+  // A per-employee page must never leak portal-slug rows (they live in direct).
+  // If the requested group *is* the portal slug, this yields nothing.
+  const slugExclude = slug ? ` AND LOWER(employee) <> ?` : '';
+  return {
+    clause: `NOT ${IS_CRON_SQL} AND employee = ?${slugExclude}`,
+    params: slug ? [group, slug] : [group],
+  };
 }
 
 /** Most-recent `perGroup` sessions for each group — the bounded default payload. */
-export function listRecentPerGroup(perGroup: number): Session[] {
+export function listRecentPerGroup(perGroup: number, portalSlug?: string | null): Session[] {
   const db = initDb();
+  const { sql: keySql, params } = groupKeySql(portalSlug);
   const rows = db
     .prepare(
       `SELECT * FROM (
-         SELECT *, ROW_NUMBER() OVER (PARTITION BY ${GROUP_KEY_SQL} ORDER BY last_activity DESC) AS __rn
+         SELECT *, ROW_NUMBER() OVER (PARTITION BY ${keySql} ORDER BY last_activity DESC) AS __rn
          FROM sessions
        ) WHERE __rn <= ? ORDER BY last_activity DESC`,
     )
-    .all(perGroup) as Record<string, unknown>[];
+    .all(...params, perGroup) as Record<string, unknown>[];
   return rows.map(rowToSession);
 }
 
 /** One group's sessions, newest first — used by the sidebar "load more" button. */
-export function listSessionsForGroup(group: string, limit: number, offset: number): Session[] {
+export function listSessionsForGroup(
+  group: string,
+  limit: number,
+  offset: number,
+  portalSlug?: string | null,
+): Session[] {
   const db = initDb();
-  const { clause, params } = groupFilter(group);
+  const { clause, params } = groupFilter(group, portalSlug);
   const rows = db
     .prepare(
       `SELECT * FROM sessions WHERE ${clause} ORDER BY last_activity DESC LIMIT ? OFFSET ?`,
@@ -795,11 +841,12 @@ export function listChildSessions(parentSessionId: string): Session[] {
 }
 
 /** Total session count per group, so the UI can show accurate "+N more". */
-export function getSessionGroupCounts(): Record<string, number> {
+export function getSessionGroupCounts(portalSlug?: string | null): Record<string, number> {
   const db = initDb();
+  const { sql: keySql, params } = groupKeySql(portalSlug);
   const rows = db
-    .prepare(`SELECT ${GROUP_KEY_SQL} AS grp, COUNT(*) AS n FROM sessions GROUP BY grp`)
-    .all() as Array<{ grp: string; n: number }>;
+    .prepare(`SELECT ${keySql} AS grp, COUNT(*) AS n FROM sessions GROUP BY grp`)
+    .all(...params) as Array<{ grp: string; n: number }>;
   const out: Record<string, number> = {};
   for (const r of rows) out[r.grp] = r.n;
   return out;

@@ -12,6 +12,18 @@ describe('chat sidebar grouping helpers', () => {
     expect(isDirectSession({ source: 'cron', sourceRef: 'cron:daily' })).toBe(false)
     expect(isDirectSession({ source: 'web', sourceRef: 'cron:daily' })).toBe(false)
   })
+
+  it('treats a session tagged with the portal slug as direct (case-insensitive)', () => {
+    // ~30 child sessions were created with employee === portal slug; there is no
+    // org employee by that name, so they must bucket into the direct/COO group
+    // rather than spawn a phantom duplicate group.
+    expect(isDirectSession({ source: 'web', sourceRef: 'web:3', employee: 'jimbo' }, 'jimbo')).toBe(true)
+    expect(isDirectSession({ source: 'web', sourceRef: 'web:4', employee: 'Jimbo' }, 'jimbo')).toBe(true)
+    // a real org employee is never folded into direct
+    expect(isDirectSession({ source: 'web', sourceRef: 'web:5', employee: 'jinn' }, 'jimbo')).toBe(false)
+    // a portal-slug row is still a separate group when no slug is supplied
+    expect(isDirectSession({ source: 'web', sourceRef: 'web:6', employee: 'jimbo' })).toBe(false)
+  })
 })
 
 describe('chat sidebar background activity', () => {

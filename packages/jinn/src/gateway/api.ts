@@ -15,6 +15,7 @@ import {
   listRecentPerGroup,
   listSessionsForGroup,
   getSessionGroupCounts,
+  coercePortalEmployee,
   searchSessions,
   listChildSessions,
   getSession,
@@ -544,20 +545,23 @@ export async function handleApiRequest(
       }
       const group = url.searchParams.get("group");
       const rawLimit = url.searchParams.get("limit");
+      // Portal-slug-tagged rows fold into the direct group (defensive +
+      // retroactive backstop to the create-time coercion above).
+      const portalSlug = context.getConfig().portal?.portalName;
       if (group) {
         const limit = Math.max(1, parseInt(rawLimit || "50", 10) || 50);
         const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0", 10) || 0);
-        const page = listSessionsForGroup(group, limit, offset);
+        const page = listSessionsForGroup(group, limit, offset, portalSlug);
         return json(res, page.map((session) => serializeSession(session, context)));
       }
       if (rawLimit === "0") {
         const all = listSessions();
         return json(res, all.map((session) => serializeSession(session, context)));
       }
-      const sessions = listRecentPerGroup(SESSION_LIST_PER_GROUP);
+      const sessions = listRecentPerGroup(SESSION_LIST_PER_GROUP, portalSlug);
       return json(res, {
         sessions: sessions.map((session) => serializeSession(session, context)),
-        counts: getSessionGroupCounts(),
+        counts: getSessionGroupCounts(portalSlug),
         perGroup: SESSION_LIST_PER_GROUP,
       });
     }
@@ -870,7 +874,11 @@ export async function handleApiRequest(
         sessionKey,
         replyContext: { source: "web" },
         userId,
-        employee: body.employee,
+        // A session tagged with the portal name is a direct/COO session, not a
+        // pseudo-employee (there is no org employee by the portal's name).
+        // Coerce it to null so it buckets into the direct group rather than
+        // spawning a phantom group that renders with the portal's own title.
+        employee: coercePortalEmployee(body.employee, config.portal?.portalName),
         parentSessionId: body.parentSessionId,
         effortLevel: body.effortLevel,
         // Honor body.model so API clients can pin per-employee models

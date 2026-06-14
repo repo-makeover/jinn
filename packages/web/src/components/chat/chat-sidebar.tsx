@@ -202,8 +202,16 @@ function isCronSession(session: Pick<Session, "source" | "sourceRef">): boolean 
   return session.source === "cron" || (session.sourceRef || "").startsWith("cron:")
 }
 
-export function isDirectSession(session: Pick<Session, "source" | "sourceRef" | "employee">): boolean {
-  return !isCronSession(session) && !session.employee
+export function isDirectSession(
+  session: Pick<Session, "source" | "sourceRef" | "employee">,
+  portalSlug?: string,
+): boolean {
+  if (isCronSession(session)) return false
+  if (!session.employee) return true
+  // A session tagged with the portal slug is a direct/COO session, not a
+  // pseudo-employee — fold it into the direct group rather than a phantom one
+  // that renders with the portal's own title.
+  return !!portalSlug && session.employee.toLowerCase() === portalSlug
 }
 
 // Sources the sidebar renders (others, e.g. slack/telegram, are shown elsewhere).
@@ -873,7 +881,7 @@ export function ChatSidebar({
 
     for (const s of displayed) {
       if (isCronSession(s)) cronSessions.push(s)
-      else if (isDirectSession(s)) directSessions.push(s)
+      else if (isDirectSession(s, portalSlug)) directSessions.push(s)
       else {
         const emp = s.employee!
         if (!employeeSessionMap.has(emp)) employeeSessionMap.set(emp, [])
