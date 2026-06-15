@@ -92,7 +92,7 @@ export function NavList({
             className={cn(
               "flex h-10 items-center gap-3 rounded-[10px] px-3 text-[length:var(--text-subheadline)] transition-colors",
               isActive
-                ? "bg-[var(--accent-fill)] font-[var(--weight-semibold)] text-[var(--accent)]"
+                ? "bg-[var(--fill-secondary)] font-[var(--weight-semibold)] text-[var(--text-primary)]"
                 : "text-[var(--text-secondary)] hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)]",
             )}
           >
@@ -157,7 +157,7 @@ export function NavFooter() {
               className={cn(
                 "flex h-9 w-full items-center justify-between rounded-[10px] px-3 text-left text-[length:var(--text-footnote)] transition-colors",
                 inst.current
-                  ? "bg-[var(--accent-fill)] font-[var(--weight-semibold)] text-[var(--accent)]"
+                  ? "bg-[var(--fill-secondary)] font-[var(--weight-semibold)] text-[var(--text-primary)]"
                   : inst.running
                     ? "text-[var(--text-secondary)] hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)]"
                     : "cursor-default text-[var(--text-quaternary)]",

@@ -316,7 +316,9 @@ function getStatusDot(
     return { color: "var(--system-red)", label: "error", pulse: false }
   }
   if (hasBackgroundActivity(session)) return { color: "var(--system-orange)", label: "background work running", pulse: true }
-  if (forceUnread || !readSet.has(session.id)) return { color: "var(--accent)", label: "unread", pulse: false }
+  // Unread uses a NEUTRAL dot (not --accent): accent is user-set and may be red,
+  // which would read like an error. Calm grey stays visible without alarming.
+  if (forceUnread || !readSet.has(session.id)) return { color: "var(--text-secondary)", label: "unread", pulse: false }
   return null
 }
 
@@ -429,7 +431,7 @@ const SessionRow = React.memo(function SessionRow({
               ? "pl-11"
               : "pl-6",
             sessionIsActive
-              ? "border-l-[var(--accent)] bg-[var(--accent-fill)]"
+              ? "border-l-[var(--text-tertiary)] bg-[var(--fill-secondary)]"
               : "border-l-transparent hover:bg-[var(--fill-tertiary)]"
           )}
         >
@@ -447,7 +449,7 @@ const SessionRow = React.memo(function SessionRow({
               maxLength={200}
               defaultValue={displayTitle}
               className={cn(
-                "min-w-0 flex-1 truncate border-none bg-transparent text-xs outline-none ring-1 ring-[var(--accent)] rounded px-0.5",
+                "min-w-0 flex-1 truncate border-none bg-transparent text-xs outline-none ring-1 ring-[var(--text-quaternary)] rounded px-0.5",
                 sessionIsActive ? "font-semibold text-foreground" : "text-[var(--text-secondary)]"
               )}
               onFocus={(e) => e.target.select()}
@@ -483,7 +485,7 @@ const SessionRow = React.memo(function SessionRow({
             </span>
           )}
           {isPinned ? (
-            <Pin className="size-3 shrink-0 text-[var(--accent)] group-hover/session:lg:hidden group-has-[[data-state=open]]/session:lg:hidden" />
+            <Pin className="size-3 shrink-0 text-[var(--text-tertiary)] group-hover/session:lg:hidden group-has-[[data-state=open]]/session:lg:hidden" />
           ) : null}
           <span className="shrink-0 text-[10px] text-[var(--text-quaternary)] group-hover/session:lg:hidden group-has-[[data-state=open]]/session:lg:hidden">{sessionTime}</span>
           <DropdownMenu>
@@ -611,7 +613,7 @@ const FlatSessionRow = React.memo(function FlatSessionRow({
           className={cn(
             "group/flat relative flex w-full items-center gap-3 border-l-2 px-4 py-2 text-left transition-colors",
             isActive
-              ? "border-l-[var(--accent)] bg-[var(--accent-fill)]"
+              ? "border-l-[var(--text-tertiary)] bg-[var(--fill-secondary)]"
               : "border-l-transparent hover:bg-[var(--fill-tertiary)]"
           )}
         >
@@ -651,7 +653,7 @@ const FlatSessionRow = React.memo(function FlatSessionRow({
                   autoFocus
                   maxLength={200}
                   defaultValue={displayTitle}
-                  className="min-w-0 w-full truncate rounded border-none bg-transparent px-0.5 text-[11px] text-[var(--text-secondary)] outline-none ring-1 ring-[var(--accent)]"
+                  className="min-w-0 w-full truncate rounded border-none bg-transparent px-0.5 text-[11px] text-[var(--text-secondary)] outline-none ring-1 ring-[var(--text-quaternary)]"
                   onFocus={(e) => e.target.select()}
                   onClick={(e) => { e.stopPropagation(); e.preventDefault() }}
                   onKeyDown={(e) => {
@@ -672,7 +674,7 @@ const FlatSessionRow = React.memo(function FlatSessionRow({
           </button>
 
           {isPinned ? (
-            <Pin className="size-3 shrink-0 text-[var(--accent)] group-hover/flat:lg:hidden group-has-[[data-state=open]]/flat:lg:hidden" />
+            <Pin className="size-3 shrink-0 text-[var(--text-tertiary)] group-hover/flat:lg:hidden group-has-[[data-state=open]]/flat:lg:hidden" />
           ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -798,7 +800,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
             className={cn(
               "group/emp relative flex w-full items-center gap-3 border-l-2 px-4 py-3 text-left transition-colors",
               isActive
-                ? "border-l-[var(--accent)] bg-[var(--accent-fill)]"
+                ? "border-l-[var(--text-tertiary)] bg-[var(--fill-secondary)]"
                 : "border-l-transparent hover:bg-[var(--fill-tertiary)]"
             )}
           >
@@ -857,7 +859,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
                   </span>
                 ) : null}
                 {isPinned ? (
-                  <Pin className="size-3 shrink-0 text-[var(--accent)]" />
+                  <Pin className="size-3 shrink-0 text-[var(--text-tertiary)]" />
                 ) : null}
               </div>
             </div>
