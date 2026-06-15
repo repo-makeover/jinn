@@ -7,6 +7,7 @@ import type {
   EngineLimitWindow,
 } from "@/lib/api"
 import { PageLayout, ToolbarActions } from "@/components/page-layout"
+import { useBreadcrumbs } from "@/context/breadcrumb-context"
 import { Skeleton } from "@/components/ui/skeleton"
 
 const FEATURED_ENGINES = ["claude", "codex"]
@@ -152,6 +153,7 @@ function EngineCard({ engine }: { engine: EngineLimitEngineSnapshot }) {
 }
 
 export default function LimitsPage() {
+  useBreadcrumbs([{ label: 'Limits' }])
   const [data, setData] = useState<EngineLimitsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
