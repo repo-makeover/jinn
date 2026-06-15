@@ -18,6 +18,8 @@ import { CodexEngine } from "../engines/codex.js";
 import { CodexInteractiveEngine } from "../engines/codex-interactive.js";
 import { AntigravityEngine } from "../engines/antigravity.js";
 import { PiEngine } from "../engines/pi.js";
+import { GrokEngine } from "../engines/grok.js";
+import { GrokInteractiveEngine } from "../engines/grok-interactive.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { HookRegistry } from "./hook-registry.js";
 import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids } from "./gateway-info.js";
@@ -45,7 +47,18 @@ import { scanOrg } from "./org.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export function isAllowedCorsOrigin(origin: string | undefined): boolean {
+// Extract the lowercased hostname from a Host header (or any host[:port]
+// string), tolerating IPv6 brackets and missing ports. Returns null if unparseable.
+function hostnameOf(hostHeader: string | undefined): string | null {
+  if (!hostHeader) return null;
+  try {
+    return new URL(`http://${hostHeader}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export function isAllowedCorsOrigin(origin: string | undefined, requestHost?: string): boolean {
   if (!origin) return true;
   let parsed: URL;
   try {
@@ -55,13 +68,23 @@ export function isAllowedCorsOrigin(origin: string | undefined): boolean {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   const host = parsed.hostname.toLowerCase();
-  return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "[::1]";
+  if (host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "[::1]") {
+    return true;
+  }
+  // Same-origin requests: when the dashboard is served by this same gateway over
+  // Tailscale/LAN, the browser's Origin host matches the request's Host header.
+  // (Browsers attach Origin on same-origin POST/PUT/etc., so without this remote
+  // message sends 403 even though the page itself loaded fine.) Reflecting only an
+  // exact host match keeps arbitrary cross sites (evil.example) rejected.
+  const reqHostname = hostnameOf(requestHost);
+  if (reqHostname && reqHostname === host) return true;
+  return false;
 }
 
 function setCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const rawOrigin = req.headers.origin;
   const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  const allowed = isAllowedCorsOrigin(origin);
+  const allowed = isAllowedCorsOrigin(origin, req.headers.host);
   if (allowed && origin) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
@@ -257,12 +280,14 @@ export async function startGateway(
   // the not-yet-constructed managers (only invoked later, on adopt/cleanup).
   let codexLifecycle: PtyLifecycleManager | undefined;
   let antigravityLifecycle: PtyLifecycleManager | undefined;
+  let grokLifecycle: PtyLifecycleManager | undefined;
   function refreshPtyPids(): void {
     try {
       const pids = [
         ...claudeLifecycle.livePids(),
         ...(codexLifecycle ? codexLifecycle.livePids() : []),
         ...(antigravityLifecycle ? antigravityLifecycle.livePids() : []),
+        ...(grokLifecycle ? grokLifecycle.livePids() : []),
       ];
       updateGatewayPtyPids(GATEWAY_INFO_FILE, pids);
     } catch { /* best effort */ }
@@ -297,10 +322,17 @@ export async function startGateway(
     onCleanup: () => refreshPtyPids(),
   });
   const antigravityEngine = new AntigravityEngine(antigravityLifecycle);
+  grokLifecycle = new PtyLifecycleManager({
+    maxLivePtys: claudeCfg.maxLivePtys!,
+    onAdopt: () => refreshPtyPids(),
+    onCleanup: () => refreshPtyPids(),
+  });
+  const grokInteractiveEngine = new GrokInteractiveEngine(grokLifecycle);
   const piEngine = new PiEngine();
-  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), pi");
+  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), pi");
 
   const codexEngine = new CodexEngine();
+  const grokEngine = new GrokEngine();
   const engines = new Map<string, Engine>();
   // Claude WORK TURNS (chat, employees, cron, child sessions) run on the
   // interactive PTY engine → cc_entrypoint=cli, covered by the Max subscription
@@ -309,6 +341,7 @@ export async function startGateway(
   logger.info("Claude work turns: INTERACTIVE PTY (cc_entrypoint=cli, Max-subsidized)");
   engines.set("codex", codexEngine);
   engines.set("antigravity", antigravityEngine);
+  engines.set("grok", grokEngine);
   engines.set("pi", piEngine);
 
   // Discover Pi's local models in the background (pi --list-models). Fire-and-forget:
@@ -321,6 +354,7 @@ export async function startGateway(
     claude: interactiveClaudeEngine,
     codex: codexInteractiveEngine,
     antigravity: antigravityEngine,
+    grok: grokInteractiveEngine,
   };
 
   // Derive connector names from config
@@ -1030,6 +1064,8 @@ export async function startGateway(
     codexEngine.killAll();
     codexInteractiveEngine.killAll();
     antigravityEngine.killAll();
+    grokEngine.killAll();
+    grokInteractiveEngine.killAll();
     piEngine.killAll();
 
     // Dispose the PTY lifecycle manager.
