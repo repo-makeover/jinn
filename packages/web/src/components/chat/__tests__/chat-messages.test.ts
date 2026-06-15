@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { isFilePath, parseFenceLang } from '../chat-messages'
+import {
+  isFilePath,
+  parseFenceLang,
+  shouldCollapse,
+  USER_COLLAPSE_PX,
+  USER_COLLAPSE_SLACK,
+} from '../chat-messages'
 
 // Pins the file-path detection behaviour so the shared FILE_PATH_CORE regex
 // (used both for isFilePath and the inline-formatter's bare-path alternative)
@@ -45,5 +51,30 @@ describe('parseFenceLang', () => {
   it('returns empty string for a bare fence', () => {
     expect(parseFenceLang('```')).toBe('')
     expect(parseFenceLang('```   ')).toBe('')
+  })
+})
+
+// Pins the auto-collapse decision for long user messages. A bubble only
+// collapses once its rendered height clears the threshold PLUS a slack margin,
+// so the "Show more" control never appears just to hide a clipped sliver.
+describe('shouldCollapse', () => {
+  it('does not collapse short messages', () => {
+    expect(shouldCollapse(40)).toBe(false)
+    expect(shouldCollapse(USER_COLLAPSE_PX)).toBe(false)
+  })
+
+  it('does not collapse when only a sliver exceeds the threshold (within slack)', () => {
+    expect(shouldCollapse(USER_COLLAPSE_PX + USER_COLLAPSE_SLACK)).toBe(false)
+    expect(shouldCollapse(USER_COLLAPSE_PX + 1)).toBe(false)
+  })
+
+  it('collapses once meaningfully past the threshold + slack', () => {
+    expect(shouldCollapse(USER_COLLAPSE_PX + USER_COLLAPSE_SLACK + 1)).toBe(true)
+    expect(shouldCollapse(900)).toBe(true)
+  })
+
+  it('honours custom threshold/slack overrides', () => {
+    expect(shouldCollapse(120, 100, 10)).toBe(true)
+    expect(shouldCollapse(105, 100, 10)).toBe(false)
   })
 })
