@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useState, type ComponentType, type ReactNode } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { Menu, Sun, Moon, Palette, ArrowLeftRight } from "lucide-react"
+import { Menu, Sun, Moon, Palette, ArrowLeftRight, PanelLeft } from "lucide-react"
 import { useTheme } from "@/routes/providers"
 import { THEMES, type ThemeId } from "@/lib/themes"
 import { NAV_ITEMS } from "@/lib/nav"
@@ -185,6 +185,132 @@ export function NavFooter() {
       </button>
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// NavRibbon — the chat route's permanent slim icon rail (~56px). Always mounted
+// (desktop only); the toggle at its top folds/unfolds the 280px chat list, so
+// nav never leaves the rail. Icons-only at rest with tooltips; on hover/focus
+// the rail widens to reveal labels (an overlay — it floats over the list rather
+// than reflowing it). Active item = soft --fill-secondary, NEVER --accent.
+// ---------------------------------------------------------------------------
+
+/** One ribbon entry: a 44px icon square at rest that grows to a full labeled row
+ *  when the rail expands. Icon x-position is identical in both states (the label
+ *  area is simply clipped at rest), so expanding reads as the rail breathing. */
+function RibbonRow({
+  Icon,
+  label,
+  isActive,
+  href,
+  onClick,
+}: {
+  Icon: ComponentType<{ size?: number | string; className?: string }>
+  label: string
+  isActive?: boolean
+  href?: string
+  onClick?: () => void
+}) {
+  const cls = cn(
+    "flex h-11 w-11 shrink-0 items-center overflow-hidden rounded-[12px] transition-[width,color,background-color] duration-200 [transition-timing-function:var(--ease-smooth)] motion-reduce:transition-none",
+    "group-hover/ribbon:w-[224px] group-focus-within/ribbon:w-[224px]",
+    isActive
+      ? "bg-[var(--fill-secondary)] text-[var(--text-primary)]"
+      : "text-[var(--text-secondary)] hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)]",
+  )
+  const inner = (
+    <>
+      <span className="flex size-11 shrink-0 items-center justify-center">
+        <Icon size={20} className="shrink-0" />
+      </span>
+      <span className="truncate pr-3 text-[length:var(--text-subheadline)] font-[var(--weight-medium)] opacity-0 transition-opacity duration-150 group-hover/ribbon:opacity-100 group-focus-within/ribbon:opacity-100 motion-reduce:transition-none">
+        {label}
+      </span>
+    </>
+  )
+  if (href) {
+    return (
+      <Link
+        to={href}
+        onClick={onClick}
+        aria-label={label}
+        aria-current={isActive ? "page" : undefined}
+        title={label}
+        className={cls}
+      >
+        {inner}
+      </Link>
+    )
+  }
+  return (
+    <button type="button" onClick={onClick} aria-label={label} title={label} className={cls}>
+      {inner}
+    </button>
+  )
+}
+
+/** The chat ribbon. `listOpen` + `onToggleList` drive the chat-list fold. */
+export function NavRibbon({
+  listOpen,
+  onToggleList,
+}: {
+  listOpen: boolean
+  onToggleList: () => void
+}) {
+  const pathname = useLocation().pathname
+  const { theme, setTheme } = useTheme()
+  const cycleTheme = () => {
+    const ids = THEMES.map((t) => t.id)
+    setTheme(ids[(ids.indexOf(theme) + 1) % ids.length])
+  }
+  return (
+    // The placeholder reserves the collapsed width (w-14 = 56px) in the flex row;
+    // the real rail floats above it and expands over the list on hover/focus.
+    <div className="relative hidden h-full w-14 shrink-0 lg:block">
+      <div
+        className="group/ribbon absolute inset-y-0 left-0 z-30 flex w-14 flex-col overflow-hidden bg-[var(--sidebar-bg)] py-2.5 transition-[width,background-color,box-shadow] duration-200 [transition-timing-function:var(--ease-smooth)] hover:w-[236px] hover:bg-[var(--bg-secondary)] hover:shadow-[var(--shadow-overlay)] focus-within:w-[236px] focus-within:bg-[var(--bg-secondary)] focus-within:shadow-[var(--shadow-overlay)] motion-reduce:transition-none"
+      >
+        {/* Toggle — same frosted pill material as the header pills, pinned to the
+            rail top so it is always in-rail and never floats over the thread. */}
+        <div className="px-1.5">
+          <span className={cn(PILL_CLASS, "w-fit")}>
+            <PillButton
+              onClick={onToggleList}
+              title={listOpen ? "Hide chats" : "Show chats"}
+              ariaLabel={listOpen ? "Hide chats" : "Show chats"}
+              ariaExpanded={listOpen}
+            >
+              <PanelLeft size={18} />
+            </PillButton>
+          </span>
+        </div>
+
+        {/* Nav icons — icon-only at rest, labeled on hover/focus. */}
+        <nav aria-label="Primary" className="mt-2 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1.5">
+          {NAV_ITEMS.map((item) => (
+            <RibbonRow
+              key={item.href}
+              Icon={item.icon}
+              label={item.label}
+              href={item.href}
+              isActive={isNavItemActive(item.href, pathname)}
+            />
+          ))}
+        </nav>
+
+        {/* Footer — theme toggle, pinned to the bottom. */}
+        <div className="px-1.5 pt-1">
+          <RibbonRow Icon={themeGlyph(theme)} label={`Theme: ${theme}`} onClick={cycleTheme} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function themeGlyph(theme: ThemeId): ComponentType<{ size?: number | string; className?: string }> {
+  if (theme === "light") return Sun
+  if (theme === "dark") return Moon
+  return Palette
 }
 
 /** Frosted nav popover anchored under the left pill — non-chat pages reach the

@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, startTransition } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, Clock3, Copy, EllipsisVertical, Menu, Pencil, Pin, Plus, Search, Trash2, X } from "lucide-react"
+import { ChevronDown, Clock3, Copy, EllipsisVertical, Pencil, Pin, Plus, Search, Trash2, X } from "lucide-react"
 import { api, type BackgroundActivity, type Employee, type SessionsResponse } from "@/lib/api"
 import { useOrg } from "@/hooks/use-employees"
 import { EmployeeAvatar } from "@/components/ui/employee-avatar"
@@ -75,8 +75,6 @@ interface ChatSidebarProps {
   onOrderComputed?: (order: SidebarOrder) => void
   /** Start a new chat with a session-less roster employee (contactable list). */
   onContactEmployee?: (name: string) => void
-  /** Open the global-nav drawer (NAV_ITEMS) from the chat-list header. */
-  onOpenNav?: () => void
 }
 
 interface FlatItem {
@@ -907,7 +905,6 @@ export function ChatSidebar({
   onEmployeeSessionsAvailable,
   onOrderComputed,
   onContactEmployee,
-  onOpenNav,
 }: ChatSidebarProps) {
   const { settings } = useSettings()
   const portalName = settings.portalName ?? "Jinn"
@@ -1651,18 +1648,6 @@ export function ChatSidebar({
             )}
             aria-hidden={searchOpen}
           >
-            {/* Mobile-only nav: now swaps the left surface to the in-surface nav. */}
-            {onOpenNav && (
-              <button
-                onClick={onOpenNav}
-                title="Menu"
-                aria-label="Open navigation"
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--fill-secondary)] hover:text-foreground lg:hidden"
-              >
-                <Menu className="size-[18px]" />
-              </button>
-            )}
-
             {/* Focused (default) shows only the operator's own top-level chats;
                 All reveals delegated/automated sessions too. Persisted; search
                 spans everything regardless. */}
@@ -1742,7 +1727,7 @@ export function ChatSidebar({
           className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3"
           style={{ background: "linear-gradient(to bottom, var(--sidebar-bg), transparent)" }}
         />
-        <div ref={scrollContainerRef} className="h-full overflow-y-auto">
+        <div ref={scrollContainerRef} className="h-full overflow-y-auto pb-[calc(49px+var(--safe-bottom))] lg:pb-0">
         {loading ? (
           <div className="px-4 py-8 text-center text-xs text-[var(--text-quaternary)]">
             Loading sessions...

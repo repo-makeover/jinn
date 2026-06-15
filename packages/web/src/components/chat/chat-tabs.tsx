@@ -1,91 +1,98 @@
 
 import { type ReactNode } from 'react'
-import { Plus, Menu } from 'lucide-react'
+import { ChevronLeft, SquarePen } from 'lucide-react'
 import { type ChatTab } from '@/hooks/use-chat-tabs'
 import { cn } from '@/lib/utils'
-import { EmployeeAvatar } from '@/components/ui/employee-avatar'
 // Frosted pill primitives now live in the shared cross-page pill system.
 import { PILL_CLASS, PillButton } from '@/components/pill-nav'
 
 export interface ChatHeaderPillsProps {
-  /** Left pill — nav toggle: swaps the left surface (chat list ⇄ nav) on
-   *  desktop, returns to the chat list on mobile. */
-  onToggleSidebar?: () => void
-  /** Employee name (used as the avatar slug fallback). */
-  employeeName?: string
-  /** Avatar slug — the left pill shows the avatar next to the title. */
-  avatarName?: string
-  /** Page title shown in the left pill (conversation title / "New chat"). */
+  /** Conversation title — slim inline title on desktop, centered on the mobile
+   *  thread nav bar. */
   title?: string
-  /** True when the left surface currently shows nav (styles the toggle active). */
-  navActive?: boolean
-  /** Hide both pills on mobile (e.g. over the chat-list view, which has its own header). */
+  /** Hide the thread chrome on mobile (e.g. over the chat-list view, which is the
+   *  body and has its own header + the bottom tab bar). */
   hideOnMobile?: boolean
 
-  /** Right pill. Tab state is retained for callers, but the in-header tab
-   *  switcher UI was removed — tabs are managed elsewhere. */
-  tabs: ChatTab[]
-  activeIndex: number
-  onSwitch: (index: number) => void
-  onClose: (index: number) => void
+  /** Mobile-only: pop back from the thread to the chat list. */
+  onBack?: () => void
+  /** Start a new chat (compose). */
   onNew: () => void
   /** Existing "more" (…) menu element, rendered as the last pill control. */
   moreMenu?: ReactNode
+
+  /** Retained for callers; the in-header tab switcher UI was removed. */
+  tabs?: ChatTab[]
+  activeIndex?: number
+  onSwitch?: (index: number) => void
+  onClose?: (index: number) => void
 }
 
+// The chat thread chrome. The old left toggle pill is gone — the sidebar toggle
+// now lives at the top of the nav ribbon, and the conversation title relocates to
+// a slim inline title (desktop) / a centered nav-bar title (mobile thread). The
+// right actions pill (compose · more) stays.
 export function ChatHeaderPills({
-  onToggleSidebar,
-  employeeName,
-  avatarName,
   title,
-  navActive,
   hideOnMobile,
+  onBack,
   onNew,
   moreMenu,
 }: ChatHeaderPillsProps) {
-  const hideCls = hideOnMobile ? "hidden lg:block" : ""
   return (
     <>
-      {/* LEFT pill — nav toggle (swaps the left surface list⇄nav) + employee
-          avatar + conversation title.
-          D2: top/left respect the safe-area on notched devices (Dynamic Island),
-          composing max(inset,12px) at the call site; desktop stays at the tight 4. */}
-      <div className={cn("pointer-events-none absolute left-[max(var(--safe-left),12px)] top-[max(var(--safe-top),12px)] z-10 lg:left-4 lg:top-4", hideCls)}>
-        <div className={PILL_CLASS}>
-          {onToggleSidebar && (
-            <PillButton
-              onClick={onToggleSidebar}
-              title="Menu"
-              ariaLabel="Toggle navigation"
-              ariaExpanded={navActive}
-              className={navActive ? "bg-[var(--fill-secondary)] text-foreground" : undefined}
-            >
-              <Menu size={17} />
-            </PillButton>
-          )}
-          {/* D5: avatar is purely identity, not a control — de-emphasize so it
-              reads as non-interactive next to the live nav toggle (no hover/cursor
-              affordance, slightly recessed, unselectable). */}
-          <span className="flex size-7 select-none items-center justify-center pl-0.5 opacity-80">
-            <EmployeeAvatar name={avatarName || employeeName || ''} size={24} />
+      {/* DESKTOP — slim inline thread title (top-left, plain text, no pill). */}
+      <div className="pointer-events-none absolute left-6 top-4 z-10 hidden h-9 max-w-[42vw] items-center lg:flex xl:max-w-[48vw]">
+        {title && (
+          <span className="truncate text-[length:var(--text-title3)] font-[var(--weight-semibold)] tracking-[-0.01em] text-[var(--text-primary)]">
+            {title}
           </span>
-          {title && (
-            <span className="max-w-[42vw] select-none truncate pl-0.5 pr-2.5 text-[length:var(--text-subheadline)] font-[var(--weight-semibold)] text-[var(--text-primary)] lg:max-w-[28vw]">
-              {title}
-            </span>
-          )}
-        </div>
+        )}
       </div>
 
-      {/* RIGHT pill — new · more */}
-      <div className={cn("pointer-events-none absolute right-[max(var(--safe-right),12px)] top-[max(var(--safe-top),12px)] z-10 lg:right-4 lg:top-4", hideCls)}>
+      {/* DESKTOP — right actions pill: compose · more. */}
+      <div className="pointer-events-none absolute right-4 top-4 z-10 hidden lg:block">
         <div className={PILL_CLASS}>
-          <PillButton onClick={onNew} title="New Chat (N)" ariaLabel="New chat">
-            <Plus size={18} strokeWidth={2.4} />
+          <PillButton onClick={onNew} title="New chat (N)" ariaLabel="New chat">
+            <SquarePen size={18} />
           </PillButton>
           {moreMenu}
         </div>
       </div>
+
+      {/* MOBILE — thread nav bar: back · centered title · compose · more. Hidden
+          over the list (the tab bar + list header own that screen). Frosted, no
+          hairline at rest; content scrolls under it via the thread's top scrim. */}
+      {!hideOnMobile && (
+        <div
+          className="absolute inset-x-0 top-0 z-10 lg:hidden"
+          style={{ paddingTop: 'max(var(--safe-top), 0px)' }}
+        >
+          <div className="relative flex h-12 items-center gap-1 bg-[var(--material-thick)] px-1.5 [backdrop-filter:blur(20px)_saturate(1.3)] [-webkit-backdrop-filter:blur(20px)_saturate(1.3)]">
+            <button
+              onClick={onBack}
+              aria-label="Back to chats"
+              className="inline-flex h-9 shrink-0 items-center gap-0.5 rounded-full pl-1 pr-2.5 text-[length:var(--text-body)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)] active:bg-[var(--fill-secondary)]"
+            >
+              <ChevronLeft size={22} className="shrink-0" />
+              Chats
+            </button>
+            <span
+              className={cn(
+                "pointer-events-none absolute left-1/2 max-w-[48vw] -translate-x-1/2 truncate text-center text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]",
+              )}
+            >
+              {title}
+            </span>
+            <div className="ml-auto flex shrink-0 items-center">
+              <PillButton onClick={onNew} title="New chat (N)" ariaLabel="New chat">
+                <SquarePen size={18} />
+              </PillButton>
+              {moreMenu}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
