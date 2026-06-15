@@ -4,46 +4,8 @@ import { Plus, Menu } from 'lucide-react'
 import { type ChatTab } from '@/hooks/use-chat-tabs'
 import { cn } from '@/lib/utils'
 import { EmployeeAvatar } from '@/components/ui/employee-avatar'
-
-// ---- Frosted pill primitives (mockup _shared.css `.pill` recipe) ----
-// backdrop-blur(20px) saturate(1.3) over a theme-aware translucent material,
-// 0.5px theme-aware border, overlay shadow, full radius. The material + border
-// flip with the active theme via --pill-bg / --pill-border (globals.css).
-export const PILL_CLASS =
-  "pointer-events-auto inline-flex items-center gap-0.5 rounded-full border-[0.5px] border-[var(--pill-border)] " +
-  "bg-[var(--pill-bg)] p-1 shadow-[var(--shadow-overlay)] " +
-  "[backdrop-filter:blur(20px)_saturate(1.3)] [-webkit-backdrop-filter:blur(20px)_saturate(1.3)]"
-
-export function PillButton({
-  onClick,
-  title,
-  ariaLabel,
-  className,
-  children,
-}: {
-  onClick?: () => void
-  title?: string
-  ariaLabel?: string
-  className?: string
-  children: ReactNode
-}) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      aria-label={ariaLabel}
-      className={cn(
-        // D1: 36px tap target at base (Apple HIG floor); tighten to 32px on desktop.
-        "inline-flex size-9 lg:size-8 shrink-0 items-center justify-center rounded-full transition-colors",
-        "text-[var(--text-secondary)]",
-        "hover:bg-[var(--fill-secondary)] hover:text-foreground",
-        className,
-      )}
-    >
-      {children}
-    </button>
-  )
-}
+// Frosted pill primitives now live in the shared cross-page pill system.
+import { PILL_CLASS, PillButton } from '@/components/pill-nav'
 
 export interface ChatHeaderPillsProps {
   /** Left pill */
