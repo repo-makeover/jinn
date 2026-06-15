@@ -20,4 +20,23 @@ describe("CORS origin policy", () => {
     expect(isAllowedCorsOrigin("file://localhost/tmp/x.html")).toBe(false);
     expect(isAllowedCorsOrigin("not a url")).toBe(false);
   });
+
+  it("allows same-origin requests where the Origin host matches the request Host", () => {
+    // Dashboard served by this same gateway over Tailscale/LAN: the browser's
+    // Origin host equals the request's Host header, so it is genuinely same-origin.
+    expect(
+      isAllowedCorsOrigin(
+        "https://jimmys-mac-mini.tail0b18b3.ts.net",
+        "jimmys-mac-mini.tail0b18b3.ts.net",
+      ),
+    ).toBe(true);
+    // LAN access by IP with an explicit port on the Host header.
+    expect(isAllowedCorsOrigin("http://192.168.1.50:7777", "192.168.1.50:7777")).toBe(true);
+  });
+
+  it("still rejects cross-origin requests even when a Host header is present", () => {
+    expect(
+      isAllowedCorsOrigin("https://evil.example", "jimmys-mac-mini.tail0b18b3.ts.net"),
+    ).toBe(false);
+  });
 });
