@@ -3,6 +3,7 @@ import { lazy, Suspense } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { useSettings } from "@/routes/settings-provider"
 import { PillNav } from "./pill-nav"
+import { MobileTabBar } from "./chat/mobile-tab-bar"
 import { X } from "lucide-react"
 import { NAV_ITEMS } from "@/lib/nav"
 import { isNavItemActive } from "./pill-nav"
@@ -107,10 +108,16 @@ export function PageLayout({ children, headerActions, chromeless }: { children: 
             "flex-1 overflow-hidden",
             // Clear the floating pills so content doesn't start under them.
             !chromeless && "pt-[calc(max(var(--safe-top),12px)+52px)]",
+            // Clear the mobile bottom tab bar (mobile only; the bar is the
+            // persistent cross-route nav). Desktop has no bar.
+            !chromeless && "pb-[calc(49px+var(--safe-bottom))] lg:pb-0",
           )}
         >
           {children}
         </div>
+        {/* Persistent mobile nav — same curated tab bar across every standard
+            page so nav never disappears (Chat draws its own on the list screen). */}
+        {!chromeless && <MobileTabBar />}
       </main>
       <Suspense fallback={null}>
         <LiveStreamWidget />

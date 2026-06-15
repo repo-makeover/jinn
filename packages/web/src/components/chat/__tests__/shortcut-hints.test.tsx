@@ -84,9 +84,12 @@ describe('ChatHeaderPills shortcut hints', () => {
 
   it('renders new chat button with shortcut hint in title', () => {
     render(<ChatHeaderPills {...defaultProps} />)
-    // The accent + button should show "N" shortcut in its title
-    const newBtn = screen.getByTitle(/\(N\)/i)
-    expect(newBtn).toBeTruthy()
+    // The compose (new chat) button shows the "(N)" shortcut in its title. It is
+    // rendered in both the desktop right pill and the mobile thread nav bar (CSS
+    // hides one per breakpoint), so assert at least one and that all carry the hint.
+    const newBtns = screen.getAllByTitle(/\(N\)/i)
+    expect(newBtns.length).toBeGreaterThan(0)
+    expect(newBtns.every((b) => b.getAttribute('aria-label') === 'New chat')).toBe(true)
   })
 })
 
