@@ -131,9 +131,9 @@ describe('ChatEmployeePicker', () => {
     expect(devRow!.getAttribute('aria-selected')).toBe('true')
   })
 
-  // --- Search / filter ---
+  // --- Search reveal / collapse (picker, not composer) ---
 
-  it('has a search input that filters employees by name', () => {
+  it('hides the search field by default — shows a magnifier button instead', () => {
     render(
       <ChatEmployeePicker
         employees={mockEmployees}
@@ -142,8 +142,92 @@ describe('ChatEmployeePicker', () => {
         portalName="Jinn"
       />
     )
-    const searchInput = screen.getByPlaceholderText(/search/i)
-    expect(searchInput).toBeDefined()
+    // No prominent text input at rest (so it can't be mistaken for the composer)
+    expect(screen.queryByPlaceholderText(/filter|search/i)).toBeNull()
+    // A quiet magnifier action button is present
+    expect(screen.getByRole('button', { name: /search employees/i })).toBeDefined()
+  })
+
+  it('reveals the search field when the magnifier button is clicked', () => {
+    render(
+      <ChatEmployeePicker
+        employees={mockEmployees}
+        selectedEmployee={null}
+        onSelect={onChange}
+        portalName="Jinn"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /search employees/i }))
+    expect(screen.getByPlaceholderText(/filter|search/i)).toBeDefined()
+  })
+
+  it('auto-reveals the search field seeded with the typed character', () => {
+    render(
+      <ChatEmployeePicker
+        employees={mockEmployees}
+        selectedEmployee={null}
+        onSelect={onChange}
+        portalName="Jinn"
+      />
+    )
+    const listbox = screen.getByRole('listbox')
+    // Power-user type-to-filter: start typing on the clean list
+    fireEvent.keyDown(listbox, { key: 'd' })
+    const searchInput = screen.getByPlaceholderText(/filter|search/i) as HTMLInputElement
+    expect(searchInput.value).toBe('d')
+    // And it actually filters
+    fireEvent.change(searchInput, { target: { value: 'developer' } })
+    expect(screen.getByText('Lead Developer')).toBeDefined()
+    expect(screen.queryByText('Content Lead')).toBeNull()
+  })
+
+  it('opens the search field on "/" without seeding a slash', () => {
+    render(
+      <ChatEmployeePicker
+        employees={mockEmployees}
+        selectedEmployee={null}
+        onSelect={onChange}
+        portalName="Jinn"
+      />
+    )
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: '/' })
+    const searchInput = screen.getByPlaceholderText(/filter|search/i) as HTMLInputElement
+    expect(searchInput.value).toBe('')
+  })
+
+  it('collapses the search field back to the clean list on Escape', () => {
+    render(
+      <ChatEmployeePicker
+        employees={mockEmployees}
+        selectedEmployee={null}
+        onSelect={onChange}
+        portalName="Jinn"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /search employees/i }))
+    const searchInput = screen.getByPlaceholderText(/filter|search/i)
+    fireEvent.change(searchInput, { target: { value: 'demo' } })
+    fireEvent.keyDown(searchInput, { key: 'Escape' })
+
+    // Field gone, magnifier back, full list restored
+    expect(screen.queryByPlaceholderText(/filter|search/i)).toBeNull()
+    expect(screen.getByRole('button', { name: /search employees/i })).toBeDefined()
+    expect(screen.getByText('Lead Developer')).toBeDefined()
+  })
+
+  // --- Search / filter ---
+
+  it('filters employees by name once the search is revealed', () => {
+    render(
+      <ChatEmployeePicker
+        employees={mockEmployees}
+        selectedEmployee={null}
+        onSelect={onChange}
+        portalName="Jinn"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /search employees/i }))
+    const searchInput = screen.getByPlaceholderText(/filter|search/i)
 
     fireEvent.change(searchInput, { target: { value: 'developer' } })
     // Only Lead Developer should be visible
@@ -161,7 +245,8 @@ describe('ChatEmployeePicker', () => {
         portalName="Jinn"
       />
     )
-    const searchInput = screen.getByPlaceholderText(/search/i)
+    fireEvent.click(screen.getByRole('button', { name: /search employees/i }))
+    const searchInput = screen.getByPlaceholderText(/filter|search/i)
     fireEvent.change(searchInput, { target: { value: 'content' } })
 
     // Both content employees should be visible
@@ -180,7 +265,8 @@ describe('ChatEmployeePicker', () => {
         portalName="Jinn"
       />
     )
-    const searchInput = screen.getByPlaceholderText(/search/i)
+    fireEvent.click(screen.getByRole('button', { name: /search employees/i }))
+    const searchInput = screen.getByPlaceholderText(/filter|search/i)
     fireEvent.change(searchInput, { target: { value: 'zzzzzzz' } })
 
     expect(screen.getByText(/no employees/i)).toBeDefined()
@@ -195,7 +281,8 @@ describe('ChatEmployeePicker', () => {
         portalName="Jinn"
       />
     )
-    const searchInput = screen.getByPlaceholderText(/search/i)
+    fireEvent.click(screen.getByRole('button', { name: /search employees/i }))
+    const searchInput = screen.getByPlaceholderText(/filter|search/i)
     fireEvent.change(searchInput, { target: { value: 'developer' } })
 
     // COO always visible
@@ -266,6 +353,24 @@ describe('ChatEmployeePicker', () => {
     // Arrow down once from COO → first employee
     fireEvent.keyDown(listbox, { key: 'ArrowDown' })
     fireEvent.keyDown(listbox, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith('lead-developer')
+  })
+
+  it('keeps arrow/enter navigation working while the search field is open', () => {
+    render(
+      <ChatEmployeePicker
+        employees={mockEmployees}
+        selectedEmployee={null}
+        onSelect={onChange}
+        portalName="Jinn"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /search employees/i }))
+    const searchInput = screen.getByPlaceholderText(/filter|search/i)
+
+    // Arrow down once from COO → first employee, Enter selects — all from the field
+    fireEvent.keyDown(searchInput, { key: 'ArrowDown' })
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
     expect(onChange).toHaveBeenCalledWith('lead-developer')
   })
 
