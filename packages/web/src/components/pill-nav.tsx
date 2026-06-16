@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from "react"
+import { useEffect, useState, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { Menu, Sun, Moon, Palette, ArrowLeftRight, PanelLeft } from "lucide-react"
 import { useTheme } from "@/routes/providers"
@@ -226,7 +226,9 @@ function RibbonRow({
   label: string
   isActive?: boolean
   href?: string
-  onClick?: () => void
+  // Receives the click event so a link row can preventDefault a no-op
+  // same-route navigation (used by the Chat icon to reveal the list instead).
+  onClick?: (e: ReactMouseEvent) => void
 }) {
   const cls = cn(
     "group/row relative flex size-11 shrink-0 items-center justify-center rounded-[12px] transition-colors duration-150 [transition-timing-function:var(--ease-smooth)]",
@@ -285,6 +287,19 @@ export function NavRibbon({
     const ids = THEMES.map((t) => t.id)
     setTheme(ids[(ids.indexOf(theme) + 1) % ids.length])
   }
+  // The Chat icon is OPEN-ONLY. While already on the chat route ("/") with the
+  // list collapsed, a plain click reveals the list instead of firing a dead
+  // same-route navigation. Not on "/" → the Link navigates as before; list
+  // already open → harmless no-op. Modified clicks (new tab/window) fall through
+  // to the Link untouched. Closing the list stays the top toggle's job, so one
+  // control never means both open and close.
+  const onChatIconClick = (e: ReactMouseEvent) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    if (pathname === "/" && !listOpen) {
+      e.preventDefault()
+      onToggleList()
+    }
+  }
   return (
     // The placeholder reserves the rail width (w-14 = 56px) in the flex row; the
     // real rail floats above it so the per-icon label pills can escape to the
@@ -337,6 +352,7 @@ export function NavRibbon({
             label={item.label}
             href={item.href}
             isActive={isNavItemActive(item.href, pathname)}
+            onClick={item.href === "/" ? onChatIconClick : undefined}
           />
         ))}
 

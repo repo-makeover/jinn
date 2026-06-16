@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, fireEvent } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { NavRibbon } from "../pill-nav"
 import { NAV_ITEMS } from "@/lib/nav"
@@ -42,5 +42,46 @@ describe("NavRibbon", () => {
     expect(active.className).not.toContain("--accent")
     // A non-active item carries no aria-current.
     expect(screen.getByLabelText("Cron").getAttribute("aria-current")).toBeNull()
+  })
+
+  // Chat icon is OPEN-ONLY: reveals a collapsed list while already on /chat,
+  // navigates otherwise, never closes.
+  describe("Chat icon open-only behavior", () => {
+    function renderWith(opts: { listOpen: boolean; path: string; onToggleList: () => void }) {
+      render(
+        <MemoryRouter initialEntries={[opts.path]}>
+          <NavRibbon listOpen={opts.listOpen} onToggleList={opts.onToggleList} />
+        </MemoryRouter>,
+      )
+      return screen.getByLabelText("Chat")
+    }
+
+    it("reveals the list when on /chat with the list hidden", () => {
+      const onToggleList = vi.fn()
+      const chat = renderWith({ listOpen: false, path: "/", onToggleList })
+      fireEvent.click(chat)
+      expect(onToggleList).toHaveBeenCalledTimes(1)
+    })
+
+    it("is a no-op when the list is already open on /chat", () => {
+      const onToggleList = vi.fn()
+      const chat = renderWith({ listOpen: true, path: "/", onToggleList })
+      fireEvent.click(chat)
+      expect(onToggleList).not.toHaveBeenCalled()
+    })
+
+    it("navigates (never toggles) when not on /chat", () => {
+      const onToggleList = vi.fn()
+      const chat = renderWith({ listOpen: false, path: "/org", onToggleList })
+      fireEvent.click(chat)
+      expect(onToggleList).not.toHaveBeenCalled()
+    })
+
+    it("does not hijack modified clicks (new tab / window)", () => {
+      const onToggleList = vi.fn()
+      const chat = renderWith({ listOpen: false, path: "/", onToggleList })
+      fireEvent.click(chat, { metaKey: true })
+      expect(onToggleList).not.toHaveBeenCalled()
+    })
   })
 })
