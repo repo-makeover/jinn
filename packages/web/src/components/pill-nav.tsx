@@ -268,17 +268,21 @@ function RibbonRow({
   )
 }
 
-/** The chat ribbon. `listOpen` + `onToggleList` drive the chat-list fold. */
+/** The slim icon nav rail. On the chat route `listOpen` + `onToggleList` drive
+ *  the chat-list fold (top slot = logo↔toggle morph). Mounted globally elsewhere
+ *  with NEITHER prop — then the top slot is a brand mark linking home, with no
+ *  fold/toggle (there is no list to fold). */
 export function NavRibbon({
-  listOpen,
+  listOpen = false,
   onToggleList,
 }: {
-  listOpen: boolean
-  onToggleList: () => void
+  listOpen?: boolean
+  onToggleList?: () => void
 }) {
   const pathname = useLocation().pathname
   const { theme, setTheme } = useTheme()
   const { settings } = useSettings()
+  const portalName = settings.portalName ?? "Jinn"
   // Default brand mark carries U+FE0F so the genie always renders as a COLOR
   // emoji (never a text-presentation glyph that would inherit the slot's text
   // color and look faded — see the brand-mark color note below).
@@ -295,7 +299,7 @@ export function NavRibbon({
   // control never means both open and close.
   const onChatIconClick = (e: ReactMouseEvent) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-    if (pathname === "/" && !listOpen) {
+    if (onToggleList && pathname === "/" && !listOpen) {
       e.preventDefault()
       onToggleList()
     }
@@ -319,29 +323,48 @@ export function NavRibbon({
             pt-3.5 centers the 44px button on the same y (~36px) as the thread's
             right actions pill, so rail-top and header read as one row. */}
         <div className="group/logo mb-1">
-          <button
-            type="button"
-            onClick={onToggleList}
-            title={listOpen ? "Hide chats" : "Show chats"}
-            aria-label={listOpen ? "Hide chats" : "Show chats"}
-            aria-expanded={listOpen}
-            className="relative flex size-11 items-center justify-center rounded-[12px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)]"
-          >
-            {/* Full-strength brand color (NOT the button's --text-secondary) +
-                forced color-emoji presentation, so the genie — or a custom
-                monochrome/letter portalEmoji — reads crisp at rest in BOTH
-                themes instead of inheriting the muted secondary text token. */}
-            <span
-              aria-hidden
-              className="absolute inset-0 flex items-center justify-center text-[26px] leading-none text-[var(--text-primary)] [font-variant-emoji:emoji] transition-opacity duration-150 group-hover/sidebar:opacity-0 group-focus-within/logo:opacity-0"
+          {onToggleList ? (
+            <button
+              type="button"
+              onClick={onToggleList}
+              title={listOpen ? "Hide chats" : "Show chats"}
+              aria-label={listOpen ? "Hide chats" : "Show chats"}
+              aria-expanded={listOpen}
+              className="relative flex size-11 items-center justify-center rounded-[12px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)]"
             >
-              {emoji}
-            </span>
-            <PanelLeft
-              size={22}
-              className="opacity-0 transition-opacity duration-150 group-hover/sidebar:opacity-100 group-focus-within/logo:opacity-100"
-            />
-          </button>
+              {/* Full-strength brand color (NOT the button's --text-secondary) +
+                  forced color-emoji presentation, so the genie — or a custom
+                  monochrome/letter portalEmoji — reads crisp at rest in BOTH
+                  themes instead of inheriting the muted secondary text token. */}
+              <span
+                aria-hidden
+                className="absolute inset-0 flex items-center justify-center text-[26px] leading-none text-[var(--text-primary)] [font-variant-emoji:emoji] transition-opacity duration-150 group-hover/sidebar:opacity-0 group-focus-within/logo:opacity-0"
+              >
+                {emoji}
+              </span>
+              <PanelLeft
+                size={22}
+                className="opacity-0 transition-opacity duration-150 group-hover/sidebar:opacity-100 group-focus-within/logo:opacity-100"
+              />
+            </button>
+          ) : (
+            // Global (non-chat) rail: no list to fold, so the top slot is a plain
+            // brand mark that links home. Same full-strength color + forced
+            // color-emoji presentation as the chat variant — no toggle/morph.
+            <Link
+              to="/"
+              aria-label={portalName}
+              title={portalName}
+              className="relative flex size-11 items-center justify-center rounded-[12px] transition-colors hover:bg-[var(--fill-secondary)]"
+            >
+              <span
+                aria-hidden
+                className="flex items-center justify-center text-[26px] leading-none text-[var(--text-primary)] [font-variant-emoji:emoji]"
+              >
+                {emoji}
+              </span>
+            </Link>
+          )}
         </div>
 
         {/* Nav icons — per-icon piano reveal. */}

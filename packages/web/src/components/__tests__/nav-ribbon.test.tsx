@@ -13,6 +13,20 @@ function renderRibbon(props: { listOpen: boolean; path?: string }) {
 }
 
 describe("NavRibbon", () => {
+  it("renders a brand-only top slot (no fold toggle) when mounted without list props", () => {
+    const { container } = render(
+      <MemoryRouter initialEntries={["/org"]}>
+        <NavRibbon />
+      </MemoryRouter>,
+    )
+    // The global (non-chat) rail has no list to fold → no toggle button.
+    expect(screen.queryByLabelText("Show chats")).toBeNull()
+    expect(screen.queryByLabelText("Hide chats")).toBeNull()
+    expect(container.querySelector("[aria-expanded]")).toBeNull()
+    // The top slot is a brand mark that links home.
+    expect(container.querySelector('a[href="/"]')).toBeTruthy()
+  })
+
   it("renders the toggle with a state-aware label", () => {
     const { rerender } = renderRibbon({ listOpen: true })
     expect(screen.getByLabelText("Hide chats")).toBeTruthy()
