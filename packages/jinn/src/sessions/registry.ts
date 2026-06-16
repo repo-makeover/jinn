@@ -1046,6 +1046,14 @@ export function updatePartialMessage(id: string, content: string): void {
   db.prepare('UPDATE messages SET content = ? WHERE id = ? AND partial = 1').run(content, id);
 }
 
+/** Replace a stored (non-partial) message's text in place. Used by external-turn
+ *  sync to upgrade a truncated early-Stop assistant row to the complete transcript
+ *  text instead of inserting a duplicate row. */
+export function updateMessageContent(id: string, content: string): void {
+  const db = initDb();
+  db.prepare('UPDATE messages SET content = ? WHERE id = ?').run(content, id);
+}
+
 /** Delete all live partial blocks for a session (called at turn end before the final insert). */
 export function deletePartialMessages(sessionId: string): number {
   const db = initDb();
