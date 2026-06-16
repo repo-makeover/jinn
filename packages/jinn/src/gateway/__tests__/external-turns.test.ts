@@ -209,4 +209,56 @@ describe("syncExternalTurn", () => {
     expect(ext.syncExternalTurn(id, emit, payload)).toBe(0);
     expect(reg.getMessages(id)).toHaveLength(1);
   });
+
+  it("reconciles an already-persisted turn in place — newer continuation entries upgrade a truncated assistant row instead of duplicating (cutoff + dup fix)", () => {
+    const id = makeSession();
+    // run() completion already persisted this turn: user prompt + an assistant
+    // row TRUNCATED at an early Stop (DB insert time = now).
+    reg.insertMessage(id, "user", "hire token maxer");
+    reg.insertMessage(id, "assistant", "On it.");
+    // The Claude harness then wrote continuation entries for the SAME turn with
+    // timestamps NEWER than the persist (so they slip past the timestamp anchor),
+    // and the assistant text is now complete (a superset of the truncated row).
+    const future = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const file = writeTranscript([
+      { type: "user", text: "hire token maxer", ts: future(1_000) },
+      { type: "assistant", text: "On it. Token Maxer hired — operations, reporting to chief-of-staff.", ts: future(2_000) },
+    ]);
+    const n = ext.syncExternalTurn(id, emit, {
+      hook_event_name: "Stop",
+      transcript_path: file,
+      last_assistant_message: "On it. Token Maxer hired — operations, reporting to chief-of-staff.",
+    });
+    // No duplicate rows inserted...
+    expect(n).toBe(0);
+    const msgs = reg.getMessages(id);
+    expect(msgs).toHaveLength(2);
+    // ...and the truncated assistant row was upgraded to the complete text.
+    expect(msgs.map((m) => [m.role, m.content])).toEqual([
+      ["user", "hire token maxer"],
+      ["assistant", "On it. Token Maxer hired — operations, reporting to chief-of-staff."],
+    ]);
+    // Still emits so the chat view refetches the de-truncated content.
+    expect(events).toEqual([{ event: "session:external-turn", payload: { sessionId: id } }]);
+  });
+
+  it("does not mistake a genuinely new CLI turn for an already-persisted one (different content → normal insert)", () => {
+    const id = makeSession();
+    reg.insertMessage(id, "user", "first prompt");
+    reg.insertMessage(id, "assistant", "first answer");
+    const future = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const file = writeTranscript([
+      { type: "user", text: "second prompt", ts: future(1_000) },
+      { type: "assistant", text: "second answer", ts: future(2_000) },
+    ]);
+    const n = ext.syncExternalTurn(id, emit, {
+      hook_event_name: "Stop",
+      transcript_path: file,
+      last_assistant_message: "second answer",
+    });
+    expect(n).toBe(2);
+    expect(reg.getMessages(id).map((m) => m.content)).toEqual([
+      "first prompt", "first answer", "second prompt", "second answer",
+    ]);
+  });
 });

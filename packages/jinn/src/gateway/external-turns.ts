@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { logger } from "../shared/logger.js";
-import { getSession, getMessages, insertMessage, updateSession, initDb } from "../sessions/registry.js";
+import { getSession, getMessages, insertMessage, updateMessageContent, updateSession, initDb } from "../sessions/registry.js";
 import { findTranscriptForSession } from "../engines/claude-interactive.js";
 import type { HookPayload } from "./hook-registry.js";
 
@@ -186,8 +186,49 @@ export function syncExternalTurn(
   }
   if (entries.length === 0) return 0; // tail already synced — dedup no-op
 
-  // One transaction for the whole tail (mirrors the transcript backfill).
+  // Reconcile against the trailing DB rows before inserting. The chat run()
+  // completion path (manager.ts user prompt + settled assistant) may have
+  // ALREADY persisted this exact turn — and, because the Claude harness keeps
+  // writing continuation entries ("Continue from where you left off." + more
+  // assistant text) with timestamps NEWER than that persist, those entries slip
+  // past the timestamp anchor and this sync re-reads the same turn. The settled
+  // assistant row is often truncated at an early Stop, so the re-read text is a
+  // superset (prefix-compatible). When the trailing rows mirror the tail in role
+  // order and are prefix-compatible, UPGRADE them in place (fixes the cutoff)
+  // instead of inserting duplicates (fixes the duplication). Otherwise this is a
+  // genuine CLI-native turn run() never saw — insert as before.
   const db = initDb();
+  const existing = getMessages(sessionId);
+  const trailing = existing.slice(-entries.length);
+  const isAlreadyPersistedTurn =
+    trailing.length === entries.length &&
+    entries.every((e, i) => {
+      const m = trailing[i];
+      if (!m || m.role !== e.role || m.partial) return false;
+      const a = m.content;
+      const b = e.content;
+      return a === b || a.startsWith(b) || b.startsWith(a);
+    });
+  if (isAlreadyPersistedTurn) {
+    // run() already stored this turn — overwrite any truncated row with the
+    // complete transcript text, write no new rows.
+    const txn = db.transaction(() => {
+      entries.forEach((e, i) => {
+        if (e.content.length > trailing[i].content.length) {
+          updateMessageContent(trailing[i].id, e.content);
+        }
+      });
+    });
+    txn();
+    const newAnchor = entries[entries.length - 1].timestampIso;
+    setAnchor(sessionId, newAnchor);
+    emit("session:external-turn", { sessionId });
+    logger.info(
+      `Reconciled ${entries.length} already-persisted turn message(s) in place for session ${sessionId} (anchor → ${newAnchor}, no duplicates inserted)`,
+    );
+    return 0;
+  }
+  // One transaction for the whole tail (mirrors the transcript backfill).
   const txn = db.transaction((items: TranscriptTailEntry[]) => {
     for (const e of items) insertMessage(sessionId, e.role, e.content);
   });
