@@ -503,6 +503,33 @@ export class GrokEngine implements InterruptibleEngine {
         transcriptTailer = undefined;
       };
 
+      // Settle the turn on grok's explicit end-of-turn marker (`{"type":"end",
+      // "stopReason":"EndTurn"}` on stdout — parsed as `terminal`). We must NOT wait
+      // solely for `proc.on("close")`: `close` only fires once every fd onto the
+      // child's stdout pipe is gone, so a grandchild a `bash`/shell tool call left
+      // behind (inheriting that pipe) keeps the pipe open and the turn hangs forever
+      // even though grok itself already exited (`exit` fired). That is exactly the
+      // freeze seen when a turn writes to org/ + skills/ (it runs hatch bash steps);
+      // knowledge-only turns used the `write` tool, spawned no lingering child, and
+      // closed normally. Resolving on the terminal event decouples completion from
+      // process exit. `close` below stays as the fallback for crashes/no-end exits.
+      const settleOnTerminal = () => {
+        if (settled) return;
+        settled = true;
+        stopTranscriptWatch();
+        this.liveProcesses.delete(trackingId);
+        // The detached child has signalled EndTurn and will exit; don't let its
+        // (or a lingering grandchild's) open stdout pipe keep the event loop busy.
+        try { proc.unref?.(); } catch { /* not detached / already gone */ }
+        resolve({
+          sessionId: resolvedSessionId,
+          result: resultText,
+          error: resultText.trim() ? undefined : (turnError ?? undefined),
+          numTurns: 1,
+          ...(typeof lastContextTokens === "number" ? { contextTokens: lastContextTokens } : {}),
+        });
+      };
+
       const handleParsed = (parsed: GrokParsedLine | null) => {
         if (!parsed) return;
         if (parsed.sessionId) {
@@ -517,6 +544,7 @@ export class GrokEngine implements InterruptibleEngine {
           opts.onStream?.(delta);
         }
         if (parsed.doneText) resultText = parsed.doneText;
+        if (parsed.terminal) settleOnTerminal();
       };
 
       const handleTranscriptParsed = (parsed: GrokParsedLine | null) => {

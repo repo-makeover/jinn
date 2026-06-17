@@ -335,6 +335,45 @@ describe("GrokEngine run", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("settles on the terminal end event even if the process never closes", async () => {
+    // Regression: a `bash`/shell tool call can leave a grandchild that inherits the
+    // child's stdout pipe, so `proc.on('close')` never fires even after grok exits.
+    // The turn must still settle from grok's stdout `end` marker — never hang.
+    const deltas: StreamDelta[] = [];
+    const engine = new GrokEngine();
+    const promise = engine.run({
+      prompt: "hatch an employee",
+      cwd: "/tmp",
+      sessionId: "jinn-session-hang",
+      model: "grok-build",
+      onStream: (d: StreamDelta) => deltas.push(d),
+    } as any);
+
+    await flush();
+    const call = spawnCalls[spawnCalls.length - 1];
+    expect(call).toBeDefined();
+    // Stream session id + answer text, then the terminal end event. Crucially we
+    // NEVER call call.proc.close(...) — the pipe is "held open" by a grandchild.
+    call.proc.emitStdout([
+      JSON.stringify({ session_id: "grok-hang-session" }),
+      JSON.stringify({ type: "text", data: "Done — React Reviewer is ready." }),
+      JSON.stringify({ type: "end", stopReason: "EndTurn", sessionId: "grok-hang-session" }),
+      "",
+    ].join("\n"));
+
+    // Resolves promptly from the terminal event (no close). A 1s race guard proves
+    // we don't depend on `close` (which would hang here).
+    const raced = await Promise.race([
+      promise,
+      sleep(1000).then(() => "TIMED_OUT" as const),
+    ]);
+    expect(raced).not.toBe("TIMED_OUT");
+    const result = raced as EngineResult;
+    expect(result).toMatchObject({ sessionId: "grok-hang-session", result: "Done — React Reviewer is ready.", numTurns: 1 });
+    expect(result.error).toBeUndefined();
+    expect(engine.isAlive("jinn-session-hang")).toBe(false);
+  });
+
   it("uses resumeSessionId when present", async () => {
     const { call, result } = await runWith([
       JSON.stringify({ type: "result", result: "resumed", done: true }),
