@@ -154,17 +154,18 @@ export function buildContext(opts: {
     });
   }
 
-  // ── STANDARD: Self-evolution (onboarding only) ──────────────
+  // ── STANDARD: Onboarding (gated on portal.onboarded) ────────
   // Steady-state self-evolution guidance lives in CLAUDE.md/AGENTS.md (auto-loaded).
   // Only the dynamic onboarding flow for a fresh install is emitted here.
   if (!opts.employee) {
-    const evolution = buildEvolutionContext(portalName);
-    if (evolution) {
+    const onboarded = opts.config?.portal?.onboarded === true;
+    const onboarding = buildOnboardingContext({ portalName, operatorName, onboarded });
+    if (onboarding) {
       sections.push({
         tier: Tier.STANDARD,
-        marker: "## Self-evolution",
-        content: evolution,
-        summary: `## Self-evolution\nThis is a new install — onboard the user (see CLAUDE.md).`,
+        marker: "## Onboarding mode",
+        content: onboarding,
+        summary: `## Onboarding mode\nFresh install — run the onboarding skill (see CLAUDE.md).`,
       });
     }
   }
@@ -650,28 +651,26 @@ function buildEnvironmentContext(): string | null {
 }
 
 /**
- * Onboarding-only. Steady-state self-evolution guidance (update knowledge files,
- * CLAUDE.md on persistent feedback, etc.) lives in CLAUDE.md/AGENTS.md and is
- * auto-loaded — so this returns null once the install is configured.
+ * Operator-aware onboarding directive, gated on portal.onboarded.
+ * Returns null once onboarding is complete — no repeat noise on steady-state sessions.
  */
-function buildEvolutionContext(portalName: string): string | null {
-  const profilePath = path.join(JINN_HOME, "knowledge", "user-profile.md");
-  let profileContent = "";
-  try { profileContent = fs.readFileSync(profilePath, "utf-8").trim(); } catch {}
-
-  const isNew = profileContent.length < 50;
-  if (!isNew) return null;
-
+export function buildOnboardingContext(opts: {
+  portalName: string;
+  operatorName?: string;
+  onboarded: boolean;
+}): string | null {
+  if (opts.onboarded) return null;
+  const { portalName, operatorName } = opts;
+  const name = operatorName ? operatorName : "your operator";
   return [
-    `## Self-evolution`,
-    `**ONBOARDING MODE**: This is a new or unconfigured ${portalName} installation.`,
-    `Before answering the user's request, introduce yourself briefly and ask them:`,
-    `1. What's your name and what do you do? (business, role, projects)`,
-    `2. What should ${portalName} help you automate? (code reviews, deployments, monitoring, etc.)`,
-    `3. Communication preferences — emoji style, verbosity (concise vs detailed), language`,
-    `4. Any active projects ${portalName} should know about?`,
-    `\nAfter the user responds, write their answers to \`~/.jinn/knowledge/user-profile.md\` and \`~/.jinn/knowledge/preferences.md\`.`,
-    `Then proceed to help with their original request.`,
+    `## Onboarding mode`,
+    `This is a fresh ${portalName} install and you have NOT yet completed onboarding ${operatorName ? `with ${operatorName}` : ""}.`,
+    operatorName
+      ? `You already know their name is **${operatorName}** (from setup) — greet them by name and DO NOT ask for their name again.`
+      : `Ask the user's name once, then use it.`,
+    `Run the **onboarding** skill (\`skills/onboarding/SKILL.md\`): a warm, multi-turn, game-like setup where you and ${name} get to know each other and build their org together. Speak in the second person.`,
+    `Each beat must offer an explicit skip ("just say 'skip' or 'later'"). Never trap ${name}.`,
+    `When onboarding wraps, set \`portal.onboarded: true\` in \`config.yaml\` so this never repeats.`,
   ].join("\n");
 }
 
