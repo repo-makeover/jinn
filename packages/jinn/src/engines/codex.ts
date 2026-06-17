@@ -8,6 +8,10 @@ import { resolveBin } from "../shared/resolve-bin.js";
 
 const CODEX_SESSIONS_DIR = path.join(os.homedir(), ".codex", "sessions");
 
+// Hard backstop so a genuinely stuck turn (no terminal event ever) can't hang
+// forever — matches PiEngine's TURN_TIMEOUT_MS.
+const TURN_TIMEOUT_MS = 10 * 60 * 1000;
+
 interface LiveProcess {
   proc: ChildProcess;
   terminationReason: string | null;
@@ -180,8 +184,73 @@ export class CodexEngine implements InterruptibleEngine {
       let turnError: string | null = null;
       let lastContextTokens: number | undefined;
       let lineBuf = "";
+      let hardTimeout: NodeJS.Timeout | undefined;
+      let terminalSettleTimer: NodeJS.Timeout | undefined;
       const onStream = opts.onStream || null;
       const STDERR_MAX = 10 * 1024; // 10KB rolling window for error reporting
+
+      const clearTimers = () => {
+        if (hardTimeout) { clearTimeout(hardTimeout); hardTimeout = undefined; }
+        if (terminalSettleTimer) { clearTimeout(terminalSettleTimer); terminalSettleTimer = undefined; }
+      };
+
+      // Settle the turn on codex's parsed terminal event (`turn.completed` →
+      // "usage" / `turn.failed` → "turn_failed"), decoupled from proc.on("close").
+      // `close` only fires once every fd onto the child's stdout pipe is gone, but a
+      // bash/shell tool call can leave a grandchild that inherits and holds that pipe
+      // after codex itself exits, hanging the turn forever (the same freeze class
+      // fixed for grok in 94a50cc). Mirrors GrokEngine.settleOnTerminal / PiEngine.
+      const settleOnTerminal = () => {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        this.liveProcesses.delete(sessionId);
+        // Detached child has signalled turn end and will exit; don't let its (or a
+        // lingering grandchild's) open stdout pipe keep the event loop busy.
+        try { proc.unref?.(); } catch { /* not detached / already gone */ }
+
+        const resolvedThreadId = threadId || opts.resumeSessionId || "";
+        if (resolvedThreadId) {
+          const transcriptCtx = lastCodexTranscriptContextTokens(
+            resolvedThreadId,
+            this.opts.codexSessionsDir ?? CODEX_SESSIONS_DIR,
+          );
+          if (transcriptCtx) lastContextTokens = transcriptCtx;
+        }
+
+        logger.info(`Codex turn settled on terminal event (thread: ${threadId || "none"}, turns: ${numTurns})`);
+        resolve({
+          sessionId: resolvedThreadId,
+          result: resultText,
+          error: resultText.trim() ? undefined : (turnError ?? undefined),
+          numTurns: numTurns || undefined,
+          ...(typeof lastContextTokens === "number" ? { contextTokens: lastContextTokens } : {}),
+        });
+      };
+
+      // Defer the terminal settle one tick: lets the rest of the current stdout
+      // chunk finish parsing (so multiple `turn.completed` events accumulate) and a
+      // promptly-firing `close` win with its own accounting, while still resolving
+      // the turn when `close` never comes (held-pipe hang).
+      const scheduleTerminalSettle = () => {
+        if (settled || terminalSettleTimer) return;
+        terminalSettleTimer = setTimeout(settleOnTerminal, 0);
+        terminalSettleTimer.unref?.();
+      };
+
+      hardTimeout = setTimeout(() => {
+        if (settled) return;
+        const live = this.liveProcesses.get(sessionId);
+        if (live) live.terminationReason = "Codex turn timed out";
+        logger.warn(`Codex turn timed out after ${TURN_TIMEOUT_MS}ms for session ${sessionId}; terminating process`);
+        // Group-kill (signalProcess uses process.kill(-pid)) tears down any lingering
+        // grandchild too, so close fires and settle() reports the termination reason.
+        this.signalProcess(proc, "SIGTERM");
+        setTimeout(() => {
+          if (proc.exitCode === null) this.signalProcess(proc, "SIGKILL");
+        }, 2000).unref?.();
+      }, TURN_TIMEOUT_MS);
+      hardTimeout.unref?.();
 
       proc.stdout.on("data", (d: Buffer) => {
         lineBuf += d.toString();
@@ -217,10 +286,12 @@ export class CodexEngine implements InterruptibleEngine {
             case "usage":
               numTurns++;
               if (parsed.contextTokens) lastContextTokens = parsed.contextTokens;
+              scheduleTerminalSettle(); // turn.completed = end of turn
               break;
             case "turn_failed":
               turnError = parsed.message;
               if (onStream) onStream({ type: "error", content: parsed.message });
+              scheduleTerminalSettle(); // turn.failed = end of turn
               break;
           }
         }
@@ -243,6 +314,7 @@ export class CodexEngine implements InterruptibleEngine {
       proc.on("close", (code) => {
         if (settled) return;
         settled = true;
+        clearTimers();
 
         const terminationReason = this.liveProcesses.get(sessionId)?.terminationReason ?? null;
         this.liveProcesses.delete(sessionId);
@@ -320,6 +392,7 @@ export class CodexEngine implements InterruptibleEngine {
       proc.on("error", (err) => {
         if (settled) return;
         settled = true;
+        clearTimers();
         this.liveProcesses.delete(sessionId);
         reject(new Error(`Failed to spawn Codex CLI: ${err.message}`));
       });
