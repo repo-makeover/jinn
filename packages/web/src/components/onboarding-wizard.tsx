@@ -17,6 +17,7 @@ import { useSettings } from "@/routes/settings-provider"
 import { useTheme } from "@/routes/providers"
 import { THEMES } from "@/lib/themes"
 import { api } from "@/lib/api"
+import { buildNewSessionParams } from "@/components/chat/new-chat-helpers"
 
 // ---------------------------------------------------------------------------
 // Accent color presets
@@ -51,6 +52,16 @@ const FEATURES = [
 ]
 
 // ---------------------------------------------------------------------------
+// Engine / model tiers
+// ---------------------------------------------------------------------------
+
+const TIERS = [
+  { label: "Smartest", model: "opus",              sub: "Opus 4.8 — deepest reasoning" },
+  { label: "Balanced", model: "claude-sonnet-4-6", sub: "Sonnet 4.6 — fast & capable" },
+  { label: "Fastest",  model: "claude-haiku-4-5",  sub: "Haiku 4.5 — quickest, lightest" },
+]
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -80,8 +91,13 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
   const [localLanguage, setLocalLanguage] = useState(settings.language ?? "English")
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [engineChoice, setEngineChoice] = useState<{ engine: string; model: string; effortLevel: string }>({
+    engine: "claude",
+    model: "opus",
+    effortLevel: "medium",
+  })
 
-  const TOTAL_STEPS = 4
+  const TOTAL_STEPS = 5
 
   // First-run detection — check server-side flag, not just localStorage
   useEffect(() => {
@@ -133,12 +149,33 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
           portalName: localName || undefined,
           operatorName: localOperator || undefined,
           language: localLanguage || undefined,
+          engine: engineChoice.engine,
+          model: engineChoice.model,
+          effortLevel: engineChoice.effortLevel,
         })
         if (!forceOpen) {
           localStorage.setItem("jinn-onboarded", "true")
         }
         setVisible(false)
         onClose?.()
+        // Launch the COO setup conversation (no employee = COO).
+        try {
+          const seed = "Hi! I just finished setup — let's get started. 👋"
+          const params = buildNewSessionParams({
+            message: seed,
+            selectedEmployee: null,
+            engine: engineChoice.engine,
+            model: engineChoice.model,
+            effortLevel: engineChoice.effortLevel,
+          })
+          const session = (await api.createSession(params)) as { id?: string }
+          if (session?.id) {
+            navigate(`/chat?sessionId=${session.id}`)
+            return
+          }
+        } catch {
+          // fall through to home
+        }
         navigate("/")
       } catch {
         setSubmitError("Couldn't save your setup — check that the gateway is running, then try again.")
@@ -150,11 +187,14 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
     step,
     localName,
     localOperator,
+    localLanguage,
     forceOpen,
     onClose,
     setPortalName,
     setOperatorName,
+    setLanguage,
     navigate,
+    engineChoice,
   ])
 
   const handleBack = useCallback(() => {
@@ -210,7 +250,7 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
               className="animate-fade-in text-center"
             >
               <div className="text-[56px] mb-[var(--space-3)] leading-none">
-                {"\ud83e\udd16"}
+                {"\ud83e\uddde"}
               </div>
               <h2 className="text-[length:var(--text-large-title)] font-[var(--weight-bold)] tracking-[var(--tracking-tight)] text-[var(--text-primary)] mb-[var(--space-2)]">
                 Welcome to {localName || "Jinn"}
@@ -359,8 +399,53 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
             </div>
           )}
 
-          {/* Step 3: Overview */}
+          {/* Step 3: Engine / Model */}
           {step === 3 && (
+            <div key="step-3" className="animate-fade-in">
+              <h2 className="text-[length:var(--text-title1)] font-[var(--weight-bold)] tracking-[var(--tracking-tight)] text-[var(--text-primary)] mb-[var(--space-1)]">
+                Choose your AI tier
+              </h2>
+              <p className="text-[length:var(--text-subheadline)] text-[var(--text-tertiary)] mb-[var(--space-4)]">
+                Pick how your team thinks. You can change this anytime.
+              </p>
+
+              <div className="flex flex-col gap-[var(--space-3)]">
+                {TIERS.map((tier) => {
+                  const isActive = engineChoice.model === tier.model
+                  return (
+                    <button
+                      key={tier.model}
+                      onClick={() =>
+                        setEngineChoice({ engine: "claude", model: tier.model, effortLevel: "medium" })
+                      }
+                      className="flex flex-col gap-[var(--space-1)] px-[var(--space-4)] py-[var(--space-3)] rounded-[var(--radius-md)] bg-[var(--fill-quaternary)] cursor-pointer transition-all duration-150 text-left"
+                      style={{
+                        border: isActive
+                          ? "2px solid var(--accent)"
+                          : "2px solid var(--separator)",
+                      }}
+                    >
+                      <span
+                        className="text-[length:var(--text-subheadline)]"
+                        style={{
+                          fontWeight: "var(--weight-semibold)",
+                          color: isActive ? "var(--accent)" : "var(--text-primary)",
+                        }}
+                      >
+                        {tier.label}
+                      </span>
+                      <span className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                        {tier.sub}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Overview */}
+          {step === 4 && (
             <div key="step-3" className="animate-fade-in">
               <h2 className="text-[length:var(--text-title1)] font-[var(--weight-bold)] tracking-[var(--tracking-tight)] text-[var(--text-primary)] mb-[var(--space-1)]">
                 You&apos;re all set!
