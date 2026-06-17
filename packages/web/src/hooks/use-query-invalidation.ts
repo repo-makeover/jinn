@@ -64,6 +64,12 @@ export function useQueryInvalidation() {
         case 'skills:changed':
           pendingRef.current.add('skills')
           break
+        case 'org:changed':
+          // A turn (e.g. the onboarding genie hatching an employee) rewrote org/.
+          // Refetch the org/employee list so the new employee shows in the sidebar
+          // live, without a manual page refresh.
+          pendingRef.current.add('org')
+          break
         case 'config:reloaded':
           pendingRef.current.add('config')
           pendingRef.current.add('engines')
@@ -89,6 +95,9 @@ export function useQueryInvalidation() {
               break
             case 'skills':
               qc.invalidateQueries({ queryKey: queryKeys.skills.all })
+              break
+            case 'org':
+              qc.invalidateQueries({ queryKey: queryKeys.org.all })
               break
             case 'engines':
               qc.invalidateQueries({ queryKey: queryKeys.engines.all })
