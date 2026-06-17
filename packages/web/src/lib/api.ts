@@ -343,7 +343,7 @@ export const api = {
     get<{ lines: string[] }>(`/api/logs${n ? `?n=${n}` : ""}`),
   getOnboarding: () =>
     get<{ needed: boolean; onboarded: boolean; sessionsCount: number; hasEmployees: boolean; portalName: string | null; operatorName: string | null }>("/api/onboarding"),
-  completeOnboarding: (data: { portalName?: string; operatorName?: string; language?: string }) =>
+  completeOnboarding: (data: { portalName?: string; operatorName?: string; language?: string; engine?: string; model?: string; effortLevel?: string }) =>
     post<{ status: string; portal: { portalName?: string; operatorName?: string; language?: string } }>("/api/onboarding", data),
   getActivity: () =>
     get<Array<{ event: string; payload: unknown; ts: number }>>("/api/activity"),
