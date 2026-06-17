@@ -485,8 +485,8 @@ Recap what's set up (employee, skill, any cron), point them to where things live
 
 - [ ] **Step 2: Leak-grep the staged template change**
 
-Run: `git diff --cached packages/jinn/template/skills/onboarding/SKILL.md | grep -iE 'hristo|jimmyenglish|pravko|movekit|sqlnoir|homy|spycam|/Users/' || echo "clean"`
-Expected: `clean`.
+Run: `cd packages/jinn && pnpm test privacy-guard` — the repo's privacy-guard test scans `template/` (and `docs/`, `src/`) for blocked private names and personal paths; it MUST pass. Also eyeball the staged `SKILL.md` for any real personal names or absolute home paths.
+Expected: privacy-guard test passes.
 
 - [ ] **Step 3: Commit**
 
