@@ -97,6 +97,11 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
   const [visible, setVisible] = useState(false)
   /** True while the branded loading bridge is covering the chat-route mount. */
   const [launching, setLaunching] = useState(false)
+  /**
+   * The session ID created during onboarding — kept in state so the dismiss
+   * effect below can compare it against location.search across renders.
+   */
+  const [launchingSessionId, setLaunchingSessionId] = useState<string | undefined>(undefined)
   const [step, setStep] = useState(0)
   const [direction, setDirection] = useState<"forward" | "back">("forward")
 
@@ -170,17 +175,24 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
     })
   }, []) // run once on mount
 
-  // Dismiss the loading bridge as soon as we detect the /chat route has mounted.
-  // React 18 batches this state update with the deep-link handleSelect in page.tsx,
-  // so the overlay and ChatPane swap in the same commit — no blank frame.
+  // Dismiss the loading bridge once ChatPage's deep-link effect has consumed
+  // the ?session= param. ChatPage calls handleSelect(id) then clears the param
+  // in the same React batch, so when ?session= is gone from the URL, ChatPane
+  // already has sessionId set and the seed message in its initial render state.
+  // One requestAnimationFrame lets the browser commit that paint before we drop
+  // the overlay → no blank frame between the loading bridge and the seed message.
   useEffect(() => {
-    if (!launching) return
-    if (location.pathname === "/chat") {
+    if (!launching || !launchingSessionId) return
+    const params = new URLSearchParams(location.search)
+    if (params.get('session') === launchingSessionId) return // still pending
+    const rafId = requestAnimationFrame(() => {
       setLaunching(false)
       setVisible(false)
+      setLaunchingSessionId(undefined)
       onClose?.()
-    }
-  }, [launching, location.pathname, onClose])
+    })
+    return () => cancelAnimationFrame(rafId)
+  }, [launching, launchingSessionId, location.search, onClose])
 
   const handleNext = useCallback(async () => {
     // Commit name/operator/language on step 0
@@ -239,12 +251,14 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
               message: { id: crypto.randomUUID(), role: "user", content: seed, timestamp: Date.now() },
             }))
           } catch { /* ignore — sessionStorage unavailable */ }
-          // Switch to the loading bridge; the dismiss effect closes the overlay
-          // once the /chat route is confirmed mounted (useLocation watch below).
-          // Use ?session= (not ?sessionId=) so resolveDeepLink picks it up and
-          // handleSelect fires immediately — no extra sessions-list round-trip.
+          // Navigate to /?session= (the actual ChatPage route — NOT /chat, which
+          // is a <Navigate to="/" replace> redirect that drops query params).
+          // The dismiss effect above watches for ?session= to be cleared from the
+          // URL (ChatPage's deep-link effect calls handleSelect + setSearchParams
+          // in the same batch), then drops the overlay via requestAnimationFrame.
+          setLaunchingSessionId(launchSessionId)
           setLaunching(true)
-          navigate(`/chat?session=${launchSessionId}`)
+          navigate(`/?session=${launchSessionId}`)
         } else {
           // createSession failed — close wizard and fall back to home.
           setVisible(false)
