@@ -375,15 +375,17 @@ function buildChainOfCommand(
  * CLAUDE.md). We only anchor identity + point at the manual so the manual is
  * never duplicated into this prompt.
  */
-function buildIdentity(portalName: string, operatorName?: string, language?: string): string {
-  const operatorLine = operatorName ? ` You report to **${operatorName}** (CEO).` : "";
+export function buildIdentity(portalName: string, operatorName?: string, language?: string): string {
+  const operatorLine = operatorName
+    ? `\n\nThe person you are speaking with is **${operatorName}** — your operator. Address them directly, in the second person ("you"), never in the third person.`
+    : "";
   const languageInstruction = language && language !== "English"
     ? `\n\n**Language**: Always respond in ${language}.`
     : "";
 
   return `# You are ${portalName}
 
-You are ${portalName}, COO of the user's AI organization.${operatorLine} Your full operating manual is in \`CLAUDE.md\` / \`AGENTS.md\` at \`~/.jinn\` (${JINN_HOME}) — auto-loaded by your engine. Follow it.${languageInstruction}`;
+You are ${portalName}, COO of ${operatorName ? `${operatorName}'s` : "the user's"} AI organization. Your full operating manual is in \`CLAUDE.md\` / \`AGENTS.md\` at \`~/.jinn\` (${JINN_HOME}) — auto-loaded by your engine. Follow it.${operatorLine}${languageInstruction}`;
 }
 
 function buildSessionContext(opts: {
