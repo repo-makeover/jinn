@@ -84,6 +84,7 @@ import { CodexEngine, type CodexEngineOpts } from "../codex.js";
 import type { StreamDelta, EngineResult } from "../../shared/types.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // JSONL line builders mirroring the codex CLI `--json` event shapes.
 const threadStarted = (id: string) => JSON.stringify({ type: "thread.started", thread_id: id });
@@ -425,6 +426,52 @@ describe("CodexEngine — process lifecycle", () => {
     call.proc.close(0);
     await promise;
     expect(engine.isAlive("sess-1")).toBe(false);
+  });
+
+  it("settles on the terminal turn.completed event even if the process never closes", async () => {
+    // Regression (same hang class as grok 94a50cc): a bash/shell tool call can leave
+    // a grandchild that inherits codex's stdout pipe, so proc.on("close") never fires
+    // even after codex itself exits. The turn must still settle from the parsed
+    // terminal event (turn.completed) — never hang.
+    const engine = new CodexEngine({
+      codexSessionsDir: fs.mkdtempSync(path.join(os.tmpdir(), "codex-hang-")),
+    });
+    const deltas: StreamDelta[] = [];
+    const promise = engine.run({
+      prompt: "run a bash command",
+      cwd: "/tmp",
+      sessionId: "codex-session-hang",
+      onStream: (d: StreamDelta) => deltas.push(d),
+    } as any);
+
+    await flush();
+    const call = spawnCalls[spawnCalls.length - 1];
+    expect(call).toBeDefined();
+
+    // Stream thread id + answer + the terminal turn.completed. Crucially we NEVER
+    // call call.proc.close(...) — the pipe is "held open" by a grandchild.
+    call.proc.emitStdout(
+      [
+        threadStarted("thread-hang"),
+        agentMessage("Done — the command ran."),
+        turnCompleted({ last_token_usage: { input_tokens: 1234 } }),
+        "",
+      ].join("\n"),
+    );
+
+    // Resolves promptly from the terminal event (no close). A 1s race guard proves
+    // we do not depend on `close` (which would hang here, failing pre-fix).
+    const raced = await Promise.race([promise, sleep(1000).then(() => "TIMED_OUT" as const)]);
+    expect(raced).not.toBe("TIMED_OUT");
+    const result = raced as EngineResult;
+    expect(result).toMatchObject({
+      sessionId: "thread-hang",
+      result: "Done — the command ran.",
+      numTurns: 1,
+      contextTokens: 1234,
+    });
+    expect(result.error).toBeUndefined();
+    expect(engine.isAlive("codex-session-hang")).toBe(false);
   });
 
   it("kill() sets the termination reason as the result error", async () => {
