@@ -10,15 +10,6 @@ import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.
 export const GROK_DEFAULT_MODEL = "grok-build";
 export const GROK_SESSIONS_DIR = path.join(os.homedir(), ".grok", "sessions");
 
-// Generic, non-verbatim progress shown while Grok is reasoning. Grok's reasoning
-// events (`agent_thought_chunk` / `thought`) carry raw chain-of-thought — never
-// safe to display verbatim — so instead of leaving the whole reasoning stretch as
-// a blank "Thinking" indicator, we surface this fixed status line. It mirrors how
-// Codex shows mid-turn activity without exposing reasoning. Must start with
-// "Thinking:" so the web status renderer replaces it in place (single transient
-// line) rather than accumulating chunks — see upsertStatusMessage in use-live-session.
-const GROK_THINKING_STATUS = "Thinking: working through the request…";
-
 const STDERR_MAX = 10 * 1024;
 const TRANSCRIPT_TAIL_POLL_MS = 250;
 const TRANSCRIPT_DISCOVER_POLL_MS = 200;
@@ -301,17 +292,12 @@ export function parseGrokJsonLine(line: string): GrokParsedLine | null {
       };
     }
     if (updateType === "agent_thought_chunk") {
-      // Raw model reasoning ("thought") must NEVER reach the UI verbatim — the
-      // payload can contain chain-of-thought, <thinking> blocks, even draft
-      // answers. The text is intentionally dropped; we emit only a generic,
-      // non-verbatim progress line so the reasoning stretch shows live progress
-      // instead of a blank "Thinking" (mirrors Codex's mid-turn activity).
-      return {
-        deltas: [...deltas, { type: "status", content: GROK_THINKING_STATUS }],
-        sessionId: nestedSessionId,
-        terminal: false,
-        contextTokens,
-      };
+      // Raw model reasoning ("thought") must NEVER reach the UI — the payload can
+      // contain chain-of-thought, <thinking> blocks, even draft answers. Drop it
+      // entirely (no placeholder line): the pre-token spinner covers the reasoning
+      // stretch, while tool cards (transcript) and the live answer text (stdout)
+      // provide the real mid-turn activity the user wants to see.
+      return { deltas, sessionId: nestedSessionId, terminal: false, contextTokens };
     }
     if (updateType === "tool_call") {
       const toolName = update ? toolNameFromGrokUpdate(update) : undefined;
@@ -395,15 +381,9 @@ export function parseGrokJsonLine(line: string): GrokParsedLine | null {
   }
 
   if (eventType === "thought") {
-    // Raw reasoning chunk — its text is never displayed verbatim (same contract as
-    // agent_thought_chunk). Surface a generic, non-verbatim progress line instead
-    // of a blank "Thinking".
-    return {
-      deltas: [...deltas, { type: "status", content: GROK_THINKING_STATUS }],
-      sessionId,
-      terminal,
-      contextTokens,
-    };
+    // Raw reasoning chunk — never displayed (same contract as agent_thought_chunk).
+    // Dropped entirely; no placeholder status line.
+    return { deltas, sessionId, terminal, contextTokens };
   }
 
   if (eventType === "text") {
@@ -448,17 +428,24 @@ export function parseGrokJsonLine(line: string): GrokParsedLine | null {
  *
  * The headless engine consumes two streams that are NOT mutually ordered: grok's
  * stdout (answer text, real-time) and the transcript tail (tool lifecycle only,
- * lagging stdout by the poll interval). If answer text were forwarded live, a
- * `tool_use` delta arriving late from the transcript would freeze the (already
- * final) answer into a permanent intermediate bubble, which the turn's final
- * result then renders a SECOND time — the duplicate greeting users saw. So answer
- * text is never forwarded live from either stream: it lands exactly once via the
- * engine's final result (accumulated into `resultText` from stdout). Tool lifecycle
- * + context still stream live. Reasoning is already dropped by `parseGrokJsonLine`.
+ * lagging stdout by the poll interval).
+ *
+ * Answer text is streamed live from STDOUT so the user sees Grok's real message
+ * type out as it is generated (Grok emits all reasoning first, then the answer text
+ * as one contiguous run, then `end`). The SAME answer also appears in the transcript
+ * as `agent_message_chunk`, so transcript text is dropped here to avoid emitting it
+ * twice — and `resultText` is accumulated from stdout only. The canonical result is
+ * reconciled against the streamed text at completion by identity (see
+ * use-live-session `session:completed`), so a transcript `tool_use` that lands after
+ * the streamed answer no longer renders a duplicate bubble. Tool lifecycle + context
+ * stream live from the transcript. Reasoning is already dropped by `parseGrokJsonLine`.
  */
 export function grokVisibleDeltas(deltas: StreamDelta[], source: "stdout" | "transcript"): StreamDelta[] {
   return deltas.filter((delta) => {
-    if (delta.type === "text" || delta.type === "text_snapshot") return false;
+    if (delta.type === "text" || delta.type === "text_snapshot") {
+      // Live answer text comes from stdout; the transcript copy is a duplicate.
+      return source === "stdout";
+    }
     if (source === "transcript") {
       return delta.type === "tool_use" || delta.type === "tool_result" || delta.type === "context";
     }
@@ -579,9 +566,10 @@ export class GrokEngine implements InterruptibleEngine {
         }
         if (parsed.contextTokens) lastContextTokens = parsed.contextTokens;
         if (parsed.error) turnError = parsed.error;
-        // Accumulate answer text into resultText (the single authoritative answer,
-        // delivered once at completion) but do NOT stream it live — see
-        // grokVisibleDeltas for why a live text delta duplicates against tools.
+        // Accumulate answer text into resultText (the single authoritative result)
+        // AND stream it live (grokVisibleDeltas forwards stdout text). The two are
+        // identical, so the FE reconciles them by identity at completion — no
+        // duplicate bubble. See grokVisibleDeltas.
         for (const delta of parsed.deltas) {
           if (delta.type === "text") resultText += delta.content;
           if (delta.type === "text_snapshot") resultText = delta.content;
@@ -656,7 +644,11 @@ export class GrokEngine implements InterruptibleEngine {
 
       proc.stdin.end();
 
-      proc.on("close", (code) => {
+      // Final resolution for a turn that did NOT settle on the `end` marker
+      // (crash, kill, or an `end` line that never arrived/parsed). Shared by
+      // `close` and the `exit`-grace backstop below so the turn always settles
+      // exactly once with whatever `resultText` accumulated.
+      const finalizeNonTerminal = (code: number | null) => {
         if (settled) return;
         settled = true;
         stopTranscriptWatch();
@@ -693,6 +685,23 @@ export class GrokEngine implements InterruptibleEngine {
           error: errMsg,
           ...(typeof lastContextTokens === "number" ? { contextTokens: lastContextTokens } : {}),
         });
+      };
+
+      proc.on("close", (code) => finalizeNonTerminal(code));
+
+      // Deterministic settle backstop. `close` only fires once EVERY fd on the
+      // child's stdout pipe is gone — a grandchild a bash/shell tool left behind
+      // (inheriting the pipe) can keep it open indefinitely, so a turn that never
+      // emitted a parseable `end` marker would otherwise hang in "running" forever
+      // (the empty/stuck outcome). `exit` fires when grok itself exits regardless of
+      // that lingering pipe; we give a short grace for any final stdout to flush,
+      // then force the same resolution. The `end`-marker path (settleOnTerminal)
+      // stays primary and wins the `settled` race for normal turns — this only
+      // catches crash/kill/no-end exits, so it never regresses the 94a50cc fix.
+      proc.on("exit", (code) => {
+        if (settled) return;
+        const timer = setTimeout(() => finalizeNonTerminal(code), 1500);
+        timer.unref?.();
       });
 
       proc.on("error", (err) => {

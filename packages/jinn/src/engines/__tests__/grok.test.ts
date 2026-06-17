@@ -174,14 +174,15 @@ describe("parseGrokJsonLine", () => {
     expect(parsed?.deltas).toEqual([{ type: "text", content: "hel" }]);
   });
 
-  it("surfaces a generic, non-verbatim progress line for thought/reasoning (never the raw text)", () => {
-    // Raw reasoning ("thought") must not reach the UI verbatim, but the stretch
-    // should still show mid-turn progress (not a blank "Thinking"). The parser
-    // emits a fixed, generic status line and drops the reasoning payload.
+  it("drops thought/reasoning entirely — no placeholder line, no raw text", () => {
+    // Raw reasoning ("thought") must never reach the UI. It is dropped completely
+    // (no generic placeholder card either — the user hated that line); the spinner
+    // covers the reasoning stretch while answer text streams live separately.
     const parsed = parseGrokJsonLine(JSON.stringify({ type: "thought", data: "checking secret files in /etc" }));
-    expect(parsed?.deltas).toEqual([{ type: "status", content: "Thinking: working through the request…" }]);
+    expect(parsed?.deltas).toEqual([]);
     // The raw reasoning text is never echoed into any delta.
     expect(JSON.stringify(parsed?.deltas)).not.toContain("checking secret files");
+    // Answer text, by contrast, IS surfaced as a live text delta.
     expect(parseGrokJsonLine(JSON.stringify({ type: "text", data: "G" }))?.deltas)
       .toEqual([{ type: "text", content: "G" }]);
   });
@@ -208,7 +209,7 @@ describe("parseGrokJsonLine", () => {
     expect(parsed?.deltas).toEqual([{ type: "text", content: "hello" }]);
   });
 
-  it("surfaces interactive thought chunks as generic progress (raw reasoning never displayed)", () => {
+  it("drops interactive thought chunks entirely (raw reasoning never displayed)", () => {
     const parsed = parseGrokJsonLine(JSON.stringify({
       method: "session/update",
       params: {
@@ -220,8 +221,8 @@ describe("parseGrokJsonLine", () => {
       },
     }));
     expect(parsed?.sessionId).toBe("grok-pty-session");
-    // Generic, non-verbatim progress line — the raw reasoning text is dropped.
-    expect(parsed?.deltas).toEqual([{ type: "status", content: "Thinking: working through the request…" }]);
+    // Reasoning is dropped completely — no placeholder status, no raw text.
+    expect(parsed?.deltas).toEqual([]);
     expect(JSON.stringify(parsed?.deltas)).not.toContain("checking the repository");
     expect(JSON.stringify(parsed?.deltas)).not.toContain("<thinking>");
   });
@@ -324,13 +325,16 @@ describe("parseGrokJsonLine", () => {
   });
 });
 
-describe("grokVisibleDeltas (dedup + reasoning suppression contract)", () => {
-  it("never forwards answer text live from either stream (single authoritative emit)", () => {
+describe("grokVisibleDeltas (live streaming + dedup contract)", () => {
+  it("streams answer text live from stdout, but drops the transcript's duplicate copy", () => {
     const text: StreamDelta[] = [{ type: "text", content: "Hello Michael" }];
     const snapshot: StreamDelta[] = [{ type: "text_snapshot", content: "Hello Michael" }];
-    expect(grokVisibleDeltas(text, "stdout")).toEqual([]);
+    // stdout = the live answer the user should see type out.
+    expect(grokVisibleDeltas(text, "stdout")).toEqual([{ type: "text", content: "Hello Michael" }]);
+    expect(grokVisibleDeltas(snapshot, "stdout")).toEqual([{ type: "text_snapshot", content: "Hello Michael" }]);
+    // transcript = the same answer again (agent_message_chunk) — dropped so it is
+    // not rendered twice; resultText is accumulated from stdout only.
     expect(grokVisibleDeltas(text, "transcript")).toEqual([]);
-    expect(grokVisibleDeltas(snapshot, "stdout")).toEqual([]);
     expect(grokVisibleDeltas(snapshot, "transcript")).toEqual([]);
   });
 
@@ -348,7 +352,7 @@ describe("grokVisibleDeltas (dedup + reasoning suppression contract)", () => {
     ]);
   });
 
-  it("the answer text is emitted exactly once: accumulated for resultText, not streamed", () => {
+  it("emits the answer once on stdout while resultText is accumulated identically", () => {
     // Simulate the headless stdout sequence: text chunks build the answer, the
     // transcript carries the same answer (agent_message_chunk) plus tool lifecycle.
     const stdoutLines = [
@@ -368,28 +372,32 @@ describe("grokVisibleDeltas (dedup + reasoning suppression contract)", () => {
     ];
 
     let resultText = "";
-    const visible: StreamDelta[] = [];
+    const stdoutVisible: StreamDelta[] = [];
+    const transcriptVisible: StreamDelta[] = [];
     for (const parsed of stdoutLines) {
       for (const d of parsed.deltas) {
         if (d.type === "text") resultText += d.content;
         if (d.type === "text_snapshot") resultText = d.content;
       }
-      visible.push(...grokVisibleDeltas(parsed.deltas, "stdout"));
+      stdoutVisible.push(...grokVisibleDeltas(parsed.deltas, "stdout"));
     }
-    for (const parsed of transcriptLines) visible.push(...grokVisibleDeltas(parsed.deltas, "transcript"));
+    for (const parsed of transcriptLines) transcriptVisible.push(...grokVisibleDeltas(parsed.deltas, "transcript"));
 
-    // resultText finalized correctly...
+    // resultText finalized correctly (canonical result, identical to streamed text)...
     expect(resultText).toBe("Hello Michael");
-    // ...and the answer never appears as a visible (streamed) delta — exactly one
-    // copy reaches the UI, via the final result. Reasoning is absent too.
-    expect(visible.some((d) => d.type === "text" || d.type === "text_snapshot")).toBe(false);
-    expect(visible.some((d) => d.type === "status")).toBe(false);
-    expect(visible.filter((d) => d.type === "tool_use")).toHaveLength(1);
+    // ...the answer streams live from stdout (so the user sees it type out)...
+    const streamedText = stdoutVisible.filter((d) => d.type === "text" || d.type === "text_snapshot").map((d) => d.content).join("");
+    expect(streamedText).toBe("Hello Michael");
+    // ...the transcript's duplicate copy is NOT re-emitted (only the tool card is)...
+    expect(transcriptVisible.some((d) => d.type === "text" || d.type === "text_snapshot")).toBe(false);
+    expect(transcriptVisible.filter((d) => d.type === "tool_use")).toHaveLength(1);
+    // ...and no reasoning placeholder leaks anywhere.
+    expect([...stdoutVisible, ...transcriptVisible].some((d) => d.type === "status")).toBe(false);
   });
 });
 
 describe("GrokEngine run", () => {
-  it("accumulates answer text into the final result without emitting it live (no duplicate)", async () => {
+  it("streams answer text live AND accumulates the identical canonical result", async () => {
     const { result, deltas, call } = await runWith([
       JSON.stringify({ session_id: "grok-session-1" }),
       JSON.stringify({ type: "content_delta", delta: "hel" }),
@@ -399,10 +407,11 @@ describe("GrokEngine run", () => {
 
     expect(path.basename(call.bin)).toBe("grok");
     expect(call.args).not.toContain("--session-id");
-    // Answer text is NOT streamed live — it would be frozen into a permanent bubble
-    // by a late transcript tool_use and then duplicated by the final result. It lands
-    // exactly once via result.result, accumulated from the same deltas.
-    expect(deltas.filter((d) => d.type === "text" || d.type === "text_snapshot")).toEqual([]);
+    // Answer text streams live (the user sees it type out) from the stdout deltas...
+    expect(deltas.filter((d) => d.type === "text").map((d) => d.content).join("")).toBe("hello");
+    // ...and the canonical result is identical, so the FE reconciles by identity at
+    // completion (no duplicate bubble). Reasoning never leaks as a status line.
+    expect(deltas.some((d) => d.type === "status")).toBe(false);
     expect(result).toMatchObject({ sessionId: "grok-session-1", result: "hello", numTurns: 1 });
     expect(result.error).toBeUndefined();
   });
@@ -444,6 +453,45 @@ describe("GrokEngine run", () => {
     expect(result).toMatchObject({ sessionId: "grok-hang-session", result: "Done — React Reviewer is ready.", numTurns: 1 });
     expect(result.error).toBeUndefined();
     expect(engine.isAlive("jinn-session-hang")).toBe(false);
+  });
+
+  it("settles from the exit backstop when no end marker arrives and close never fires", async () => {
+    // Deterministic-settle backstop: grok exits (process gone) but a grandchild
+    // holds the stdout pipe open, so `close` never fires — AND no parseable `end`
+    // marker arrived (crash/kill). Without the `exit`-grace backstop the turn would
+    // hang in "running" forever (the empty/stuck outcome). It must settle with the
+    // text accumulated so far and free the session.
+    const deltas: StreamDelta[] = [];
+    const engine = new GrokEngine();
+    const promise = engine.run({
+      prompt: "do a tool-heavy thing",
+      cwd: "/tmp",
+      sessionId: "jinn-session-exit-backstop",
+      model: "grok-build",
+      onStream: (d: StreamDelta) => deltas.push(d),
+    } as any);
+
+    await flush();
+    const call = spawnCalls[spawnCalls.length - 1];
+    expect(call).toBeDefined();
+    // Answer text streams, but NO `end` event and NO close() — only `exit` fires.
+    call.proc.emitStdout([
+      JSON.stringify({ session_id: "grok-exit-session" }),
+      JSON.stringify({ type: "text", data: "Partial answer before exit." }),
+      "",
+    ].join("\n"));
+    call.proc.exitCode = 0;
+    call.proc._handlers["exit"]?.(0);
+
+    const raced = await Promise.race([
+      promise,
+      sleep(3000).then(() => "TIMED_OUT" as const),
+    ]);
+    expect(raced).not.toBe("TIMED_OUT");
+    const result = raced as EngineResult;
+    expect(result).toMatchObject({ sessionId: "grok-exit-session", result: "Partial answer before exit." });
+    expect(result.error).toBeUndefined();
+    expect(engine.isAlive("jinn-session-exit-backstop")).toBe(false);
   });
 
   it("uses resumeSessionId when present", async () => {

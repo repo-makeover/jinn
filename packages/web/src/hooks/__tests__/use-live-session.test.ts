@@ -69,6 +69,36 @@ describe("useLiveSession (read-only)", () => {
     expect(result.current.messages.at(-1)?.content).toBe("Hello there.")
   })
 
+  it("does not duplicate the answer when a late tool_use froze the streamed text (grok dedup)", async () => {
+    // Reproduces the grok duplicate: answer text streams live, then a transcript
+    // tool_use lands LATE and freezes that streamed text into a permanent assistant
+    // bubble. Completion then delivers the identical canonical result — which must
+    // be reconciled by identity, NOT appended a second time.
+    getSession.mockResolvedValue({ status: "running", messages: [] })
+    const { subscribe, emit } = makeBus()
+    const { result } = renderHook(() =>
+      useLiveSession("s1", { subscribe, readOnly: true }),
+    )
+    await act(async () => { await Promise.resolve() })
+
+    act(() => {
+      emit("session:delta", { sessionId: "s1", type: "text", content: "The answer is 42." })
+      // Late transcript tool_use → flushes the streamed text into a permanent bubble.
+      emit("session:delta", { sessionId: "s1", type: "tool_use", content: "Using read", toolName: "read" })
+    })
+    // After the flush: one frozen answer bubble + one tool card, nothing streaming.
+    expect(result.current.streamingText).toBe("")
+    expect(result.current.messages.filter((m) => m.content === "The answer is 42." && !m.toolCall)).toHaveLength(1)
+
+    await act(async () => {
+      emit("session:completed", { sessionId: "s1", result: "The answer is 42." })
+      await Promise.resolve()
+    })
+    // Exactly ONE copy of the answer survives (no duplicate), plus the tool card.
+    expect(result.current.messages.filter((m) => m.content === "The answer is 42." && !m.toolCall)).toHaveLength(1)
+    expect(result.current.messages.filter((m) => m.toolCall === "read")).toHaveLength(1)
+  })
+
   it("shows transient status deltas and clears them when real output arrives", async () => {
     getSession.mockResolvedValue({ status: "running", messages: [] })
     const { subscribe, emit } = makeBus()

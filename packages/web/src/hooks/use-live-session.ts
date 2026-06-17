@@ -334,12 +334,34 @@ export function useLiveSession(
         }
 
         if (p.result) {
+          const resultStr = String(p.result)
+          const resultKey = resultStr.trim()
           setMessages((prev) => {
             const cleaned = [...prev]
+            // Reconcile the canonical result with any text already on screen, by
+            // identity — Grok streams its answer text live, and a transcript
+            // `tool_use` that lands AFTER the streamed answer freezes that text into
+            // a permanent assistant bubble (via the tool_use handler above). Without
+            // this dedupe the same answer would render twice. Scan from the tail and
+            // drop an identical non-tool assistant bubble before appending the result.
+            if (resultKey) {
+              for (let i = cleaned.length - 1; i >= 0; i--) {
+                const m = cleaned[i]
+                if (
+                  m.role === 'assistant' &&
+                  !m.toolCall &&
+                  !(m.media && m.media.length > 0) &&
+                  m.content.trim() === resultKey
+                ) {
+                  cleaned.splice(i, 1)
+                  break
+                }
+              }
+            }
             const last = cleaned[cleaned.length - 1]
-            // Pop the optimistic streaming-text bubble so the canonical result replaces it,
-            // but NEVER pop an attachment (media) message — it's already persisted and would
-            // otherwise vanish until reload.
+            // Pop a trailing optimistic streaming-text bubble so the canonical result
+            // replaces it, but NEVER pop an attachment (media) message — it's already
+            // persisted and would otherwise vanish until reload.
             if (last && last.role === 'assistant' && !last.toolCall && !(last.media && last.media.length > 0)) {
               cleaned.pop()
             }
@@ -348,7 +370,7 @@ export function useLiveSession(
               {
                 id: crypto.randomUUID(),
                 role: 'assistant' as const,
-                content: String(p.result),
+                content: resultStr,
                 timestamp: Date.now(),
               },
             ]
