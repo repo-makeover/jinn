@@ -949,7 +949,7 @@ export function ChatSidebar({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [olderExpanded, setOlderExpanded] = useState(false)
-  const [focusMode, setFocusMode] = useState<FocusMode>("focused")
+  const [focusMode, setFocusMode] = useState<FocusMode>("all")
   const [loadingMore, setLoadingMore] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<{
     type: "session" | "employee"
@@ -987,8 +987,8 @@ export function ChatSidebar({
     setExpanded(loadExpandedState())
     try {
       setOlderExpanded(localStorage.getItem(OLDER_EXPANDED_STORAGE_KEY) === "true")
-      // Default is "focused"; only an explicit stored "all" flips it.
-      if (localStorage.getItem(FOCUS_MODE_STORAGE_KEY) === "all") setFocusMode("all")
+      const stored = localStorage.getItem(FOCUS_MODE_STORAGE_KEY)
+      if (stored === "focused" || stored === "all") setFocusMode(stored)
     } catch {}
   }, [])
 
