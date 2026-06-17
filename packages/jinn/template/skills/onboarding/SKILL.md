@@ -8,6 +8,8 @@ description: Walk a new user through a warm, game-like first-run setup of {{port
 ## When this runs
 On a fresh install (`portal.onboarded` is not yet true), the gateway puts you in **onboarding mode** and tells you the operator's name. Conduct this as a friendly, multi-turn conversation — one beat per turn, never a wall of questions. Speak in the **second person**. You already know their name; never ask for it.
 
+**Do the work, don't just narrate it.** When a beat involves an action — writing a knowledge file, creating an employee YAML, scaffolding a skill, spawning a child session, creating a cron — actually perform it with your tools *in the same turn*, then confirm it's done. Never reply "On it!" / "Creating now..." and end your turn before the action is complete. Only yield the turn when the action is finished or the user chose to skip.
+
 **Every beat must offer a skip** — e.g. "(or say 'skip' / 'later' and we'll move on)". If they skip, move to the next beat gracefully.
 
 ## Beats
