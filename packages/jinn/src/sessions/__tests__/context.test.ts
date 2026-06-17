@@ -137,82 +137,42 @@ describe("buildContext — config awareness", () => {
   });
 });
 
-describe("buildContext — self-evolution is omitted when configured", () => {
-  // Hermetic: point JINN_HOME at a temp dir WITH a populated user-profile.md and
-  // re-import the module graph, so the result is deterministic regardless of the
-  // runner's real ~/.jinn (a dev box has a profile; CI does not). With the profile
-  // >=50 chars, buildEvolutionContext returns null → no onboarding block.
-  let tmpHome: string;
-  const prevHome = process.env.JINN_HOME;
+describe("buildContext — onboarding block is omitted when portal.onboarded is true", () => {
+  // Gate is now portal.onboarded === true (config flag), not user-profile.md size.
+  const minConfig = {
+    gateway: { host: "127.0.0.1", port: 7799 },
+    engines: { default: "claude" },
+    portal: { onboarded: true },
+  } as unknown as JinnConfig;
 
-  beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-ctx-cfg-"));
-    fs.mkdirSync(path.join(tmpHome, "knowledge"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpHome, "knowledge", "user-profile.md"),
-      "# Alex\nSolo indie developer running several apps. This profile is well past fifty chars.",
-    );
-    process.env.JINN_HOME = tmpHome;
-    vi.resetModules();
+  it("does not emit the onboarding block when portal.onboarded is true", () => {
+    const out = buildContext({ ...baseOpts, config: minConfig });
+    expect(out).not.toContain("## Onboarding mode");
   });
 
-  afterEach(() => {
-    if (prevHome === undefined) delete process.env.JINN_HOME;
-    else process.env.JINN_HOME = prevHome;
-    vi.resetModules();
-    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
-  });
-
-  it("does not emit the onboarding self-evolution block for a configured install", async () => {
-    const { buildContext: freshBuild } = await import("../context.js");
-    const out = freshBuild({ ...baseOpts });
-    expect(out).not.toContain("ONBOARDING MODE");
-  });
-
-  it("never emits self-evolution in employee mode", async () => {
-    const { buildContext: freshBuild } = await import("../context.js");
-    const out = freshBuild({ ...baseOpts, employee: minimalEmployee });
-    expect(out).not.toContain("## Self-evolution");
-    expect(out).not.toContain("ONBOARDING MODE");
+  it("never emits onboarding in employee mode", () => {
+    const out = buildContext({ ...baseOpts, employee: minimalEmployee });
+    expect(out).not.toContain("## Onboarding mode");
   });
 });
 
-describe("buildContext — self-evolution appears ONLY for a fresh install", () => {
-  // Onboarding hinges on JINN_HOME/knowledge/user-profile.md being missing/tiny.
-  // JINN_HOME is resolved at module-load from process.env.JINN_HOME, so we point
-  // it at a temp dir WITHOUT a profile and re-import the module graph.
-  let tmpHome: string;
-  const prevHome = process.env.JINN_HOME;
-
-  beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-ctx-"));
-    process.env.JINN_HOME = tmpHome;
-    vi.resetModules();
+describe("buildContext — onboarding block appears when portal.onboarded is not set", () => {
+  // Gate is portal.onboarded === true. When config is absent or onboarded is falsy,
+  // the operator-aware onboarding directive is injected.
+  it("emits onboarding block when portal.onboarded is not set", () => {
+    const out = buildContext({ ...baseOpts });
+    expect(out).toContain("## Onboarding mode");
+    expect(out).toMatch(/fresh .* install|NOT yet completed onboarding/i);
   });
 
-  afterEach(() => {
-    if (prevHome === undefined) delete process.env.JINN_HOME;
-    else process.env.JINN_HOME = prevHome;
-    vi.resetModules();
-    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
-  });
-
-  it("emits ONBOARDING MODE when user-profile.md is absent", async () => {
-    const { buildContext: freshBuild } = await import("../context.js");
-    const out = freshBuild({ ...baseOpts });
-    expect(out).toContain("## Self-evolution");
-    expect(out).toContain("ONBOARDING MODE");
-  });
-
-  it("omits ONBOARDING MODE once user-profile.md is populated", async () => {
-    fs.mkdirSync(path.join(tmpHome, "knowledge"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpHome, "knowledge", "user-profile.md"),
-      "# Alex\nSolo indie developer running several apps. This profile is well past fifty chars.",
-    );
-    const { buildContext: freshBuild } = await import("../context.js");
-    const out = freshBuild({ ...baseOpts });
-    expect(out).not.toContain("ONBOARDING MODE");
+  it("omits onboarding block when portal.onboarded is true", () => {
+    const config = {
+      gateway: { host: "127.0.0.1", port: 7799 },
+      engines: { default: "claude" },
+      portal: { onboarded: true },
+    } as unknown as JinnConfig;
+    const out = buildContext({ ...baseOpts, config });
+    expect(out).not.toContain("## Onboarding mode");
   });
 });
 
