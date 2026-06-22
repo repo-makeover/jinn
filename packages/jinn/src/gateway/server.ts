@@ -49,6 +49,7 @@ import { loadJobs } from "../cron/jobs.js";
 import { startScheduler, reloadScheduler, stopScheduler } from "../cron/scheduler.js";
 import { scanOrg } from "./org.js";
 import { syncBoardForEvent } from "./board-sync.js";
+import { startBoardWorker } from "./board-worker.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -871,6 +872,7 @@ export async function startGateway(
   // Unstick sessions whose completion event was lost (status:"running" with no
   // live turn). 15s sweep; logs one line per fix.
   const stopStatusReconciler = startStatusReconciler({ engines, emit });
+  const stopBoardWorker = startBoardWorker({ context: apiContext, orgDir: ORG_DIR });
 
   // Resolve web UI directory — bundled into dist/web/ by postbuild script
   // At runtime __dirname is dist/src/gateway/, so ../../web resolves to dist/web/
@@ -1124,6 +1126,7 @@ export async function startGateway(
     // Stop the status reconciler sweep before we start marking sessions
     // interrupted below — a mid-shutdown sweep must not race the teardown.
     stopStatusReconciler();
+    stopBoardWorker();
 
     // Stop caffeinate
     if (caffeinate && caffeinate.exitCode === null) {

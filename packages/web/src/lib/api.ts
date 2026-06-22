@@ -74,6 +74,11 @@ export interface OrgData {
   hierarchy: OrgHierarchy;
 }
 
+export interface DispatchTicketResponse {
+  status: string
+  sessionId: string
+}
+
 const BASE =
   typeof window !== "undefined"
     ? window.location.origin
@@ -466,6 +471,8 @@ export const api = {
     get<Array<{ event: string; payload: unknown; ts: number }>>("/api/activity"),
   updateDepartmentBoard: (name: string, data: unknown) =>
     put<Record<string, unknown>>(`/api/org/departments/${name}/board`, data),
+  dispatchTicket: (department: string, ticketId: string) =>
+    post<DispatchTicketResponse>(`/api/org/departments/${department}/tickets/${ticketId}/dispatch`, {}),
   sttStatus: () =>
     get<{ available: boolean; model: string | null; downloading: boolean; progress: number; languages: string[] }>("/api/stt/status"),
   sttDownload: () =>

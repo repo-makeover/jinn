@@ -59,6 +59,7 @@ export { resolveUserHeader, deliverConnectorReply } from "./connector-reply.js";
 import { supersedeRunningTurn } from "./session-turn-state.js";
 import { createPtyAccessToken } from "./auth.js";
 import { writeMergedBoard } from "./board-service.js";
+import { dispatchTicket } from "./ticket-dispatch.js";
 export type { ApiContext } from "./api/context.js";
 export { matchRoute } from "./api/match-route.js";
 export { resumePendingWebQueueItems } from "./api/session-dispatch.js";
@@ -1012,6 +1013,24 @@ export async function handleApiRequest(
         return serverError(res, "board.json is corrupt");
       }
       return json(res, board);
+    }
+
+    // POST /api/org/departments/:name/tickets/:id/dispatch
+    params = matchRoute("/api/org/departments/:name/tickets/:id/dispatch", pathname);
+    if (method === "POST" && params) {
+      const result = dispatchTicket(
+        params.name,
+        params.id,
+        { source: "manual", routeToManager: false },
+        { context, orgDir: ORG_DIR },
+      );
+      if (!result.ok) {
+        if (result.reason === "no-assignee") return json(res, { reason: result.reason, error: "Assign someone first." }, 400);
+        if (result.reason === "already-running") return json(res, { reason: result.reason, error: "Ticket already has a running session." }, 409);
+        if (result.reason === "not-found") return notFound(res);
+        return json(res, { reason: result.reason, error: result.reason }, 404);
+      }
+      return json(res, { status: "ok", sessionId: result.sessionId });
     }
 
     // PUT /api/org/departments/:name/board

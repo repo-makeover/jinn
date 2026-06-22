@@ -662,6 +662,24 @@ export interface EngineModelsConfig {
 /** `models:` block keyed by engine name (claude | codex | antigravity | grok | pi). */
 export type ModelsConfig = Record<string, EngineModelsConfig>;
 
+export interface BoardWorkerScheduleWindow {
+  start: string;
+  end: string;
+}
+
+export interface BoardWorkerConfig {
+  enabled?: boolean;
+  idleMinutes?: number;
+  timezone?: string;
+  schedule?: {
+    weekday?: BoardWorkerScheduleWindow;
+    weekend?: BoardWorkerScheduleWindow;
+  };
+  usage?: {
+    minRemainingPercent?: number;
+  };
+}
+
 export interface JinnConfig {
   jinn?: { version?: string };
   /** Per-chat working-folder selection. Optional; absent = free-browse + JINN_HOME default. */
@@ -733,6 +751,7 @@ export interface JinnConfig {
     /** Engine to use when rateLimitStrategy="fallback". Default: "codex" */
     fallbackEngine?: "codex";
   };
+  boardWorker?: BoardWorkerConfig;
   cron?: {
     defaultDelivery?: CronDelivery;
     alertChannel?: string;

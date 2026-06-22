@@ -7,6 +7,7 @@
 
 ### ✨ Features
 - **Previous Projects archive.** Chat rooms, individual chats, and past Scheduled run sessions can be snapshotted into read-only dated archives and removed from the active sidebar; cron job definitions keep running unchanged.
+- **Opt-in board worker poller + manual Run now dispatch.** Department kanban tickets can now carry a `complexity` field, a disabled-by-default overnight board worker can dispatch one eligible `todo` ticket per tick to the department manager when chat is idle and usage allows, and the kanban detail panel exposes a manual `Run now` override for assigned tickets.
 
 ### ⚡ Performance / Reliability
 - **Engine lifecycle & queue hardening.** Another pass on interactive-engine teardown and per-session work queues to further reduce leaked process state and stuck turns.

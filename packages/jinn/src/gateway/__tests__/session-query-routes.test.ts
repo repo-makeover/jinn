@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -54,8 +54,6 @@ function makeReq(method: string, urlPath: string) {
 }
 
 async function setup() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-session-query-"));
-  process.env.JINN_HOME = tmp;
   vi.resetModules();
   const api = await import("../api.js");
   const reg = await import("../../sessions/registry.js");
@@ -80,10 +78,24 @@ function makeCtx(api: Awaited<ReturnType<typeof setup>>["api"]) {
 }
 
 beforeEach(() => {
+  prevHome = process.env.JINN_HOME;
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-session-query-"));
+  process.env.JINN_HOME = tmpHome;
   scheduleOnLoadTailSync.mockReset();
   scheduleTranscriptBackfill.mockReset();
   loadRawTranscript.mockReset();
+  vi.resetModules();
 });
+
+afterEach(() => {
+  if (prevHome === undefined) delete process.env.JINN_HOME;
+  else process.env.JINN_HOME = prevHome;
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+  vi.clearAllMocks();
+});
+
+let prevHome: string | undefined;
+let tmpHome: string;
 
 describe("session query routes", () => {
   it("returns the default grouped session payload shape for GET /api/sessions", async () => {

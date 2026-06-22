@@ -2,18 +2,29 @@ import fs from "node:fs";
 import path from "node:path";
 import { safeWriteFile } from "../shared/safe-write.js";
 
+export type BoardTicketComplexity = "low" | "medium" | "high";
+
 export interface BoardTicket {
   id: string;
   title: string;
   description: string;
   status: "todo" | "in_progress" | "done" | "blocked";
   priority: string;
+  complexity?: BoardTicketComplexity;
   assignee: string;
   source?: string;
   sessionId?: string;
   createdAt: string;
   updatedAt: string;
   [k: string]: unknown;
+}
+
+const VALID_COMPLEXITIES = new Set<BoardTicketComplexity>(["low", "medium", "high"]);
+
+export function boardTicketComplexity(ticket: Pick<BoardTicket, "complexity">): BoardTicketComplexity {
+  return typeof ticket.complexity === "string" && VALID_COMPLEXITIES.has(ticket.complexity as BoardTicketComplexity)
+    ? ticket.complexity as BoardTicketComplexity
+    : "medium";
 }
 
 export function boardPath(orgDir: string, department: string): string {

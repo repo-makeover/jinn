@@ -2,7 +2,7 @@
 import { useState, useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import type { Employee } from '@/lib/api'
-import type { TicketPriority } from '@/lib/kanban/types'
+import type { TicketComplexity, TicketPriority } from '@/lib/kanban/types'
 import { PRIORITY_COLORS } from '@/lib/kanban/types'
 import { EmployeePicker } from './employee-picker'
 import {
@@ -21,12 +21,19 @@ interface CreateTicketModalProps {
     title: string
     description: string
     priority: TicketPriority
+    complexity: TicketComplexity
     assigneeId: string | null
   }) => void
 }
 
 const PRIORITIES: TicketPriority[] = ['low', 'medium', 'high']
+const COMPLEXITIES: TicketComplexity[] = ['low', 'medium', 'high']
 const PRIORITY_LABELS: Record<TicketPriority, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+}
+const COMPLEXITY_LABELS: Record<TicketComplexity, string> = {
   low: 'Low',
   medium: 'Medium',
   high: 'High',
@@ -36,6 +43,7 @@ const initialState = {
   title: '',
   description: '',
   priority: 'medium' as TicketPriority,
+  complexity: 'medium' as TicketComplexity,
   assigneeId: '' as string,
 }
 
@@ -64,6 +72,7 @@ export function CreateTicketModal({
       title: form.title.trim(),
       description: form.description.trim(),
       priority: form.priority,
+      complexity: form.complexity,
       assigneeId: form.assigneeId || null,
     })
 
@@ -161,6 +170,37 @@ export function CreateTicketModal({
                       style={{ background: PRIORITY_COLORS[p] }}
                     />
                     {PRIORITY_LABELS[p]}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Complexity */}
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <span
+              className="text-[length:var(--text-caption1)] font-[var(--weight-medium)] text-[var(--text-secondary)]"
+            >
+              Complexity
+            </span>
+            <div className="flex gap-[var(--space-2)]">
+              {COMPLEXITIES.map((complexity) => {
+                const isSelected = form.complexity === complexity
+                return (
+                  <button
+                    key={complexity}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, complexity }))}
+                    className="flex-1 flex items-center justify-center py-[var(--space-2)] px-[var(--space-3)] rounded-[var(--radius-md)] cursor-pointer text-[length:var(--text-caption1)] font-[var(--weight-medium)] transition-all duration-150 ease-[var(--ease-smooth)]"
+                    style={{
+                      border: isSelected
+                        ? '2px solid var(--accent)'
+                        : '2px solid var(--separator)',
+                      background: isSelected ? 'var(--fill-tertiary)' : 'transparent',
+                      color: isSelected ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                    }}
+                  >
+                    {COMPLEXITY_LABELS[complexity]}
                   </button>
                 )
               })}

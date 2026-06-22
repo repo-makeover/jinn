@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeBoardTickets, parseBoardWritePayload, type BoardTicket } from "../board-service.js";
+import { boardTicketComplexity, mergeBoardTickets, parseBoardWritePayload, type BoardTicket } from "../board-service.js";
 
 function ticket(id: string, source?: string): BoardTicket {
   return {
@@ -32,5 +32,10 @@ describe("board-service mergeBoardTickets", () => {
     expect(parseBoardWritePayload([ticket("a")]).tickets).toHaveLength(1);
     const parsed = parseBoardWritePayload({ tickets: [ticket("a")], deletedIds: ["session-s1"] });
     expect(parsed.deletedIds.has("session-s1")).toBe(true);
+  });
+
+  it("defaults missing complexity to medium", () => {
+    expect(boardTicketComplexity(ticket("a"))).toBe("medium");
+    expect(boardTicketComplexity({ ...ticket("b"), complexity: "low" })).toBe("low");
   });
 });

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import yaml from "js-yaml";
-import { normalizeClaudeEngineConfig, validateConfigShape } from "../config.js";
+import { normalizeBoardWorkerConfig, normalizeClaudeEngineConfig, validateConfigShape } from "../config.js";
 
 describe("normalizeClaudeEngineConfig", () => {
   it("applies the maxLivePtys default", () => {
@@ -14,6 +14,40 @@ describe("normalizeClaudeEngineConfig", () => {
   it("preserves a configured maxLivePtys", () => {
     const out = normalizeClaudeEngineConfig({ bin: "claude", model: "opus", maxLivePtys: 16 });
     expect(out.maxLivePtys).toBe(16);
+  });
+});
+
+describe("normalizeBoardWorkerConfig", () => {
+  it("fills defaults and clamps idleMinutes to [0, 60]", () => {
+    const out = normalizeBoardWorkerConfig({ idleMinutes: 999 });
+    expect(out.enabled).toBe(false);
+    expect(out.idleMinutes).toBe(60);
+    expect(out.schedule.weekday).toEqual({ start: "22:00", end: "04:00" });
+    expect(out.schedule.weekend).toEqual({ start: "22:00", end: "04:00" });
+    expect(out.usage.minRemainingPercent).toBe(15);
+  });
+
+  it("preserves valid configured values", () => {
+    const out = normalizeBoardWorkerConfig({
+      enabled: true,
+      idleMinutes: 12,
+      timezone: "UTC",
+      schedule: {
+        weekday: { start: "21:00", end: "03:00" },
+        weekend: { start: "20:00", end: "02:00" },
+      },
+      usage: { minRemainingPercent: 25 },
+    });
+    expect(out).toMatchObject({
+      enabled: true,
+      idleMinutes: 12,
+      timezone: "UTC",
+      schedule: {
+        weekday: { start: "21:00", end: "03:00" },
+        weekend: { start: "20:00", end: "02:00" },
+      },
+      usage: { minRemainingPercent: 25 },
+    });
   });
 });
 
@@ -71,6 +105,34 @@ describe("validateConfigShape", () => {
     expect(validateConfigShape({})[0]).toContain("engines");
     const problems = validateConfigShape({ engines: { default: "codex" } });
     expect(problems.some((p) => p.includes("engines.claude"))).toBe(true);
+  });
+
+  it("validates boardWorker schedule and timezone fields", () => {
+    const ok = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      boardWorker: {
+        enabled: true,
+        idleMinutes: 30,
+        timezone: "UTC",
+        schedule: {
+          weekday: { start: "22:00", end: "04:00" },
+          weekend: { start: "20:00", end: "02:00" },
+        },
+        usage: { minRemainingPercent: 15 },
+      },
+    });
+    expect(ok).toEqual([]);
+
+    const problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      boardWorker: {
+        timezone: "Not/A_Zone",
+        schedule: { weekday: { start: "25:00", end: "nope" } },
+      },
+    });
+    expect(problems.some((p) => p.includes("boardWorker.timezone"))).toBe(true);
+    expect(problems.some((p) => p.includes("boardWorker.schedule.weekday.start"))).toBe(true);
+    expect(problems.some((p) => p.includes("boardWorker.schedule.weekday.end"))).toBe(true);
   });
 });
 

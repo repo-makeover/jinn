@@ -2,14 +2,65 @@ import fs from "node:fs";
 import yaml from "js-yaml";
 import { CONFIG_PATH } from "./paths.js";
 import { safeWriteYaml } from "./safe-write.js";
-import type { JinnConfig } from "./types.js";
+import type { BoardWorkerConfig, JinnConfig } from "./types.js";
 
 type ClaudeEngineConfig = JinnConfig["engines"]["claude"];
+type NormalizedBoardWorkerConfig = Required<NonNullable<JinnConfig["boardWorker"]>> & {
+  schedule: {
+    weekday: { start: string; end: string };
+    weekend: { start: string; end: string };
+  };
+  usage: { minRemainingPercent: number };
+};
+
+const DEFAULT_BOARD_WORKER_WINDOW = { start: "22:00", end: "04:00" } as const;
+const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+function systemTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function normalizeWindow(
+  raw: { start?: unknown; end?: unknown } | undefined,
+): { start: string; end: string } {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_BOARD_WORKER_WINDOW };
+  const start = typeof raw.start === "string" && TIME_OF_DAY_RE.test(raw.start)
+    ? raw.start
+    : DEFAULT_BOARD_WORKER_WINDOW.start;
+  const end = typeof raw.end === "string" && TIME_OF_DAY_RE.test(raw.end)
+    ? raw.end
+    : DEFAULT_BOARD_WORKER_WINDOW.end;
+  return { start, end };
+}
 
 export function normalizeClaudeEngineConfig(raw: ClaudeEngineConfig): Required<Pick<ClaudeEngineConfig, "maxLivePtys">> & ClaudeEngineConfig {
   return {
     ...raw,
     maxLivePtys: raw.maxLivePtys ?? 8,
+  };
+}
+
+export function normalizeBoardWorkerConfig(raw: BoardWorkerConfig | undefined): NormalizedBoardWorkerConfig {
+  const idleMinutes = typeof raw?.idleMinutes === "number" && Number.isFinite(raw.idleMinutes)
+    ? Math.min(60, Math.max(0, Math.round(raw.idleMinutes)))
+    : 30;
+  const minRemainingPercent = typeof raw?.usage?.minRemainingPercent === "number" && Number.isFinite(raw.usage.minRemainingPercent)
+    ? Math.min(100, Math.max(0, raw.usage.minRemainingPercent))
+    : 15;
+  const timezone = typeof raw?.timezone === "string" && raw.timezone.trim()
+    ? raw.timezone.trim()
+    : systemTimezone();
+  return {
+    enabled: raw?.enabled ?? false,
+    idleMinutes,
+    timezone,
+    schedule: {
+      weekday: normalizeWindow(raw?.schedule?.weekday),
+      weekend: normalizeWindow(raw?.schedule?.weekend),
+    },
+    usage: {
+      minRemainingPercent,
+    },
   };
 }
 
@@ -96,6 +147,61 @@ export function validateConfigShape(config: unknown): string[] {
     }
   }
 
+  if (c.boardWorker !== undefined) {
+    if (typeof c.boardWorker !== "object" || c.boardWorker === null || Array.isArray(c.boardWorker)) {
+      problems.push("boardWorker must be a mapping");
+    } else {
+      if (c.boardWorker.enabled !== undefined && typeof c.boardWorker.enabled !== "boolean") {
+        problems.push(`boardWorker.enabled must be a boolean (got ${typeof c.boardWorker.enabled})`);
+      }
+      if (c.boardWorker.idleMinutes !== undefined && typeof c.boardWorker.idleMinutes !== "number") {
+        problems.push(`boardWorker.idleMinutes must be a number (got ${typeof c.boardWorker.idleMinutes})`);
+      }
+      if (c.boardWorker.timezone !== undefined) {
+        if (typeof c.boardWorker.timezone !== "string") {
+          problems.push(`boardWorker.timezone must be a string (got ${typeof c.boardWorker.timezone})`);
+        } else {
+          try {
+            new Intl.DateTimeFormat("en-US", { timeZone: c.boardWorker.timezone });
+          } catch {
+            problems.push(`boardWorker.timezone must be a valid IANA timezone (got ${c.boardWorker.timezone})`);
+          }
+        }
+      }
+      const schedule = c.boardWorker.schedule;
+      if (schedule !== undefined) {
+        if (typeof schedule !== "object" || schedule === null || Array.isArray(schedule)) {
+          problems.push("boardWorker.schedule must be a mapping");
+        } else {
+          for (const key of ["weekday", "weekend"] as const) {
+            const window = schedule[key];
+            if (window === undefined) continue;
+            if (typeof window !== "object" || window === null || Array.isArray(window)) {
+              problems.push(`boardWorker.schedule.${key} must be a mapping`);
+              continue;
+            }
+            if (typeof window.start !== "string" || !TIME_OF_DAY_RE.test(window.start)) {
+              problems.push(`boardWorker.schedule.${key}.start must be HH:MM`);
+            }
+            if (typeof window.end !== "string" || !TIME_OF_DAY_RE.test(window.end)) {
+              problems.push(`boardWorker.schedule.${key}.end must be HH:MM`);
+            }
+          }
+        }
+      }
+      if (c.boardWorker.usage !== undefined) {
+        if (typeof c.boardWorker.usage !== "object" || c.boardWorker.usage === null || Array.isArray(c.boardWorker.usage)) {
+          problems.push("boardWorker.usage must be a mapping");
+        } else if (
+          c.boardWorker.usage.minRemainingPercent !== undefined &&
+          typeof c.boardWorker.usage.minRemainingPercent !== "number"
+        ) {
+          problems.push(`boardWorker.usage.minRemainingPercent must be a number (got ${typeof c.boardWorker.usage.minRemainingPercent})`);
+        }
+      }
+    }
+  }
+
   return problems;
 }
 
@@ -120,6 +226,7 @@ export function loadConfig(): JinnConfig {
   }
   const config = parsed as JinnConfig;
   config.engines.claude = normalizeClaudeEngineConfig(config.engines.claude);
+  config.boardWorker = normalizeBoardWorkerConfig(config.boardWorker);
   return config;
 }
 

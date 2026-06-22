@@ -4,6 +4,8 @@ export type TicketStatus = 'backlog' | 'todo' | 'in-progress' | 'review' | 'bloc
 
 export type TicketPriority = 'low' | 'medium' | 'high'
 
+export type TicketComplexity = 'low' | 'medium' | 'high'
+
 export type WorkState = 'idle' | 'starting' | 'working' | 'done' | 'failed'
 
 export interface KanbanTicket {
@@ -12,6 +14,7 @@ export interface KanbanTicket {
   description: string
   status: TicketStatus
   priority: TicketPriority
+  complexity: TicketComplexity
   assigneeId: string | null // employee name from /api/org
   department: string | null // department for API persistence
   workState: WorkState

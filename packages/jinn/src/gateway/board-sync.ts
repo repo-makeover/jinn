@@ -95,6 +95,10 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
 
   const ticketId = `${TICKET_PREFIX}${sessionId}`;
   const iso = new Date(now).toISOString();
+  const boardMeta = session?.transportMeta && typeof session.transportMeta === "object"
+    ? session.transportMeta as Record<string, unknown>
+    : null;
+  const boardTicketId = typeof boardMeta?.boardTicketId === "string" ? boardMeta.boardTicketId : null;
 
   // Error detail never lands on the board, but failed/stalled work is visible.
   // Feature 2: reflect the approval lifecycle so a session stalled on a human
@@ -121,12 +125,22 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
     note = failed ? "failed - see session" : "completed";
   }
 
-  const existing = tickets.find((t) => t && t.id === ticketId);
+  const existing = tickets.find((t) =>
+    t &&
+    (
+      (boardTicketId !== null && t.id === boardTicketId) ||
+      t.sessionId === sessionId ||
+      t.id === ticketId
+    ),
+  );
   if (existing) {
     existing.status = status;
-    existing.description = note;
     existing.assignee = employee;
+    existing.sessionId = sessionId;
     existing.updatedAt = iso;
+    if (existing.source === "session") {
+      existing.description = note;
+    }
   } else {
     const title = shorten(String(session?.title || p.title || `${employee} task`), 140);
     tickets.push({
@@ -135,6 +149,7 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
       description: note,
       status,
       priority: "medium",
+      complexity: "medium",
       assignee: employee,
       source: "session",
       sessionId,

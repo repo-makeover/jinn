@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { Employee, OrgData } from '@/lib/api'
 import { useGateway } from '@/hooks/use-gateway'
-import type { KanbanTicket, TicketStatus, TicketPriority } from '@/lib/kanban/types'
+import type { KanbanTicket, TicketStatus, TicketPriority, TicketComplexity } from '@/lib/kanban/types'
 import {
   saveTickets,
   createTicket,
@@ -110,6 +110,7 @@ export default function KanbanPage() {
               description?: string
               status: string
               priority?: string
+              complexity?: string
               assignee?: string
               createdAt?: string
               updatedAt?: string
@@ -133,12 +134,19 @@ export default function KanbanPage() {
                   high: 'high',
                 }
                 const priority = priorityMap[item.priority || 'medium'] || 'medium'
+                const complexityMap: Record<string, TicketComplexity> = {
+                  low: 'low',
+                  medium: 'medium',
+                  high: 'high',
+                }
+                const complexity = complexityMap[item.complexity || 'medium'] || 'medium'
                 boardTickets[item.id] = {
                   id: item.id,
                   title: item.title,
                   description: item.description || '',
                   status,
                   priority,
+                  complexity,
                   assigneeId: item.assignee || null,
                   department: dept,
                   workState: 'idle',
@@ -219,6 +227,7 @@ export default function KanbanPage() {
             description: t.description,
             status: t.status === 'in-progress' ? 'in_progress' : t.status,
             priority: t.priority,
+            complexity: t.complexity,
             assignee: t.assigneeId ?? undefined,
             createdAt: new Date(t.createdAt).toISOString(),
             updatedAt: new Date(t.updatedAt).toISOString(),
@@ -258,6 +267,7 @@ export default function KanbanPage() {
     title: string
     description: string
     priority: TicketPriority
+    complexity: TicketComplexity
     assigneeId: string | null
   }) {
     // Infer department from assignee, fallback to first known department
@@ -306,6 +316,31 @@ export default function KanbanPage() {
       persistBoardChange(next)
       return next
     })
+  }
+
+  function handleComplexityChange(ticketId: string, complexity: TicketComplexity) {
+    setTickets((prev) => {
+      const next = updateTicket(prev, ticketId, { complexity })
+      persistBoardChange(next)
+      return next
+    })
+  }
+
+  function handleRunNow(ticketId: string) {
+    const ticket = tickets[ticketId]
+    const department = ticket?.departmentId ?? ticket?.department ?? ''
+    if (!ticket || !department) {
+      setSaveError('Ticket is missing its department.')
+      return
+    }
+
+    setSaveError(null)
+    setTickets((prev) => updateTicket(prev, ticketId, { workState: 'starting' }))
+    void api.dispatchTicket(department, ticketId)
+      .catch((err) => {
+        setSaveError(err instanceof Error ? err.message : 'Failed to start ticket.')
+        loadData()
+      })
   }
 
   function handleTicketClick(ticket: KanbanTicket) {
@@ -457,14 +492,16 @@ export default function KanbanPage() {
 
         {/* Detail panel */}
         {selectedTicket && (
-          <TicketDetailPanel
-            ticket={selectedTicket}
-            employees={employees}
-            onClose={() => setSelectedTicket(null)}
-            onStatusChange={(status) => handleMoveTicket(selectedTicket.id, status)}
-            onAssigneeChange={(name) => handleAssigneeChange(selectedTicket.id, name)}
-            onDelete={() => setDeleteConfirm(selectedTicket)}
-          />
+            <TicketDetailPanel
+              ticket={selectedTicket}
+              employees={employees}
+              onClose={() => setSelectedTicket(null)}
+              onStatusChange={(status) => handleMoveTicket(selectedTicket.id, status)}
+              onComplexityChange={(complexity) => handleComplexityChange(selectedTicket.id, complexity)}
+              onAssigneeChange={(name) => handleAssigneeChange(selectedTicket.id, name)}
+              onRunNow={() => handleRunNow(selectedTicket.id)}
+              onDelete={() => setDeleteConfirm(selectedTicket)}
+            />
         )}
 
         {/* Delete confirmation dialog */}

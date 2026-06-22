@@ -1,7 +1,7 @@
 
 import { useEffect, useRef } from 'react'
 import type { Employee } from '@/lib/api'
-import type { KanbanTicket, TicketStatus, TicketPriority } from '@/lib/kanban/types'
+import type { KanbanTicket, TicketStatus, TicketPriority, TicketComplexity } from '@/lib/kanban/types'
 import { PRIORITY_COLORS, COLUMNS } from '@/lib/kanban/types'
 import { EmployeePicker } from './employee-picker'
 
@@ -31,13 +31,22 @@ function StatusBadge({ status }: { status: TicketStatus }) {
   )
 }
 
+const COMPLEXITIES: TicketComplexity[] = ['low', 'medium', 'high']
+const COMPLEXITY_LABELS: Record<TicketComplexity, string> = {
+  low: 'Low complexity',
+  medium: 'Medium complexity',
+  high: 'High complexity',
+}
+
 /* Main component */
 interface TicketDetailPanelProps {
   ticket: KanbanTicket
   employees: Employee[]
   onClose: () => void
   onStatusChange: (status: TicketStatus) => void
+  onComplexityChange: (complexity: TicketComplexity) => void
   onAssigneeChange: (employeeName: string | null) => void
+  onRunNow: () => void
   onDelete: () => void
 }
 
@@ -46,7 +55,9 @@ export function TicketDetailPanel({
   employees,
   onClose,
   onStatusChange,
+  onComplexityChange,
   onAssigneeChange,
+  onRunNow,
   onDelete,
 }: TicketDetailPanelProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -71,6 +82,10 @@ export function TicketDetailPanel({
 
   const assignee = employees.find(e => e.name === ticket.assigneeId) ?? null
   const accentColor = 'var(--accent)'
+  const runDisabled = !ticket.assigneeId || ticket.workState === 'starting'
+  const runHelperText = !ticket.assigneeId
+    ? 'Assign someone first.'
+    : (ticket.workState === 'starting' ? 'Starting worker session…' : 'Run immediately, bypassing idle and schedule gates.')
 
   return (
     <div
@@ -105,6 +120,9 @@ export function TicketDetailPanel({
             <div className="flex items-center gap-[var(--space-3)] mt-[var(--space-2)]">
               <StatusBadge status={ticket.status} />
               <PriorityBadge priority={ticket.priority} />
+              <span className="text-[length:var(--text-caption2)] font-semibold text-[var(--text-secondary)] bg-[var(--fill-tertiary)] px-[var(--space-2)] py-[2px] rounded-[var(--radius-sm)] uppercase tracking-[0.3px]">
+                {ticket.complexity}
+              </span>
             </div>
 
             {/* Assignee */}
@@ -162,6 +180,33 @@ export function TicketDetailPanel({
             />
           </div>
 
+          <div className="px-[var(--space-5)] pb-[var(--space-4)]">
+            <div className="text-[length:var(--text-caption1)] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.5px] mb-[var(--space-2)]">
+              Complexity
+            </div>
+            <div className="flex gap-[var(--space-1)] flex-wrap">
+              {COMPLEXITIES.map((complexity) => {
+                const isCurrent = complexity === ticket.complexity
+                return (
+                  <button
+                    key={complexity}
+                    onClick={() => { if (!isCurrent) onComplexityChange(complexity) }}
+                    disabled={isCurrent}
+                    className="text-[length:var(--text-caption2)] font-semibold py-[3px] px-[var(--space-2)] rounded-[var(--radius-sm)] border-none transition-all duration-[120ms] ease-linear"
+                    style={{
+                      cursor: isCurrent ? 'default' : 'pointer',
+                      background: isCurrent ? accentColor : 'var(--fill-tertiary)',
+                      color: isCurrent ? 'var(--accent-contrast)' : 'var(--text-secondary)',
+                      opacity: isCurrent ? 1 : 0.8,
+                    }}
+                  >
+                    {COMPLEXITY_LABELS[complexity]}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
           {/* Description */}
           {ticket.description && (
             <div className="px-[var(--space-5)] pb-[var(--space-4)]">
@@ -176,8 +221,23 @@ export function TicketDetailPanel({
           )}
         </div>
 
-        {/* Delete button */}
+        {/* Footer actions */}
         <div className="shrink-0 py-[var(--space-2)] px-[var(--space-5)] pb-[var(--space-4)] border-t border-[var(--separator)]">
+          <button
+            onClick={onRunNow}
+            disabled={runDisabled}
+            className="w-full py-[var(--space-2)] px-[var(--space-3)] rounded-[var(--radius-md)] border-none text-[var(--accent-contrast)] text-[length:var(--text-footnote)] font-semibold transition-all duration-[120ms] ease-linear mb-[var(--space-2)]"
+            style={{
+              background: runDisabled ? 'var(--fill-tertiary)' : 'var(--accent)',
+              color: runDisabled ? 'var(--text-tertiary)' : 'var(--accent-contrast)',
+              cursor: runDisabled ? 'default' : 'pointer',
+            }}
+          >
+            {ticket.workState === 'starting' ? 'Starting…' : 'Run now'}
+          </button>
+          <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mb-[var(--space-3)]">
+            {runHelperText}
+          </div>
           <button
             onClick={handleDelete}
             className="w-full py-[var(--space-2)] px-[var(--space-3)] rounded-[var(--radius-md)] border border-[var(--system-red)] bg-transparent text-[var(--system-red)] text-[length:var(--text-footnote)] font-semibold cursor-pointer transition-all duration-[120ms] ease-linear"

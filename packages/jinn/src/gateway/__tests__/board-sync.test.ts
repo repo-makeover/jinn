@@ -103,6 +103,37 @@ describe("syncBoardForEvent", () => {
     expect(b.find((t: any) => t.id === "policy-1")).toBeTruthy();
   });
 
+  it("updates a ticket-driven board ticket in place instead of creating a session-* duplicate", () => {
+    writeBoard("software-delivery", [{
+      id: "ticket-1",
+      title: "Manual board task",
+      description: "Keep this description",
+      status: "todo",
+      priority: "high",
+      complexity: "low",
+      assignee: "code-reviewer",
+      sessionId: "s1",
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z",
+    }]);
+    const ok = syncBoardForEvent("session:completed", { sessionId: "s1" }, deps({
+      getSession: () =>
+        makeSession({
+          employee: "code-implementer",
+          transportMeta: { boardTicketId: "ticket-1", boardDepartment: "software-delivery" } as any,
+        }),
+    }));
+    expect(ok).toBe(true);
+    const b = readBoard("software-delivery");
+    expect(b).toHaveLength(1);
+    expect(b[0]).toMatchObject({
+      id: "ticket-1",
+      status: "done",
+      description: "Keep this description",
+      sessionId: "s1",
+    });
+  });
+
   it("ignores sessions with no employee", () => {
     writeBoard("software-delivery", []);
     const ok = syncBoardForEvent("session:started", { sessionId: "s1" }, deps({
