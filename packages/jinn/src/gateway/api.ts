@@ -1703,9 +1703,12 @@ export async function handleApiRequest(
         );
       const config = context.getConfig();
       const onboarded = config.portal?.onboarded === true;
+      const setupComplete = config.portal?.setupComplete === true || onboarded;
       return json(res, {
         needed: onboardingNeeded(onboarded),
         onboarded,
+        setupComplete,
+        conversationNeeded: !setupComplete,
         sessionsCount: sessions.length,
         hasEmployees,
         portalName: config.portal?.portalName ?? null,
@@ -1728,6 +1731,7 @@ export async function handleApiRequest(
         portal: {
           ...config.portal,
           onboarded: true,
+          setupComplete: true,
           ...(portalName !== undefined && { portalName: portalName || undefined }),
           ...(operatorName !== undefined && { operatorName: operatorName || undefined }),
           ...(language !== undefined && { language: language || undefined }),
