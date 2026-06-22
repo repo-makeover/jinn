@@ -406,6 +406,8 @@ by John Rice, adapted for Jinn's architecture. ClawPort provides the foundation 
 the theme system, shadcn components, org map, kanban board, cost dashboard, and
 activity console.
 
+This is forked from [Jinn](https://github.com/hristo2612) by Chris. I am modifying it as a foundation for my needs as hristo2612 had most of what I was looking for in an agent orchestration tool (not too complex).
+
 ## 📄 License
 
 [MIT](LICENSE)
