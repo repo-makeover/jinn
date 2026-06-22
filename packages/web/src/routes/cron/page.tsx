@@ -41,6 +41,8 @@ interface CronRun {
 }
 
 type Filter = "all" | "enabled" | "disabled"
+type TriggerTone = "running" | "success" | "error"
+interface TriggerState { label: string; tone: TriggerTone; error?: string }
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -64,11 +66,15 @@ function timeAgo(dateStr: string | null | undefined): string {
   return `${days}d ago`
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /* ------------------------------------------------------------------ */
 /*  RecentRuns (lazy-loaded per job)                                    */
 /* ------------------------------------------------------------------ */
 
-function RecentRuns({ jobId }: { jobId: string }) {
+function RecentRuns({ jobId, refreshKey }: { jobId: string; refreshKey: number }) {
   const [runs, setRuns] = useState<CronRun[] | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -83,7 +89,7 @@ function RecentRuns({ jobId }: { jobId: string }) {
         setRuns([])
         setLoading(false)
       })
-  }, [jobId])
+  }, [jobId, refreshKey])
 
   if (loading) {
     return (
@@ -160,7 +166,7 @@ export default function CronPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [updatedAgo, setUpdatedAgo] = useState("just now")
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
-  const [triggeringId, setTriggeringId] = useState<string | null>(null)
+  const [triggering, setTriggering] = useState<Record<string, TriggerState>>({})
   const [employeeMap, setEmployeeMap] = useState<Map<string, Employee>>(new Map())
 
   // Fetch employee display names
@@ -213,6 +219,51 @@ export default function CronPage() {
       })
       .catch(() => {})
   }
+
+  const runNow = useCallback(async (job: CronJob) => {
+    setTriggering((prev) => ({ ...prev, [job.id]: { label: "Starting", tone: "running" } }))
+    try {
+      const started = await api.triggerCronJob(job.id) as { runId?: string; status?: string }
+      const runId = started.runId
+      if (!runId) {
+        setTriggering((prev) => ({ ...prev, [job.id]: { label: "Started", tone: "running" } }))
+        refresh()
+        return
+      }
+      setTriggering((prev) => ({ ...prev, [job.id]: { label: "Running", tone: "running" } }))
+      for (let attempt = 0; attempt < 120; attempt++) {
+        await wait(1000)
+        const runs = await api.getCronRuns(job.id, runId) as CronRun[]
+        const current = runs[0]
+        if (!current) continue
+        if (current.status === "success") {
+          setTriggering((prev) => ({ ...prev, [job.id]: { label: "Succeeded", tone: "success" } }))
+          refresh()
+          setTimeout(() => setTriggering((prev) => {
+            const next = { ...prev }
+            delete next[job.id]
+            return next
+          }), 2500)
+          return
+        }
+        if (current.status === "error" || current.status === "skipped_overlap") {
+          setTriggering((prev) => ({
+            ...prev,
+            [job.id]: { label: current.status === "skipped_overlap" ? "Already running" : "Failed", tone: "error", error: current.error },
+          }))
+          refresh()
+          return
+        }
+      }
+      setTriggering((prev) => ({ ...prev, [job.id]: { label: "Still running", tone: "running" } }))
+      refresh()
+    } catch (err) {
+      setTriggering((prev) => ({
+        ...prev,
+        [job.id]: { label: "Failed", tone: "error", error: err instanceof Error ? err.message : "Trigger failed" },
+      }))
+    }
+  }, [refresh])
 
   // Derived data
   const enabledCount = jobs.filter(j => j.enabled).length
@@ -373,6 +424,7 @@ export default function CronPage() {
                           <div className="rounded-[var(--radius-md)] overflow-hidden bg-[var(--material-regular)] border border-[var(--separator)]">
                             {empJobs.map((job, idx) => {
                               const isExpanded = expandedId === job.id
+                              const triggerState = triggering[job.id]
 
                               return (
                                 <div key={job.id}>
@@ -504,29 +556,29 @@ export default function CronPage() {
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation()
-                                            setTriggeringId(job.id)
-                                            api.triggerCronJob(job.id)
-                                              .then(() => {
-                                                setTimeout(refresh, 2000)
-                                              })
-                                              .catch(() => {})
-                                              .finally(() => {
-                                                setTimeout(() => setTriggeringId(null), 2000)
-                                              })
+                                            void runNow(job)
                                           }}
-                                          disabled={triggeringId === job.id}
+                                          disabled={Boolean(triggerState) || !job.enabled}
                                           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-[var(--radius-sm)] border border-[var(--separator)] text-[length:var(--text-caption1)] font-semibold transition-all duration-200 ease-in-out"
                                           style={{
-                                            background: triggeringId === job.id ? "var(--fill-tertiary)" : "var(--material-regular)",
-                                            color: triggeringId === job.id ? "var(--system-green)" : "var(--text-secondary)",
-                                            cursor: triggeringId === job.id ? "default" : "pointer",
+                                            background: triggerState ? "var(--fill-tertiary)" : "var(--material-regular)",
+                                            color: triggerState?.tone === "success"
+                                              ? "var(--system-green)"
+                                              : triggerState?.tone === "error"
+                                                ? "var(--system-red)"
+                                                : triggerState
+                                                  ? "var(--text-secondary)"
+                                                  : "var(--text-secondary)",
+                                            cursor: triggerState || !job.enabled ? "default" : "pointer",
                                           }}
                                         >
-                                          {triggeringId === job.id ? (
+                                          {triggerState ? (
                                             <>
-                                              <span className="text-sm">&#10003;</span>
-                                              Triggered
+                                              <span className="text-sm">{triggerState.tone === "success" ? "✓" : triggerState.tone === "error" ? "!" : "…"}</span>
+                                              {triggerState.label}
                                             </>
+                                          ) : !job.enabled ? (
+                                            <>Disabled</>
                                           ) : (
                                             <>
                                               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
@@ -536,10 +588,15 @@ export default function CronPage() {
                                             </>
                                           )}
                                         </button>
+                                        {triggerState?.error && (
+                                          <div className="mt-2 text-[length:var(--text-caption2)] text-[var(--system-red)]">
+                                            {triggerState.error}
+                                          </div>
+                                        )}
                                       </div>
 
                                       {/* Run history */}
-                                      <RecentRuns jobId={job.id} />
+                                      <RecentRuns jobId={job.id} refreshKey={lastRefresh.getTime()} />
                                     </div>
                                   )}
                                 </div>

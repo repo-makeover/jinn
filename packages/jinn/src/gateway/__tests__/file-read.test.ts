@@ -77,6 +77,24 @@ describe("resolveReadPath — first existing file wins", () => {
   });
 });
 
+describe("isAllowedReadPath — root policy", () => {
+  function ctx(gateway: Record<string, unknown>): Parameters<typeof files.isAllowedReadPath>[1] {
+    return { getConfig: () => ({ gateway }) } as Parameters<typeof files.isAllowedReadPath>[1];
+  }
+
+  it("allows configured roots and denies outside paths by default", () => {
+    const root = path.join(tmpHome, "allowed");
+    const inside = path.join(root, "note.md");
+    const outside = path.join(os.tmpdir(), "outside-note.md");
+    expect(files.isAllowedReadPath(inside, ctx({ fileReadRoots: [root] }))).toBe(true);
+    expect(files.isAllowedReadPath(outside, ctx({ fileReadRoots: [root] }))).toBe(false);
+  });
+
+  it("allows any path only with the explicit arbitrary-read escape hatch", () => {
+    expect(files.isAllowedReadPath("/etc/hosts", ctx({ allowArbitraryFileRead: true }))).toBe(true);
+  });
+});
+
 describe("classifyFile — size cap + binary detection", () => {
   let dir: string;
   beforeAll(() => {

@@ -25,7 +25,15 @@ describe("validateConfigShape", () => {
   it("accepts a full default-shaped config", () => {
     expect(validateConfigShape({
       jinn: { version: "1.0.0" },
-      gateway: { port: 7777, host: "127.0.0.1" },
+      gateway: {
+        port: 7777,
+        host: "127.0.0.1",
+        streaming: true,
+        fileReadRoots: ["/tmp"],
+        allowArbitraryFileRead: false,
+        exposeResolvedFilePaths: false,
+        userHeader: ["x-auth-request-user", "x-forwarded-user"],
+      },
       engines: { default: "claude", claude: { bin: "claude", model: "opus" }, codex: { bin: "codex", model: "gpt-5.5" } },
       connectors: {},
       logging: { file: true, stdout: true, level: "info" },
@@ -49,6 +57,14 @@ describe("validateConfigShape", () => {
   it("rejects a non-numeric gateway.port", () => {
     const problems = validateConfigShape({ gateway: { port: "7777" }, engines: { claude: {} } });
     expect(problems.some((p) => p.includes("gateway.port"))).toBe(true);
+  });
+
+  it("rejects unknown gateway keys and invalid gateway arrays", () => {
+    let problems = validateConfigShape({ gateway: { surprise: true }, engines: { claude: {} } });
+    expect(problems.some((p) => p.includes("unknown gateway config keys: surprise"))).toBe(true);
+
+    problems = validateConfigShape({ gateway: { userHeader: [123] }, engines: { claude: {} } });
+    expect(problems.some((p) => p.includes("gateway.userHeader"))).toBe(true);
   });
 
   it("rejects missing engines / engines.claude", () => {

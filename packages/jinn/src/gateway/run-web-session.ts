@@ -7,7 +7,7 @@ import { recordEngineRateLimit } from "../shared/usage-status.js";
 import { effortLevelsForModel, engineAvailable, isKnownEngine, engineUnavailableMessage } from "../shared/models.js";
 import { createApproval } from "./approvals.js";
 import { buildContext } from "../sessions/context.js";
-import { listChildSessions, getSession, updateSession, insertMessage, insertPartialMessage, updatePartialMessage, deletePartialMessages, finalizePartialMessages, getMessages } from "../sessions/registry.js";
+import { listChildSessions, getSession, updateSession, patchSessionTransportMeta, insertMessage, insertPartialMessage, updatePartialMessage, deletePartialMessages, finalizePartialMessages, getMessages } from "../sessions/registry.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveEffort } from "../shared/effort.js";
@@ -800,12 +800,11 @@ export async function runWebSession(
       markTranscriptSyncedThrough(currentSession.id, result.sessionId);
     }
     if (syncRequested && !rateLimit.limited && !quietPreempted) {
-      const meta = (getSession(currentSession.id)?.transportMeta || currentSession.transportMeta || {}) as Record<string, unknown>;
-      if (meta && typeof meta === "object" && !Array.isArray(meta)) {
-        const nextMeta = { ...meta } as Record<string, unknown>;
+      patchSessionTransportMeta(currentSession.id, (current) => {
+        const nextMeta = { ...current } as Record<string, unknown>;
         delete nextMeta["claudeSyncSince"];
-        updateSession(currentSession.id, { transportMeta: nextMeta as any });
-      }
+        return nextMeta as any;
+      });
     }
     clearSupersededTurnMeta(currentSession.id);
     const reportedError = quietPreempted ? null : (result.error ?? null);

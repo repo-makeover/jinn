@@ -146,10 +146,9 @@ function expandPath(p: string): string {
   return p;
 }
 
-// ── Arbitrary file read (web UI) ─────────────────────────────────
-// CEO has waived path allowlisting: single-user machine behind Tailscale, risk
-// accepted. This endpoint reads ANY file on disk. Guards: 5 MB size cap +
-// binary detection (no allowlist, no secrets denylist).
+// ── Inline file read (web UI) ─────────────────────────────────────
+// Reads are constrained to configured roots by default. Operators can opt back
+// into the old arbitrary-local-read behavior with gateway.allowArbitraryFileRead.
 
 /** Max bytes we'll read into memory for inline display. Larger files → tooLarge flag. */
 export const MAX_READ_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -210,6 +209,22 @@ export function resolveReadPath(requestedPath: string): { resolvedPath: string |
     }
   }
   return { resolvedPath: null, candidates };
+}
+
+function defaultReadRoots(): string[] {
+  return [JINN_HOME, FILES_DIR, UPLOADS_DIR];
+}
+
+function configuredReadRoots(context: ApiContext): string[] {
+  const configured = context.getConfig().gateway?.fileReadRoots;
+  const roots = configured && configured.length > 0 ? configured : defaultReadRoots();
+  return roots.map((root) => path.resolve(expandPath(root)));
+}
+
+export function isAllowedReadPath(absPath: string, context: ApiContext): boolean {
+  if (context.getConfig().gateway?.allowArbitraryFileRead === true) return true;
+  const resolved = path.resolve(absPath);
+  return configuredReadRoots(context).some((root) => resolved === root || resolved.startsWith(root + path.sep));
 }
 
 export interface FileClassification {
@@ -880,8 +895,8 @@ export async function handleFilesRequest(
   method: string,
   context: ApiContext,
 ): Promise<boolean> {
-  // GET /api/files/read?path=<path> — read ANY file on disk for inline display.
-  // No allowlist (CEO-waived). Guards: 5 MB size cap + binary detection.
+  // GET /api/files/read?path=<path> — read a configured-root file for inline display.
+  // Guards: auth at the server boundary, root allowlist, 5 MB size cap, binary detection.
   if (method === "GET" && pathname === "/api/files/read") {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const requested = reqUrl.searchParams.get("path");
@@ -898,11 +913,15 @@ export async function handleFilesRequest(
       badRequest(res, "Not a file");
       return true;
     }
+    if (!isAllowedReadPath(resolvedPath, context)) {
+      json(res, { error: "File is outside configured read roots" }, 403);
+      return true;
+    }
     try {
       const c = classifyFile(resolvedPath);
       json(res, {
         path: requested,
-        resolvedPath,
+        ...(context.getConfig().gateway?.exposeResolvedFilePaths ? { resolvedPath } : {}),
         mime: c.mime,
         size: c.size,
         ...(c.tooLarge ? { tooLarge: true } : {}),

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Session } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
-import { safeWriteFile } from "../shared/safe-write.js";
+import { readBoardArray, writeBoardTickets, type BoardTicket } from "./board-service.js";
 
 /**
  * Auto-reflect running jobs on the department Kanban.
@@ -12,10 +12,10 @@ import { safeWriteFile } from "../shared/safe-write.js";
  * module subscribes to `session:started` / `session:completed` and upserts ONE
  * ticket per employee-bound session on that employee's department board:
  *   started   → in_progress
- *   completed → done   (success OR failure — outcomes are NOT surfaced here)
+ *   completed → done/blocked (failure is visible without leaking error text)
  *
- * The board answers "what's being worked on / what's pending"; failures stay in the
- * session/threads view and never put error text on the board.
+ * The board answers "what's being worked on / what's pending"; error detail stays
+ * in the session/threads view and never lands on the board.
  *
  * Conservative by design:
  *  - only sessions BOUND TO AN EMPLOYEE that resolves to a department are ticketed
@@ -30,20 +30,6 @@ import { safeWriteFile } from "../shared/safe-write.js";
 const TICKET_PREFIX = "session-";
 /** Cap auto-managed terminal tickets per board so it can't grow without bound. */
 const MAX_SESSION_TERMINAL_TICKETS = 40;
-
-export interface BoardTicket {
-  id: string;
-  title: string;
-  description: string;
-  status: "todo" | "in_progress" | "done" | "blocked";
-  priority: string;
-  assignee: string;
-  source?: string;
-  sessionId?: string;
-  createdAt: string;
-  updatedAt: string;
-  [k: string]: unknown;
-}
 
 export interface BoardSyncDeps {
   /** Look up the live session row (for employee/title/status). */
@@ -98,23 +84,19 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
   const boardPath = path.join(deps.orgDir, dept, "board.json");
   if (!fs.existsSync(boardPath)) return false; // department hasn't opted into a board
 
-  let parsed: unknown;
+  let tickets: BoardTicket[] | null;
   try {
-    parsed = JSON.parse(fs.readFileSync(boardPath, "utf-8"));
+    tickets = readBoardArray(deps.orgDir, dept);
   } catch (err) {
     logger.warn(`[board-sync] ${dept}/board.json is not valid JSON — skipping: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
-  if (!Array.isArray(parsed)) return false; // never corrupt a non-array (hand-authored) board
-  const tickets = parsed as BoardTicket[];
+  if (!tickets) return false; // never corrupt a non-array (hand-authored) board
 
   const ticketId = `${TICKET_PREFIX}${sessionId}`;
   const iso = new Date(now).toISOString();
 
-  // The board answers "what's being worked on / what's pending" — NOT "what failed".
-  // Outcome is intentionally not surfaced: success and failure both resolve to
-  // "done" with a neutral note, and no error text ever lands on the board (failures
-  // live in the session/threads view).
+  // Error detail never lands on the board, but failed/stalled work is visible.
   // Feature 2: reflect the approval lifecycle so a session stalled on a human
   // decision shows as "blocked" (not invisibly idle), and clears when resolved.
   let status: BoardTicket["status"];
@@ -134,8 +116,9 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
       note = "stopped (fallback rejected)";
     }
   } else {
-    status = "done";
-    note = "completed";
+    const failed = Boolean((payload as { error?: unknown; stalled?: unknown })?.error || (payload as { stalled?: unknown })?.stalled || session?.status === "error");
+    status = failed ? "blocked" : "done";
+    note = failed ? "failed - see session" : "completed";
   }
 
   const existing = tickets.find((t) => t && t.id === ticketId);
@@ -165,7 +148,7 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
   try {
     // Atomic + fsync (born-safe for F1/F2). No audit: board sync is high-churn
     // and would flood the ledger; the board itself is derived, not canonical.
-    safeWriteFile(boardPath, JSON.stringify(tickets, null, 2));
+    writeBoardTickets(deps.orgDir, dept, tickets);
   } catch (err) {
     logger.warn(`[board-sync] failed to write ${dept}/board.json: ${err instanceof Error ? err.message : String(err)}`);
     return false;

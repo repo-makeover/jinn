@@ -1,14 +1,16 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { safeWriteFile } from "../shared/safe-write.js";
+import { generateApiToken } from "./auth.js";
 
-export interface GatewayInfo { port: number; secret: string; pid: number; ptyPids?: number[]; }
+export interface GatewayInfo { port: number; secret: string; apiToken: string; pid: number; ptyPids?: number[]; }
 
-export function writeGatewayInfo(file: string, opts: { port: number; pid: number; secret?: string }): GatewayInfo {
+export function writeGatewayInfo(file: string, opts: { port: number; pid: number; secret?: string; apiToken?: string }): GatewayInfo {
   const info: GatewayInfo = {
     port: opts.port,
     pid: opts.pid,
     secret: opts.secret ?? crypto.randomBytes(24).toString("hex"),
+    apiToken: opts.apiToken ?? generateApiToken(),
     ptyPids: [],
   };
   // Atomic + fsync + 0o600 (ephemeral runtime info; no audit).

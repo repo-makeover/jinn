@@ -127,7 +127,8 @@ jinn setup
 jinn start
 ```
 
-Then open [http://localhost:7777](http://localhost:7777).
+Then open [http://localhost:7777](http://localhost:7777). The dashboard prompts
+for the API token written to `~/.jinn/gateway.json` on gateway start.
 
 > **Authenticate your engines first.** Jinn drives the official engine CLIs, so
 > sign in to them once before `jinn start`: run `claude` and use `/login`, and
@@ -242,6 +243,12 @@ Jinn reads its configuration from `~/.jinn/config.yaml`. An example:
 gateway:
   port: 7777
   host: "127.0.0.1"
+  # /api/files/read is limited to these roots by default.
+  # Omit to allow only ~/.jinn plus Jinn-managed file/upload directories.
+  fileReadRoots:
+    - "/path/to/project"
+  # Unsafe escape hatch for single-user local installs only.
+  allowArbitraryFileRead: false
 
 engines:
   default: claude        # claude | codex | antigravity | grok | pi
@@ -281,6 +288,12 @@ the registry the dashboard's model/effort pickers read from. An optional
 auto-failover to another model or engine when the primary is rate-limited or
 unavailable. Cron jobs are defined separately in `~/.jinn/cron/jobs.json`
 (hot-reloaded on change), not inline in `config.yaml`.
+
+On gateway start, Jinn writes `~/.jinn/gateway.json` with an `apiToken`. Browser
+login uses `POST /api/auth/login` to set an HttpOnly cookie; CLI clients can send
+`Authorization: Bearer <apiToken>` or `X-Jinn-Token: <apiToken>` to `/api/**`.
+Static web assets remain public, and PTY websocket access uses a short-lived token
+minted by `POST /api/sessions/:id/pty-token`.
 
 The AI org (employees) lives as individual YAML files in `~/.jinn/org/`, one per
 employee, each defining its persona, rank, department, and engine. The daemon
@@ -370,7 +383,7 @@ Jinn is under active development. Here's what's coming:
 
 ### 🛠️ Platform
 - [ ] **Plugin system**: installable plugins for common integrations (Stripe, Linear, GitHub)
-- [ ] **REST API auth**: API keys for secure remote access
+- [x] **REST API auth**: gateway token login for dashboard, REST API, and PTY websockets
 - [ ] **Multi-user support**: team access with roles and permissions
 - [ ] **Docker image**: one-command deployment with `docker run`
 

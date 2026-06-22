@@ -15,6 +15,7 @@ vi.mock("../registry.js", () => ({
   getSession: (...a: unknown[]) => getSessionMock(...a),
   getMessages: vi.fn(() => []),
   updateSession: vi.fn(),
+  patchSessionTransportMeta: vi.fn(),
 }));
 
 vi.mock("../../shared/usageAwareness.js", () => ({

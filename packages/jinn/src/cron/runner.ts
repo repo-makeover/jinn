@@ -1,4 +1,5 @@
-import type { CronJob, Connector, JinnConfig } from "../shared/types.js";
+import crypto from "node:crypto";
+import type { CronJob, Connector, CronRunEntry, JinnConfig } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { appendRunLog } from "./jobs.js";
 import { scanOrg, findEmployee } from "../gateway/org.js";
@@ -10,8 +11,11 @@ export async function runCronJob(
   sessionManager: SessionManager,
   config: JinnConfig,
   connectors: Map<string, Connector>,
-): Promise<void> {
+  opts: { runId?: string; trigger?: CronRunEntry["trigger"] } = {},
+): Promise<CronRunEntry> {
   const startTime = Date.now();
+  const runId = opts.runId ?? crypto.randomUUID();
+  const trigger = opts.trigger ?? "scheduled";
   logger.info(`Cron job "${job.name}" (${job.id}) starting`);
 
   const delivery = job.delivery || config.cron?.defaultDelivery;
@@ -25,6 +29,16 @@ export async function runCronJob(
   const connector = new CronConnector(connectors, delivery);
   const startedAt = new Date().toISOString();
   const sessionKey = `cron:${job.id}:${Date.now()}`;
+  appendRunLog(job.id, {
+    runId,
+    timestamp: startedAt,
+    startedAt,
+    sessionKey,
+    status: "running",
+    trigger,
+    error: null,
+    resultPreview: null,
+  });
 
   try {
     // Org scanning lives inside the try: org/ hot-reloads, and a malformed YAML
@@ -72,15 +86,21 @@ export async function runCronJob(
     );
 
     const durationMs = Date.now() - startTime;
-    appendRunLog(job.id, {
-      timestamp: startedAt,
+    const finishedAt = new Date().toISOString();
+    const finalEntry: CronRunEntry = {
+      runId,
+      timestamp: finishedAt,
+      startedAt,
+      finishedAt,
       sessionKey,
       sessionId: routeResult?.sessionId ?? null,
       status: "success",
+      trigger,
       durationMs,
       error: null,
       resultPreview: null,
-    });
+    };
+    appendRunLog(job.id, finalEntry);
     logger.info(`Cron job "${job.name}" completed in ${durationMs}ms`);
 
     // Latency alert: warn if job exceeded threshold
@@ -102,16 +122,23 @@ export async function runCronJob(
         }
       }
     }
+    return finalEntry;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    appendRunLog(job.id, {
-      timestamp: startedAt,
+    const finishedAt = new Date().toISOString();
+    const finalEntry: CronRunEntry = {
+      runId,
+      timestamp: finishedAt,
+      startedAt,
+      finishedAt,
       sessionKey,
       status: "error",
+      trigger,
       durationMs: Date.now() - startTime,
       error: message,
       resultPreview: null,
-    });
+    };
+    appendRunLog(job.id, finalEntry);
     logger.error(`Cron job "${job.name}" failed: ${message}`);
 
     // Send alert if configured
@@ -128,5 +155,6 @@ export async function runCronJob(
         });
       }
     }
+    return finalEntry;
   }
 }

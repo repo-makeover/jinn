@@ -3,9 +3,9 @@ import { useEffect, useState, useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { Employee, OrgData } from '@/lib/api'
+import { useGateway } from '@/hooks/use-gateway'
 import type { KanbanTicket, TicketStatus, TicketPriority } from '@/lib/kanban/types'
 import {
-  loadTickets,
   saveTickets,
   createTicket,
   updateTicket,
@@ -77,58 +77,17 @@ function DeleteConfirmDialog({
 
 export default function KanbanPage() {
   useBreadcrumbs([{ label: 'Kanban' }])
+  const { subscribe } = useGateway()
   const [tickets, setTickets] = useState<KanbanStore>({})
   const [employees, setEmployees] = useState<Employee[]>([])
   const [departments, setDepartments] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [selectedTicket, setSelectedTicket] = useState<KanbanTicket | null>(null)
   const [filterEmployeeId, setFilterEmployeeId] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<KanbanTicket | null>(null)
-
-  /** Sync tickets to the gateway API, grouped by department */
-  const syncToApi = useCallback(async (store: KanbanStore) => {
-    // Group tickets by department
-    const byDept: Record<string, Array<{
-      id: string
-      title: string
-      description?: string
-      status: string
-      priority: string
-      assignee?: string
-      createdAt: string
-      updatedAt: string
-    }>> = {}
-
-    for (const ticket of Object.values(store)) {
-      const dept = ticket.department
-      if (!dept) continue
-      if (!byDept[dept]) byDept[dept] = []
-      byDept[dept].push({
-        id: ticket.id,
-        title: ticket.title,
-        description: ticket.description || undefined,
-        status: ticket.status,
-        priority: ticket.priority,
-        assignee: ticket.assigneeId || undefined,
-        createdAt: new Date(ticket.createdAt).toISOString(),
-        updatedAt: new Date(ticket.updatedAt).toISOString(),
-      })
-    }
-
-    // PUT each department's board (including empty arrays to clear deleted tickets)
-    const allDepts = new Set([...Object.keys(byDept), ...departments])
-    const promises = Array.from(allDepts).map(async (dept) => {
-      try {
-        await api.updateDepartmentBoard(dept, byDept[dept] || [])
-      } catch {
-        // API unavailable — localStorage is the fallback
-      }
-    })
-
-    await Promise.all(promises)
-  }, [departments])
 
   const loadData = useCallback(() => {
     setLoading(true)
@@ -163,6 +122,7 @@ export default function KanbanPage() {
                   'in_progress': 'in-progress',
                   'in-progress': 'in-progress',
                   done: 'done',
+                  blocked: 'blocked',
                   backlog: 'backlog',
                   review: 'review',
                 }
@@ -206,6 +166,20 @@ export default function KanbanPage() {
     loadData()
   }, [loadData])
 
+  useEffect(() => {
+    const unsubscribe = subscribe((event, payload) => {
+      if (event !== 'board:updated') return
+      const department =
+        payload && typeof payload === 'object' && 'department' in payload
+          ? String((payload as { department?: unknown }).department ?? '')
+          : ''
+      if (!department || departments.length === 0 || departments.includes(department)) {
+        loadData()
+      }
+    })
+    return unsubscribe
+  }, [subscribe, departments, loadData])
+
   // Persist tickets to both localStorage and the API whenever the store changes
   useEffect(() => {
     if (!loading) {
@@ -219,7 +193,7 @@ export default function KanbanPage() {
    * remain in localStorage only until a department can be assigned).
    */
   const persistToApi = useCallback(
-    async (store: KanbanStore) => {
+    async (store: KanbanStore, deletedIds: string[] = []) => {
       // Group tickets by their department
       const byDept: Record<string, KanbanTicket[]> = {}
       for (const ticket of Object.values(store)) {
@@ -234,26 +208,40 @@ export default function KanbanPage() {
         if (!byDept[dept]) byDept[dept] = []
       }
 
-      // Write each department board; errors are non-fatal (UI still works via localStorage)
+      // Write each department board. Errors are surfaced to the UI and the
+      // board is refetched from the gateway so optimistic local state does not
+      // become the hidden source of truth.
       await Promise.all(
         Object.entries(byDept).map(([dept, deptTickets]) => {
           const boardData = deptTickets.map((t) => ({
             id: t.id,
             title: t.title,
             description: t.description,
-            status: t.status,
+            status: t.status === 'in-progress' ? 'in_progress' : t.status,
             priority: t.priority,
             assignee: t.assigneeId ?? undefined,
             createdAt: new Date(t.createdAt).toISOString(),
             updatedAt: new Date(t.updatedAt).toISOString(),
           }))
-          return api.updateDepartmentBoard(dept, boardData).catch(() => {
-            // Silently ignore — department dir may not exist on disk yet
+          return api.updateDepartmentBoard(dept, {
+            tickets: boardData,
+            deletedIds,
           })
         }),
       )
     },
     [departments],
+  )
+
+  const persistBoardChange = useCallback(
+    (store: KanbanStore, deletedIds: string[] = []) => {
+      setSaveError(null)
+      void persistToApi(store, deletedIds).catch((err) => {
+        setSaveError(err instanceof Error ? err.message : 'Failed to save board changes.')
+        loadData()
+      })
+    },
+    [persistToApi, loadData],
   )
 
   // Keep selectedTicket in sync with store
@@ -283,7 +271,7 @@ export default function KanbanPage() {
         department: departmentId,
         departmentId,
       })
-      persistToApi(next)
+      persistBoardChange(next)
       return next
     })
   }
@@ -291,7 +279,7 @@ export default function KanbanPage() {
   function handleMoveTicket(ticketId: string, status: TicketStatus) {
     setTickets((prev) => {
       const next = moveTicket(prev, ticketId, status)
-      persistToApi(next)
+      persistBoardChange(next)
       return next
     })
   }
@@ -299,7 +287,7 @@ export default function KanbanPage() {
   function handleDeleteTicket(ticketId: string) {
     setTickets((prev) => {
       const next = deleteTicket(prev, ticketId)
-      persistToApi(next)
+      persistBoardChange(next, [ticketId])
       return next
     })
     setSelectedTicket(null)
@@ -315,7 +303,7 @@ export default function KanbanPage() {
     }
     setTickets((prev) => {
       const next = updateTicket(prev, ticketId, updates)
-      persistToApi(next)
+      persistBoardChange(next)
       return next
     })
   }
@@ -388,6 +376,21 @@ export default function KanbanPage() {
               </button>
             </ToolbarActions>
           </div>
+
+          {saveError && (
+            <div className="mx-[var(--space-5)] mt-[var(--space-3)] rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--system-red)_35%,transparent)] bg-[color-mix(in_srgb,var(--system-red)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--system-red)] flex items-center justify-between gap-[var(--space-3)]">
+              <span className="min-w-0 break-words">Board save failed: {saveError}</span>
+              <button
+                onClick={() => {
+                  setSaveError(null)
+                  loadData()
+                }}
+                className="shrink-0 rounded-[var(--radius-sm)] border border-current bg-transparent px-[var(--space-2)] py-[2px] text-[length:var(--text-caption2)] font-semibold cursor-pointer"
+              >
+                Reload
+              </button>
+            </div>
+          )}
 
           {/* Employee filter bar */}
           {assignedEmployees.length > 0 && (

@@ -744,6 +744,26 @@ export function updateSession(id: string, updates: UpdateSessionFields): Session
   return getSession(id);
 }
 
+export function patchSessionTransportMeta(
+  id: string,
+  patch: JsonObject | ((current: JsonObject) => JsonObject | null),
+): Session | undefined {
+  const db = initDb();
+  const tx = db.transaction((sessionId: string) => {
+    const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const current = parseJsonObject(row.transport_meta, 'transport_meta') ?? {};
+    const next = typeof patch === 'function'
+      ? patch({ ...current })
+      : { ...current, ...patch };
+    db.prepare('UPDATE sessions SET transport_meta = ? WHERE id = ?')
+      .run(next ? JSON.stringify(next) : null, sessionId);
+    const updated = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as Record<string, unknown> | undefined;
+    return updated ? rowToSession(updated) : undefined;
+  });
+  return tx(id);
+}
+
 export interface ListSessionsFilter {
   status?: Session['status'];
   source?: string;

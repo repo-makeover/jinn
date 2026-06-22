@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { CronJob } from "../shared/types.js";
+import type { CronJob, CronRunEntry } from "../shared/types.js";
 import { CRON_JOBS, CRON_RUNS } from "../shared/paths.js";
 import { safeWriteFile } from "../shared/safe-write.js";
 import { logger } from "../shared/logger.js";
@@ -43,8 +43,25 @@ export function saveJobs(jobs: CronJob[]): void {
   });
 }
 
-export function appendRunLog(jobId: string, entry: object): void {
+export const DEFAULT_MAX_RUN_LOG_ENTRIES = 1000;
+
+function pruneRunLog(logPath: string, maxEntries: number): void {
+  if (maxEntries <= 0) return;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(logPath, "utf-8");
+  } catch {
+    return;
+  }
+  const lines = raw.split("\n").filter(Boolean);
+  if (lines.length <= maxEntries) return;
+  const kept = lines.slice(-maxEntries).join("\n") + "\n";
+  safeWriteFile(logPath, kept);
+}
+
+export function appendRunLog(jobId: string, entry: CronRunEntry, opts: { maxEntries?: number } = {}): void {
   fs.mkdirSync(CRON_RUNS, { recursive: true });
   const logPath = path.join(CRON_RUNS, `${jobId}.jsonl`);
   fs.appendFileSync(logPath, JSON.stringify(entry) + "\n", "utf-8");
+  pruneRunLog(logPath, opts.maxEntries ?? DEFAULT_MAX_RUN_LOG_ENTRIES);
 }

@@ -22,6 +22,7 @@ import {
 } from "../shared/paths.js";
 import { initDb } from "../sessions/registry.js";
 import { getPackageVersion } from "../shared/version.js";
+import { SKILLS_NPX_SPEC } from "./skills.js";
 
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
@@ -622,7 +623,7 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   }
 
   // Pre-cache skills CLI for instant searches later
-  spawn('npx', ['skills', '--version'], { stdio: 'ignore', detached: true }).unref();
+  spawn('npx', ['--yes', SKILLS_NPX_SPEC, '--version'], { stdio: 'ignore', detached: true }).unref();
 
   // Detect project context and suggest relevant skills
   detectProjectContext(portalSlug);

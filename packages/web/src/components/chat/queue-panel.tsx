@@ -12,6 +12,7 @@ interface QueuePanelProps {
 export function QueuePanel({ sessionId, events, paused: initialPaused = false }: QueuePanelProps) {
   const [items, setItems] = useState<QueueItem[]>([])
   const [paused, setPaused] = useState(initialPaused)
+  const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     if (!sessionId) return
@@ -45,22 +46,33 @@ export function QueuePanel({ sessionId, events, paused: initialPaused = false }:
   async function handleCancel(itemId: string) {
     if (!sessionId) return
     try {
+      setError(null)
       await api.cancelQueueItem(sessionId, itemId)
       await refresh()
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel queue item.')
+    }
   }
 
   async function handleClear() {
     if (!sessionId) return
     try {
-      await api.clearSessionQueue(sessionId)
-      setItems([])
-    } catch { /* non-fatal */ }
+      setError(null)
+      const result = await api.clearSessionQueue(sessionId)
+      if (result.status !== 'cleared' && result.status !== 'empty') {
+        setError(`Queue clear returned ${result.status}.`)
+      }
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear queue.')
+      await refresh()
+    }
   }
 
   async function handlePauseResume() {
     if (!sessionId) return
     try {
+      setError(null)
       if (paused) {
         await api.resumeSessionQueue(sessionId)
         setPaused(false)
@@ -68,7 +80,9 @@ export function QueuePanel({ sessionId, events, paused: initialPaused = false }:
         await api.pauseSessionQueue(sessionId)
         setPaused(true)
       }
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update queue.')
+    }
   }
 
   return (
@@ -95,6 +109,11 @@ export function QueuePanel({ sessionId, events, paused: initialPaused = false }:
         </div>
       </div>
       <div className="flex flex-col gap-0.5">
+        {error && (
+          <div className="rounded-[var(--radius-sm)] bg-[color-mix(in_srgb,var(--system-red)_10%,transparent)] px-[var(--space-2)] py-[3px] text-[length:var(--text-caption2)] text-[var(--system-red)]">
+            {error}
+          </div>
+        )}
         {pendingItems.map((item) => (
           <div key={item.id} className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[3px] rounded-[var(--radius-sm)] bg-[var(--fill-tertiary)]">
             <span className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] min-w-4">

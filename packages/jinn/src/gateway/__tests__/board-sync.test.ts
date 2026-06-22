@@ -81,19 +81,18 @@ describe("syncBoardForEvent", () => {
     expect(syncBoardForEvent("session:delta", { sessionId: "s1" }, deps())).toBe(false);
   });
 
-  it("keeps errors off the board: failure/stall resolve to done with no error text", () => {
+  it("marks failures blocked without copying error text to the board", () => {
     writeBoard("software-delivery", []);
     syncBoardForEvent("session:started", { sessionId: "s1" }, deps());
-    // error payload + errored session status — must NOT become 'blocked' or leak the error
     syncBoardForEvent("session:completed", { sessionId: "s1", error: "secret-laden boom" },
       deps({ getSession: () => makeSession({ status: "error" }) }));
     const t = readBoard("software-delivery")[0];
-    expect(t.status).toBe("done");
-    expect(t.description).toBe("completed");
+    expect(t.status).toBe("blocked");
+    expect(t.description).toBe("failed - see session");
     expect(JSON.stringify(t)).not.toContain("boom"); // no error text anywhere on the ticket
 
     syncBoardForEvent("session:completed", { sessionId: "s1", stalled: true }, deps());
-    expect(readBoard("software-delivery")[0].status).toBe("done");
+    expect(readBoard("software-delivery")[0].status).toBe("blocked");
   });
 
   it("preserves hand-authored tickets and appends alongside them", () => {

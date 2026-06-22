@@ -5,6 +5,16 @@ export interface HookEndpointCtx {
   reg: HookRegistry;
   secret: string;
   remoteAddress: string | undefined;
+  now?: () => number;
+}
+
+const HOOK_REPLAY_WINDOW_MS = 5 * 60 * 1000;
+const seenHookNonces = new Map<string, number>();
+
+function pruneSeenNonces(now: number): void {
+  for (const [nonce, expiresAt] of seenHookNonces) {
+    if (expiresAt <= now) seenHookNonces.delete(nonce);
+  }
 }
 
 /**
@@ -24,7 +34,7 @@ export function isLoopback(addr: string | undefined): boolean {
 export function handleHookPost(
   ctx: HookEndpointCtx,
   providedSecret: string | undefined,
-  body: { jinnSessionId?: string; hook?: HookPayload },
+  body: { jinnSessionId?: string; hook?: HookPayload; nonce?: string; timestamp?: number },
 ): { status: number; body: string } {
   // Loopback check first — defense-in-depth alongside any upstream check.
   if (!isLoopback(ctx.remoteAddress)) {
@@ -44,6 +54,19 @@ export function handleHookPost(
   if (!body.jinnSessionId || !body.hook?.hook_event_name) {
     return { status: 400, body: "bad request" };
   }
+  const now = ctx.now?.() ?? Date.now();
+  if (!body.nonce || typeof body.nonce !== "string" || body.nonce.length < 12 || typeof body.timestamp !== "number") {
+    return { status: 400, body: "missing replay guard" };
+  }
+  if (!Number.isFinite(body.timestamp) || Math.abs(now - body.timestamp) > HOOK_REPLAY_WINDOW_MS) {
+    return { status: 400, body: "stale hook" };
+  }
+  pruneSeenNonces(now);
+  const nonceKey = `${body.jinnSessionId}:${body.nonce}`;
+  if (seenHookNonces.has(nonceKey)) {
+    return { status: 409, body: "replay" };
+  }
+  seenHookNonces.set(nonceKey, now + HOOK_REPLAY_WINDOW_MS);
   ctx.reg.deliver(body.jinnSessionId, body.hook);
   return { status: 200, body: "ok" };
 }

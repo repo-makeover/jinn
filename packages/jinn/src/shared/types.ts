@@ -327,6 +327,22 @@ export interface CronJob {
   delivery?: CronDelivery;
 }
 
+export type CronRunStatus = "queued" | "running" | "success" | "error" | "skipped_overlap";
+
+export interface CronRunEntry {
+  runId: string;
+  timestamp: string;
+  startedAt?: string;
+  finishedAt?: string;
+  sessionKey?: string;
+  sessionId?: string | null;
+  status: CronRunStatus;
+  trigger: "scheduled" | "manual";
+  durationMs?: number;
+  error?: string | null;
+  resultPreview?: string | null;
+}
+
 export interface CronDelivery {
   connector: string;
   channel: string;
@@ -663,6 +679,12 @@ export interface JinnConfig {
     allowFileCustomPaths?: boolean;
     /** Opt-in unsafe local convenience: allow POST /api/files {open:true} to open uploaded files. Default false. */
     allowFileOpen?: boolean;
+    /** Roots /api/files/read may serve from. Defaults to JINN_HOME plus managed file/upload roots. */
+    fileReadRoots?: string[];
+    /** Explicit unsafe escape hatch: allow /api/files/read to serve any readable local file. Default false. */
+    allowArbitraryFileRead?: boolean;
+    /** Include the absolute resolved path in /api/files/read responses. Default false. */
+    exposeResolvedFilePaths?: boolean;
     /** Opt-in: when set, POST /api/sessions reads the forwarded SSO identity
      *  from this request header (set by an auth proxy such as oauth2-proxy,
      *  Traefik forward-auth, or IAP) and persists it on the session. Accepts a

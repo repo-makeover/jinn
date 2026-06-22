@@ -1,5 +1,5 @@
 import type { Session, JsonObject } from "../shared/types.js";
-import { getSession, updateSession } from "../sessions/registry.js";
+import { getSession, patchSessionTransportMeta } from "../sessions/registry.js";
 
 /**
  * "Superseded running turn" transport-meta marker helpers.
@@ -20,20 +20,18 @@ export function withTransportMeta(session: Session, updates: JsonObject): JsonOb
 }
 
 export function supersedeRunningTurn(session: Session): void {
-  updateSession(session.id, {
-    transportMeta: withTransportMeta(session, {
-      [SUPERSEDED_TURN_META_KEY]: new Date().toISOString(),
-    }),
-  });
+  patchSessionTransportMeta(session.id, { [SUPERSEDED_TURN_META_KEY]: new Date().toISOString() });
 }
 
 export function clearSupersededTurnMeta(sessionId: string): void {
   const session = getSession(sessionId);
   const meta = session?.transportMeta;
   if (!meta || typeof meta !== "object" || Array.isArray(meta) || !(SUPERSEDED_TURN_META_KEY in meta)) return;
-  const next = { ...meta };
-  delete next[SUPERSEDED_TURN_META_KEY];
-  updateSession(sessionId, { transportMeta: next });
+  patchSessionTransportMeta(sessionId, (current) => {
+    const next = { ...current };
+    delete next[SUPERSEDED_TURN_META_KEY];
+    return next;
+  });
 }
 
 export function isTurnSuperseded(sessionId: string, turnStartedAt: number): boolean {

@@ -198,6 +198,7 @@ export function ChatPane({
   const [selector, setSelector] = useState<SelectorValue>(() => readNewSessionSelector())
   const [effortPendingNote, setEffortPendingNote] = useState(false)
   const [selectorError, setSelectorError] = useState<string | null>(null)
+  const [interruptError, setInterruptError] = useState<string | null>(null)
   // Per-chat working folder (new-chat only). null = default (JINN_HOME).
   const [cwd, setCwd] = useState<string | null>(null)
   const cliTerminalRef = useRef<CliTerminalHandle | null>(null)
@@ -270,9 +271,13 @@ export function ChatPane({
   const handleInterrupt = useCallback(async () => {
     if (!sessionId) return
     try {
-      await api.stopSession(sessionId)
-    } catch {
-      // ignore
+      setInterruptError(null)
+      const result = await api.stopSession(sessionId)
+      if (!result.stopped) {
+        setInterruptError(result.interruptible ? 'Stop request did not interrupt the session.' : 'This session is not currently interruptible.')
+      }
+    } catch (err) {
+      setInterruptError(err instanceof Error ? err.message : 'Failed to stop session.')
     }
   }, [sessionId])
 
@@ -286,6 +291,7 @@ export function ChatPane({
         media,
       }
       // Optimistic append + arm loading + mark activity (for the watchdog).
+      setInterruptError(null)
       beginSend(userMsg)
 
       try {
@@ -512,6 +518,18 @@ export function ChatPane({
           hidden while a foreground turn is streaming and in the CLI view. */}
       {!(viewMode === 'cli' && sessionId) && !loading && (
         <BackgroundActivityPill activity={backgroundActivity} />
+      )}
+
+      {interruptError && (
+        <div className="mx-[var(--space-4)] mb-[var(--space-2)] rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--system-red)_35%,transparent)] bg-[color-mix(in_srgb,var(--system-red)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--system-red)] flex items-center justify-between gap-[var(--space-3)]">
+          <span className="min-w-0 break-words">{interruptError}</span>
+          <button
+            onClick={() => setInterruptError(null)}
+            className="shrink-0 rounded-[var(--radius-sm)] border border-current bg-transparent px-[var(--space-2)] py-[2px] text-[length:var(--text-caption2)] font-semibold cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
       {/* Input — chat-style composer for every view, including CLI (the PTY engine

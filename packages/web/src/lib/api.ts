@@ -91,7 +91,7 @@ async function extractErrorMessage(res: Response): Promise<string> {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { credentials: "include" });
   if (!res.ok) throw new Error(await extractErrorMessage(res));
   return res.json();
 }
@@ -100,6 +100,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(await extractErrorMessage(res));
@@ -107,7 +108,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  const res = await fetch(`${BASE}${path}`, { method: "DELETE", credentials: "include" });
   if (!res.ok) throw new Error(await extractErrorMessage(res));
   return res.json();
 }
@@ -116,6 +117,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await extractErrorMessage(res));
@@ -126,6 +128,7 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await extractErrorMessage(res));
@@ -369,6 +372,9 @@ export interface FsListResult { path: string; parent: string | null; entries: Fs
 export interface FsRecent { default: string; recent: string[] }
 
 export const api = {
+  authStatus: () => get<{ required: boolean; authenticated: boolean }>("/api/auth/status"),
+  login: (token: string) => post<{ status: string }>("/api/auth/login", { token }),
+  logout: () => post<{ status: string }>("/api/auth/logout", {}),
   getStatus: () => get<Record<string, unknown>>("/api/status"),
   /** Working-folder picker: list subdirectories of a path (dirs only). */
   fsList: (p?: string) => get<FsListResult>(`/api/fs/list${p ? `?path=${encodeURIComponent(p)}` : ""}`),
@@ -418,11 +424,16 @@ export const api = {
   sendMessage: (id: string, data: Record<string, unknown>) =>
     post<Record<string, unknown>>(`/api/sessions/${id}/message`, data),
   stopSession: (id: string) =>
-    post<{ status: string; sessionId: string }>(`/api/sessions/${id}/stop`, {}),
+    post<{ status: string; sessionId: string; stopped: boolean; interruptible: boolean }>(`/api/sessions/${id}/stop`, {}),
+  createPtyToken: (id: string) =>
+    post<{ token: string; expiresInMs: number }>(`/api/sessions/${id}/pty-token`, {}),
   resetSession: (id: string) =>
     post<{ status: string; sessionId: string }>(`/api/sessions/${id}/reset`, {}),
   getCronJobs: () => get<Record<string, unknown>[]>("/api/cron"),
-  getCronRuns: (id: string) => get<Record<string, unknown>[]>(`/api/cron/${id}/runs`),
+  getCronRuns: (id: string, runId?: string) =>
+    get<Record<string, unknown>[]>(
+      `/api/cron/${id}/runs${runId ? `?runId=${encodeURIComponent(runId)}` : ""}`,
+    ),
   updateCronJob: (id: string, data: Record<string, unknown>) =>
     put<Record<string, unknown>>(`/api/cron/${id}`, data),
   triggerCronJob: (id: string) =>
@@ -467,6 +478,7 @@ export const api = {
       const res = await fetch(`${BASE}/api/stt/transcribe${params}`, {
         method: "POST",
         headers: { "Content-Type": audioBlob.type || "audio/webm" },
+        credentials: "include",
         body: audioBlob,
         signal: controller.signal,
       });
@@ -572,7 +584,7 @@ export const api = {
   cancelQueueItem: (sessionId: string, itemId: string) =>
     del<{ status: string }>(`/api/sessions/${sessionId}/queue/${itemId}`),
   clearSessionQueue: (sessionId: string) =>
-    del<{ status: string; cancelled: number }>(`/api/sessions/${sessionId}/queue`),
+    del<{ status: string; cancelled: number; requested?: number }>(`/api/sessions/${sessionId}/queue`),
   pauseSessionQueue: (sessionId: string) =>
     post<{ status: string }>(`/api/sessions/${sessionId}/queue/pause`, {}),
   resumeSessionQueue: (sessionId: string) =>
@@ -584,7 +596,7 @@ export const api = {
     form.append('file', file)
     // When known, scope the upload to the session so it lands in the date-bucketed uploads dir.
     if (sessionId) form.append('sessionId', sessionId)
-    const res = await fetch(`${BASE}/api/files`, { method: 'POST', body: form })
+    const res = await fetch(`${BASE}/api/files`, { method: 'POST', body: form, credentials: "include" })
     if (!res.ok) throw new Error(await extractErrorMessage(res))
     return res.json()
   },

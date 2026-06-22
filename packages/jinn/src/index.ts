@@ -8,6 +8,8 @@ export type {
   Target,
   Session,
   CronJob,
+  CronRunEntry,
+  CronRunStatus,
   CronDelivery,
   Employee,
   Department,

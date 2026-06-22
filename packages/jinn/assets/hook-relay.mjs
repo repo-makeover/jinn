@@ -26,7 +26,8 @@ async function main() {
   let info;
   try { info = JSON.parse(fs.readFileSync(path.join(JINN_HOME, "gateway.json"), "utf-8")); } catch (err) { logBestEffort(err); return; }
 
-  const body = JSON.stringify({ jinnSessionId, hook: payload });
+  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${process.pid}`;
+  const body = JSON.stringify({ jinnSessionId, hook: payload, nonce, timestamp: Date.now() });
   await fetch(`http://127.0.0.1:${info.port}/api/internal/hook`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-jinn-hook-secret": info.secret },

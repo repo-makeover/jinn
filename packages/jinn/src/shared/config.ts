@@ -34,17 +34,53 @@ export function validateConfigShape(config: unknown): string[] {
     if (typeof c.gateway !== "object" || c.gateway === null || Array.isArray(c.gateway)) {
       problems.push("gateway must be a mapping");
     } else {
+      const allowedGatewayKeys = new Set([
+        "port",
+        "host",
+        "streaming",
+        "allowFileCustomPaths",
+        "allowFileOpen",
+        "fileReadRoots",
+        "allowArbitraryFileRead",
+        "exposeResolvedFilePaths",
+        "userHeader",
+      ]);
+      const unknownGatewayKeys = Object.keys(c.gateway).filter((key) => !allowedGatewayKeys.has(key));
+      if (unknownGatewayKeys.length > 0) {
+        problems.push(`unknown gateway config keys: ${unknownGatewayKeys.join(", ")}`);
+      }
       if (c.gateway.port !== undefined && typeof c.gateway.port !== "number") {
         problems.push(`gateway.port must be a number (got ${typeof c.gateway.port})`);
       }
       if (c.gateway.host !== undefined && typeof c.gateway.host !== "string") {
         problems.push(`gateway.host must be a string (got ${typeof c.gateway.host})`);
       }
+      if (c.gateway.streaming !== undefined && typeof c.gateway.streaming !== "boolean") {
+        problems.push(`gateway.streaming must be a boolean (got ${typeof c.gateway.streaming})`);
+      }
       if (c.gateway.allowFileCustomPaths !== undefined && typeof c.gateway.allowFileCustomPaths !== "boolean") {
         problems.push(`gateway.allowFileCustomPaths must be a boolean (got ${typeof c.gateway.allowFileCustomPaths})`);
       }
       if (c.gateway.allowFileOpen !== undefined && typeof c.gateway.allowFileOpen !== "boolean") {
         problems.push(`gateway.allowFileOpen must be a boolean (got ${typeof c.gateway.allowFileOpen})`);
+      }
+      if (c.gateway.fileReadRoots !== undefined) {
+        if (!Array.isArray(c.gateway.fileReadRoots) || c.gateway.fileReadRoots.some((v: unknown) => typeof v !== "string")) {
+          problems.push("gateway.fileReadRoots must be an array of strings");
+        }
+      }
+      if (c.gateway.allowArbitraryFileRead !== undefined && typeof c.gateway.allowArbitraryFileRead !== "boolean") {
+        problems.push(`gateway.allowArbitraryFileRead must be a boolean (got ${typeof c.gateway.allowArbitraryFileRead})`);
+      }
+      if (c.gateway.exposeResolvedFilePaths !== undefined && typeof c.gateway.exposeResolvedFilePaths !== "boolean") {
+        problems.push(`gateway.exposeResolvedFilePaths must be a boolean (got ${typeof c.gateway.exposeResolvedFilePaths})`);
+      }
+      if (c.gateway.userHeader !== undefined) {
+        const userHeader = c.gateway.userHeader;
+        const valid =
+          typeof userHeader === "string" ||
+          (Array.isArray(userHeader) && userHeader.every((v: unknown) => typeof v === "string"));
+        if (!valid) problems.push("gateway.userHeader must be a string or array of strings");
       }
     }
   }

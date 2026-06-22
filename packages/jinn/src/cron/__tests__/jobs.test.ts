@@ -90,3 +90,22 @@ describe("saveJobs", () => {
     expect(leftovers).toEqual([]);
   });
 });
+
+describe("appendRunLog", () => {
+  it("retains only the newest configured number of run-log entries", async () => {
+    const { appendRunLog } = await importJobs();
+    for (let i = 0; i < 3; i += 1) {
+      appendRunLog("test-job", {
+        runId: `run-${i}`,
+        timestamp: `2026-06-22T00:00:0${i}.000Z`,
+        status: "success",
+        trigger: "manual",
+        resultPreview: null,
+      }, { maxEntries: 2 });
+    }
+
+    const logPath = path.join(tmpHome, "cron", "runs", "test-job.jsonl");
+    const entries = fs.readFileSync(logPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(entries.map((entry) => entry.runId)).toEqual(["run-1", "run-2"]);
+  });
+});

@@ -32,6 +32,12 @@ import { pickEncoding, isCompressibleExt, compressStream } from "./compress.js";
 import { attachPtyWebSocket } from "./pty-ws.js";
 import { startWsHeartbeat, trackHeartbeat } from "./ws-heartbeat.js";
 import { ensureFilesDir, cleanupOldUploads } from "./files.js";
+import {
+  handleAuthApiRequest,
+  isAuthenticatedRequest,
+  unauthorized,
+  verifyPtyAccessToken,
+} from "./auth.js";
 import { initStt } from "../stt/stt.js";
 import { startWatchers, stopWatchers, syncSkillSymlinks } from "./watcher.js";
 import { SlackConnector } from "../connectors/slack/index.js";
@@ -90,7 +96,8 @@ function setCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): bo
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Jinn-Token");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   return allowed;
 }
@@ -247,7 +254,7 @@ export async function startGateway(
   }
 
   // Write gateway connection info (port + hook secret + pid) for hook-relay discovery.
-  const gatewayInfo = writeGatewayInfo(GATEWAY_INFO_FILE, { port, pid: process.pid });
+  const gatewayInfo = writeGatewayInfo(GATEWAY_INFO_FILE, { port, pid: process.pid, apiToken: oldInfo?.apiToken });
 
   // Hook registry — shared by the interactive engine and the internal hook route.
   const hookRegistry = new HookRegistry();
@@ -832,6 +839,7 @@ export async function startGateway(
     reloadConnectorInstances,
     hookRegistry,
     hookSecret: gatewayInfo.secret,
+    apiToken: gatewayInfo.apiToken,
     interactiveClaudeEngine,
     ptyViewEngines,
     reloadOrg,
@@ -848,6 +856,7 @@ export async function startGateway(
       sessionManager.setConfig(currentConfig);
       invalidateModelRegistry(); // rebuild the model/capability registry from the new config
       refreshDynamicModels(currentConfig); // re-discover dynamic models (engine bins/auth may have changed)
+      reloadScheduler(loadJobs(), currentConfig, connectorMap);
       logger.info("Config reloaded successfully");
       emit("config:reloaded", {});
     } catch (err) {
@@ -868,8 +877,9 @@ export async function startGateway(
   const webDir = path.resolve(__dirname, "..", "..", "web");
 
   // Create HTTP server
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = req.url || "/";
+    const pathname = url.split("?")[0];
     const corsAllowed = setCorsHeaders(req, res);
 
     if (url.startsWith("/api/") && !corsAllowed) {
@@ -884,8 +894,23 @@ export async function startGateway(
       return;
     }
 
+    if (req.method === "GET" && pathname === "/api/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
+    if (pathname.startsWith("/api/auth/")) {
+      const handled = await handleAuthApiRequest(req, res, pathname, req.method || "GET", gatewayInfo.apiToken);
+      if (handled) return;
+    }
+
     // API routes
     if (url.startsWith("/api/")) {
+      if (!isAuthenticatedRequest(req, gatewayInfo.apiToken)) {
+        unauthorized(res);
+        return;
+      }
       handleApiRequest(req, res, apiContext);
       return;
     }
@@ -949,6 +974,10 @@ export async function startGateway(
   server.on("upgrade", (req, socket, head) => {
     const reqUrl = req.url || "";
     if (reqUrl === "/ws") {
+      if (!isAuthenticatedRequest(req, gatewayInfo.apiToken)) {
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });
@@ -961,6 +990,14 @@ export async function startGateway(
       try {
         sessionId = decodeURIComponent(ptyMatch[1]);
       } catch {
+        socket.destroy();
+        return;
+      }
+      const parsedUrl = new URL(reqUrl, `http://${req.headers.host || "localhost"}`);
+      if (
+        !isAuthenticatedRequest(req, gatewayInfo.apiToken) ||
+        !verifyPtyAccessToken(sessionId, parsedUrl.searchParams.get("token"), gatewayInfo.apiToken)
+      ) {
         socket.destroy();
         return;
       }
@@ -1001,7 +1038,7 @@ export async function startGateway(
     onConfigReload: reloadConfig,
     onCronReload: () => {
       const updatedJobs = loadJobs();
-      reloadScheduler(updatedJobs);
+      reloadScheduler(updatedJobs, currentConfig, connectorMap);
       logger.info(`Cron jobs reloaded (${updatedJobs.length} job(s))`);
       emit("cron:reloaded", {});
     },

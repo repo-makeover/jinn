@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { usePageVisibility } from "../hooks/use-page-visibility";
 import { dlog } from "../lib/debug-log";
 import { nextReconnectDelay } from "../lib/ws-backoff";
+import { api } from "../lib/api";
 
 /**
  * Theme-aware xterm color palettes. The app exposes exactly two visual themes
@@ -87,16 +88,18 @@ function resolveXtermFont(): string {
   return v || '"IBM Plex Mono", monospace';
 }
 
-function getPtyWsUrl(sessionId: string): string {
+async function getPtyWsUrl(sessionId: string): Promise<string> {
+  const { token } = await api.createPtyToken(sessionId);
+  const suffix = `/ws/pty/${sessionId}?token=${encodeURIComponent(token)}`;
   const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL;
   if (gatewayUrl) {
-    return `${gatewayUrl.replace(/^http/, "ws")}/ws/pty/${sessionId}`;
+    return `${gatewayUrl.replace(/^http/, "ws")}${suffix}`;
   }
   if (typeof window !== "undefined") {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/ws/pty/${sessionId}`;
+    return `${proto}//${window.location.host}${suffix}`;
   }
-  return `ws://127.0.0.1:7777/ws/pty/${sessionId}`;
+  return `ws://127.0.0.1:7777${suffix}`;
 }
 
 /**
@@ -171,8 +174,6 @@ export const CliTerminal = forwardRef<CliTerminalHandle, { sessionId: string }>(
     // TUI at that bogus width. scheduleFit() below (run in rAF + on first
     // ResizeObserver tick) fits at real dimensions and emits the resize then.
 
-    const wsUrl = getPtyWsUrl(sessionId);
-
     // iOS Safari renders certain monochrome TUI glyphs (⏺ U+23FA, ⏵ U+23F5, etc.)
     // as colour emoji when the font lacks a text glyph. Appending U+FE0E (text
     // presentation selector) forces the text form. font-variant-emoji works only on
@@ -216,7 +217,16 @@ export const CliTerminal = forwardRef<CliTerminalHandle, { sessionId: string }>(
     let attempt = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const connect = (isReconnect: boolean) => {
+    const connect = async (isReconnect: boolean) => {
+      if (closed) return;
+      let wsUrl: string;
+      try {
+        wsUrl = await getPtyWsUrl(sessionId);
+      } catch (err) {
+        dlog("xterm", `pty-token failed: ${String(err)}`);
+        scheduleReconnect();
+        return;
+      }
       if (closed) return;
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
@@ -264,7 +274,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, { sessionId: string }>(
       dlog("xterm", `reconnect in ${delay}ms (attempt ${attempt})`);
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
-        connect(true);
+        void connect(true);
       }, delay);
     };
 
@@ -282,7 +292,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, { sessionId: string }>(
         cur.onerror = null;
         try { cur.close(); } catch { /* ignore */ }
       }
-      connect(true);
+      void connect(true);
     };
     reconnectRef.current = reconnectNow;
 
@@ -385,7 +395,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, { sessionId: string }>(
 
     // Open the first socket + kick off the initial fit on the next frame so
     // layout has settled.
-    connect(false);
+    void connect(false);
     scheduleFit();
 
     return () => {

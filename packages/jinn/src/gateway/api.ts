@@ -13,10 +13,10 @@ import { deriveWorkState, emptyWorkCounts } from "../shared/work-state.js";
 import { listDirectory, FsBrowseError } from "./fs-browse.js";
 import { safeWriteFile } from "../shared/safe-write.js";
 import type { SessionManager } from "../sessions/manager.js";
-import { listSessions, listRecentCwds, listRecentPerGroup, listSessionsForGroup, getSessionGroupCounts, coercePortalEmployee, searchSessions, listChildSessions, getSession, createSession, updateSession, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, getMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
+import { listSessions, listRecentCwds, listRecentPerGroup, listSessionsForGroup, getSessionGroupCounts, coercePortalEmployee, searchSessions, listChildSessions, getSession, createSession, updateSession, patchSessionTransportMeta, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, getMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
 import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR, FILES_DIR } from "../shared/paths.js";
-import { saveConfigAtomic } from "../shared/config.js";
+import { saveConfigAtomic, validateConfigShape } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import { getSttStatus, downloadModel, transcribe as sttTranscribe, resolveLanguages, WHISPER_LANGUAGES } from "../stt/stt.js";
 import { JINN_HOME } from "../shared/paths.js";
@@ -24,8 +24,8 @@ import { getClaudeExpectedResetAt } from "../shared/usageAwareness.js";
 import { collectEngineLimits } from "../shared/engine-limits.js";
 import { pickEncoding, compressBuffer, MIN_COMPRESS_BYTES } from "./compress.js";
 import { loadJobs, saveJobs } from "../cron/jobs.js";
-import { reloadScheduler } from "../cron/scheduler.js";
-import { runCronJob } from "../cron/runner.js";
+import { reloadScheduler, startCronJobRun } from "../cron/scheduler.js";
+import { buildCronJob, patchCronJob } from "../cron/validation.js";
 import QRCode from "qrcode";
 import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
 import { handleFilesRequest, handleSessionAttachment, fileIdsToMedia, rehomeAttachmentsToSession } from "./files.js";
@@ -49,6 +49,8 @@ import { resolveUserHeader } from "./connector-reply.js";
 export { resolveUserHeader, deliverConnectorReply } from "./connector-reply.js";
 import { supersedeRunningTurn } from "./session-turn-state.js";
 import { runWebSession } from "./run-web-session.js";
+import { createPtyAccessToken } from "./auth.js";
+import { writeMergedBoard } from "./board-service.js";
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
 const SESSION_LIST_PER_GROUP = 50;
@@ -68,6 +70,8 @@ export interface ApiContext {
   reloadConfig?: () => void;
   hookRegistry?: import("./hook-registry.js").HookRegistry;
   hookSecret?: string;
+  /** Gateway API token generated into gateway.json. Used to mint short-lived PTY websocket tokens. */
+  apiToken?: string;
   /** PTY-backed Claude engine used by CLI-mode message sends so the user sees the
    *  prompt + response stream into the live xterm. Distinct from the headless
    *  "claude" engine in sessionManager (which chat/cron/connectors use). */
@@ -85,16 +89,22 @@ export interface ApiContext {
   backgroundActivity?: Map<string, { activeStreams: number; lastActivityAt: number }>;
 }
 
-function killSessionEngines(context: ApiContext, session: Session, reason: string): void {
+function killSessionEngines(context: ApiContext, session: Session, reason: string): { interruptible: number; killed: number } {
   const engines = new Set<Engine>();
   const primary = context.sessionManager.getEngine(session.engine);
   const pty = context.ptyViewEngines?.[session.engine];
   if (primary) engines.add(primary);
   if (pty) engines.add(pty);
 
+  let interruptible = 0;
+  let killed = 0;
   for (const engine of engines) {
-    if (isInterruptibleEngine(engine)) engine.kill(session.id, reason);
+    if (!isInterruptibleEngine(engine)) continue;
+    interruptible++;
+    engine.kill(session.id, reason);
+    killed++;
   }
+  return { interruptible, killed };
 }
 
 const ARCHIVE_KINDS = new Set<ArchiveKind>(["room", "scheduled", "chat"]);
@@ -394,7 +404,7 @@ function isSessionLiveRunning(session: Session, context: ApiContext): boolean {
 
 function checkInstanceHealth(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = http.request({ hostname: "localhost", port, path: "/api/status", timeout: 2000 }, (res) => {
+    const req = http.request({ hostname: "localhost", port, path: "/api/health", timeout: 2000 }, (res) => {
       resolve(res.statusCode === 200);
       res.resume();
     });
@@ -419,13 +429,45 @@ export async function handleApiRequest(
     // GET /api/status
     if (method === "GET" && pathname === "/api/status") {
       const config = context.getConfig();
-      const sessions = listSessions();
-      const running = sessions.filter((s) => isSessionLiveRunning(s, context)).length;
+      const checks: Array<{ name: string; status: "ok" | "degraded" | "error"; detail?: string }> = [];
+      let sessions: Session[] = [];
+      let running = 0;
+      try {
+        sessions = listSessions();
+        running = sessions.filter((s) => isSessionLiveRunning(s, context)).length;
+        checks.push({ name: "sessions_db", status: "ok" });
+      } catch (err) {
+        checks.push({ name: "sessions_db", status: "error", detail: err instanceof Error ? err.message : String(err) });
+      }
       const connectors = Object.fromEntries(
         Array.from(context.connectors.values()).map((connector) => [connector.name, connector.getHealth()]),
       );
+      const connectorErrors = Object.values(connectors).filter((health) => health.status === "error");
+      checks.push({
+        name: "connectors",
+        status: connectorErrors.length > 0 ? "degraded" : "ok",
+        ...(connectorErrors.length > 0 ? { detail: `${connectorErrors.length} connector(s) reporting error` } : {}),
+      });
+      const registry = getModelRegistry(config);
+      const availableEngines = Object.values(registry).filter((entry) => entry.available);
+      const defaultEngine = registry[config.engines.default];
+      checks.push({
+        name: "engines",
+        status: availableEngines.length === 0 ? "error" : defaultEngine?.available === false ? "degraded" : "ok",
+        ...(availableEngines.length === 0
+          ? { detail: "No engines are available" }
+          : defaultEngine?.available === false
+            ? { detail: `Default engine ${config.engines.default} is unavailable` }
+            : {}),
+      });
+      const overall: "ok" | "degraded" | "error" = checks.some((check) => check.status === "error")
+        ? "error"
+        : checks.some((check) => check.status === "degraded")
+          ? "degraded"
+          : "ok";
       return json(res, {
-        status: "ok",
+        status: overall,
+        checks,
         uptime: Math.floor((Date.now() - context.startTime) / 1000),
         port: config.gateway.port || 7777,
         // Derived from the model registry (single source of truth) so engine
@@ -433,7 +475,7 @@ export async function handleApiRequest(
         engines: {
           default: config.engines.default,
           ...Object.fromEntries(
-            Object.entries(getModelRegistry(config)).map(([name, entry]) => [
+            Object.entries(registry).map(([name, entry]) => [
               name,
               { model: entry.defaultModel, available: entry.available },
             ]),
@@ -634,6 +676,19 @@ export async function handleApiRequest(
       return json(res, serializeSession(updated, context));
     }
 
+    // POST /api/sessions/:id/pty-token — mint a short-lived token bound to this
+    // session id for /ws/pty/:id. The server-level auth gate has already
+    // authenticated the browser/API caller before this handler runs.
+    params = matchRoute("/api/sessions/:id/pty-token", pathname);
+    if (method === "POST" && params) {
+      const session = getSession(params.id);
+      if (!session) return notFound(res);
+      if (!context.apiToken) return json(res, { error: "PTY auth unavailable" }, 503);
+      const ptyEngine = context.ptyViewEngines?.[session.engine];
+      if (!ptyEngine) return json(res, { error: "Session engine has no PTY view" }, 409);
+      return json(res, { token: createPtyAccessToken(params.id, context.apiToken), expiresInMs: 60_000 });
+    }
+
     // DELETE /api/sessions/:id
     params = matchRoute("/api/sessions/:id", pathname);
     if (method === "DELETE" && params) {
@@ -654,11 +709,19 @@ export async function handleApiRequest(
     if (method === "POST" && params) {
       const session = getSession(params.id);
       if (!session) return notFound(res);
-      killSessionEngines(context, session, "Interrupted by user");
+      const killResult = killSessionEngines(context, session, "Interrupted by user");
       context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
-      updateSession(params.id, { status: "idle", lastActivity: new Date().toISOString(), lastError: null });
-      context.emit("session:stopped", { sessionId: params.id });
-      return json(res, { status: "stopped", sessionId: params.id });
+      const stopped = killResult.interruptible > 0 || session.status !== "running";
+      if (stopped) {
+        updateSession(params.id, { status: "idle", lastActivity: new Date().toISOString(), lastError: null });
+        context.emit("session:stopped", { sessionId: params.id });
+      }
+      return json(res, {
+        status: stopped ? "stopped" : "not_stopped",
+        stopped,
+        interruptible: killResult.interruptible > 0,
+        sessionId: params.id,
+      }, stopped ? 200 : 409);
     }
 
     // POST /api/sessions/:id/reset — clear stuck session state (stale engine IDs, errors)
@@ -762,10 +825,15 @@ export async function handleApiRequest(
       const session = getSession(params.id);
       if (!session) return notFound(res);
       const sessionKey = session.sessionKey || session.sourceRef || session.id;
+      const pendingBefore = getQueueItems(sessionKey).filter((item) => item.status === "pending").length;
       context.sessionManager.getQueue().clearQueue(sessionKey);
       const cancelled = cancelAllPendingQueueItems(sessionKey);
       context.emit("queue:updated", { sessionId: params.id, sessionKey, depth: 0 });
-      return json(res, { status: "cleared", cancelled });
+      const status =
+        pendingBefore === 0 ? "empty" :
+        cancelled < pendingBefore ? "partial" :
+        "cleared";
+      return json(res, { status, cancelled, requested: pendingBefore });
     }
 
     // POST /api/sessions/:id/queue/pause
@@ -932,16 +1000,19 @@ export async function handleApiRequest(
 
       const prevMeta = (session.transportMeta ?? {}) as Record<string, unknown>;
       const prevFallback = (prevMeta.modelFallback ?? {}) as Record<string, unknown>;
-      const rolled = updateSession(session.id, {
+      let rolled = updateSession(session.id, {
         engine: to.engine,
         model: to.model ?? session.model ?? undefined,
         effortLevel: (to.effortLevel ?? session.effortLevel) ?? undefined,
         engineSessionId: null,
         status: "running",
-        transportMeta: { ...prevMeta, modelFallback: { ...prevFallback, status: "running_on_fallback", approvedAt: new Date().toISOString() } } as JsonObject,
         lastActivity: new Date().toISOString(),
         lastError: null,
       }) ?? session;
+      patchSessionTransportMeta(session.id, {
+        modelFallback: { ...prevFallback, status: "running_on_fallback", approvedAt: new Date().toISOString() } as JsonObject,
+      });
+      rolled = getSession(session.id) ?? rolled;
       deletePartialMessages(session.id);
       const resolved = resolveApproval(approval.id, "approved", actor);
       insertMessage(session.id, "notification", `✅ Fallback approved → ${to.engine}/${to.model ?? "default"}. Resuming on fallback.`);
@@ -969,9 +1040,11 @@ export async function handleApiRequest(
         const prevFallback = (prevMeta.modelFallback ?? {}) as Record<string, unknown>;
         updateSession(session.id, {
           status: "error",
-          transportMeta: { ...prevMeta, modelFallback: { ...prevFallback, status: "rejected", rejectedAt: new Date().toISOString() } } as JsonObject,
           lastError: "Model fallback rejected by operator",
           lastActivity: new Date().toISOString(),
+        });
+        patchSessionTransportMeta(session.id, {
+          modelFallback: { ...prevFallback, status: "rejected", rejectedAt: new Date().toISOString() } as JsonObject,
         });
         insertMessage(session.id, "notification", "🚫 Model fallback rejected by operator. Session stopped — surfaced, not silently stalled.");
         context.emit("session:updated", { sessionId: session.id });
@@ -1259,8 +1332,19 @@ export async function handleApiRequest(
     params = matchRoute("/api/cron/:id/runs", pathname);
     if (method === "GET" && params) {
       const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get("limit") || "", 10) || 50));
+      const runId = url.searchParams.get("runId");
       const runFile = path.join(CRON_RUNS, `${params.id}.jsonl`);
-      const { entries: runs, skipped } = await readJsonlTail(runFile, limit);
+      const { entries, skipped } = await readJsonlTail(runFile, runId ? 500 : limit * 4);
+      const seen = new Set<string>();
+      const runs = [];
+      for (const entry of entries as Record<string, unknown>[]) {
+        const id = typeof entry.runId === "string" ? entry.runId : JSON.stringify(entry);
+        if (runId && id !== runId) continue;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        runs.push(entry);
+        if (runs.length >= limit) break;
+      }
       if (skipped) logger.warn(`GET /api/cron/${params.id}/runs: skipped ${skipped} corrupt line(s)`);
       return json(res, runs);
     }
@@ -1269,24 +1353,16 @@ export async function handleApiRequest(
     if (method === "POST" && pathname === "/api/cron") {
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body = _parsed.body as any;
       const jobs = loadJobs();
-      const newJob: CronJob = {
-        id: body.id || crypto.randomUUID(),
-        name: body.name || "untitled",
-        enabled: body.enabled ?? true,
-        schedule: body.schedule || "0 * * * *",
-        timezone: body.timezone,
-        engine: body.engine,
-        model: body.model,
-        employee: body.employee,
-        prompt: body.prompt || "",
-        delivery: body.delivery,
-      };
+      let newJob: CronJob;
+      try {
+        newJob = buildCronJob(_parsed.body);
+      } catch (err) {
+        return badRequest(res, err instanceof Error ? err.message : "Invalid cron job");
+      }
       jobs.push(newJob);
       saveJobs(jobs);
-      reloadScheduler(jobs);
+      reloadScheduler(jobs, context.getConfig(), context.connectors);
       return json(res, newJob, 201);
     }
 
@@ -1298,11 +1374,13 @@ export async function handleApiRequest(
       if (idx === -1) return notFound(res);
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body = _parsed.body as any;
-      jobs[idx] = { ...jobs[idx], ...body, id: params.id };
+      try {
+        jobs[idx] = { ...patchCronJob(jobs[idx], _parsed.body), id: params.id };
+      } catch (err) {
+        return badRequest(res, err instanceof Error ? err.message : "Invalid cron update");
+      }
       saveJobs(jobs);
-      reloadScheduler(jobs);
+      reloadScheduler(jobs, context.getConfig(), context.connectors);
       return json(res, jobs[idx]);
     }
 
@@ -1314,7 +1392,7 @@ export async function handleApiRequest(
       if (idx === -1) return notFound(res);
       const removed = jobs.splice(idx, 1)[0];
       saveJobs(jobs);
-      reloadScheduler(jobs);
+      reloadScheduler(jobs, context.getConfig(), context.connectors);
       return json(res, { deleted: removed.id, name: removed.name });
     }
 
@@ -1324,21 +1402,27 @@ export async function handleApiRequest(
       const jobs = loadJobs();
       const job = jobs.find((j) => j.id === params!.id);
       if (!job) return notFound(res);
+      if (!job.enabled) {
+        return json(res, { error: "Cron job is disabled", jobId: job.id, status: "disabled" }, 409);
+      }
 
       logger.info(`Manual trigger for cron job "${job.name}" (${job.id})`);
 
-      // Fire and forget — respond immediately, run in background
-      runCronJob(job, context.sessionManager, context.getConfig(), context.connectors).catch(
-        (err) => logger.error(`Manual cron trigger failed for "${job.name}": ${err}`)
-      );
+      const started = startCronJobRun(job, context.sessionManager, context.getConfig(), context.connectors, "manual");
+      if (!started.started) {
+        return json(res, { error: "Cron job already running", jobId: job.id, status: started.run.status, runId: started.run.runId }, 409);
+      }
+      started.promise.catch((err) => logger.error(`Manual cron trigger failed for "${job.name}": ${err}`));
 
       return json(res, {
+        status: "running",
         triggered: true,
+        runId: started.runId,
         jobId: job.id,
         name: job.name,
         employee: job.employee,
         message: `Cron job "${job.name}" triggered manually`,
-      });
+      }, 202);
     }
 
     // GET /api/org
@@ -1444,14 +1528,16 @@ export async function handleApiRequest(
     // PUT /api/org/departments/:name/board
     if (method === "PUT" && matchRoute("/api/org/departments/:name/board", pathname)) {
       const p = matchRoute("/api/org/departments/:name/board", pathname)!;
-      const boardPath = path.join(ORG_DIR, p.name, "board.json");
       const deptDir = path.join(ORG_DIR, p.name);
       if (!fs.existsSync(deptDir)) return notFound(res);
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body = _parsed.body as any;
-      safeWriteFile(boardPath, JSON.stringify(body, null, 2)); // atomic + fsync (manual board edit)
+      try {
+        writeMergedBoard(ORG_DIR, p.name, _parsed.body);
+      } catch (err) {
+        logger.warn(`PUT /api/org/departments/${p.name}/board failed: ${err instanceof Error ? err.message : String(err)}`);
+        return badRequest(res, err instanceof Error ? err.message : "Invalid board payload");
+      }
       context.emit("board:updated", { department: p.name });
       return json(res, { status: "ok" });
     }
@@ -1578,6 +1664,21 @@ export async function handleApiRequest(
         if (typeof body.gateway !== "object" || Array.isArray(body.gateway)) {
           return badRequest(res, "gateway must be an object");
         }
+        const KNOWN_GATEWAY_KEYS = [
+          "port",
+          "host",
+          "streaming",
+          "allowFileCustomPaths",
+          "allowFileOpen",
+          "fileReadRoots",
+          "allowArbitraryFileRead",
+          "exposeResolvedFilePaths",
+          "userHeader",
+        ];
+        const unknownGatewayKeys = Object.keys(body.gateway).filter((k) => !KNOWN_GATEWAY_KEYS.includes(k));
+        if (unknownGatewayKeys.length > 0) {
+          return badRequest(res, `Unknown gateway config keys: ${unknownGatewayKeys.join(", ")}`);
+        }
         if (body.gateway.port !== undefined && typeof body.gateway.port !== "number") {
           return badRequest(res, "gateway.port must be a number");
         }
@@ -1592,6 +1693,8 @@ export async function handleApiRequest(
         existing = yaml.load(fs.readFileSync(CONFIG_PATH, "utf-8")) as Record<string, unknown> || {};
       } catch { /* start fresh if unreadable */ }
       const merged = deepMerge(existing, body);
+      const configProblems = validateConfigShape(merged);
+      if (configProblems.length > 0) return badRequest(res, `Invalid config:\n- ${configProblems.join("\n- ")}`);
       saveConfigAtomic(merged);
       context.reloadConfig?.(); // refresh in-memory config now (don't wait on the watcher)
       invalidateModelRegistry(); // models/engines may have changed — rebuild on next read

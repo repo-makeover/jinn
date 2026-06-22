@@ -44,6 +44,7 @@ vi.mock("../../shared/logger.js", () => ({
 
 import { handleApiRequest } from "../api.js";
 import type { ApiContext } from "../api.js";
+import { invalidateModelRegistry } from "../../shared/models.js";
 
 interface CapturedRes {
   res: ServerResponse;
@@ -173,5 +174,37 @@ describe("GET /api/org/departments/:name/board — corrupt board.json", () => {
 
     expect(cap.status).toBe(200);
     expect(cap.body).toEqual(board);
+  });
+});
+
+describe("GET /api/status", () => {
+  it("reports error when no configured engine is available", async () => {
+    invalidateModelRegistry();
+    const statusCtx = {
+      getConfig: () => ({
+        gateway: { port: 7777, host: "127.0.0.1" },
+        engines: {
+          default: "claude",
+          claude: { bin: "__jinn_missing_engine_for_status_test__", model: "opus" },
+          codex: { bin: "__jinn_missing_codex_for_status_test__", model: "gpt-5" },
+          antigravity: { bin: "__jinn_missing_agy_for_status_test__", model: "gemini" },
+          grok: { bin: "__jinn_missing_grok_for_status_test__", model: "grok-build" },
+          pi: { bin: "__jinn_missing_pi_for_status_test__", model: "ollama/gemma4:12b" },
+        },
+      }),
+      connectors: new Map(),
+      startTime: Date.now(),
+    } as unknown as ApiContext;
+
+    const cap = makeRes();
+    await handleApiRequest(makeReq("GET", "/api/status"), cap.res, statusCtx);
+
+    expect(cap.status).toBe(200);
+    expect(cap.body).toMatchObject({
+      status: "error",
+      checks: expect.arrayContaining([
+        expect.objectContaining({ name: "engines", status: "error" }),
+      ]),
+    });
   });
 });

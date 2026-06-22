@@ -12,6 +12,7 @@ const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
 export const SKILLS_JSON = path.join(JINN_HOME, "skills.json");
+export const SKILLS_NPX_SPEC = "skills@1.5.12";
 
 /** Well-known directories where `npx skills add -g` may install skills. */
 const GLOBAL_SKILL_DIRS = [
@@ -120,7 +121,7 @@ export function findExistingSkill(name: string): { name: string; dir: string } |
 }
 
 export function runNpxSkills(args: string[], stdio: "inherit" | "pipe" = "inherit"): ReturnType<typeof spawnSync> {
-  return spawnSync("npx", ["skills", ...args], {
+  return spawnSync("npx", ["--yes", SKILLS_NPX_SPEC, ...args], {
     stdio,
     shell: false,
   });

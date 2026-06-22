@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { logger } from "../shared/logger.js";
-import { getSession, getMessages, insertMessage, updateMessageContent, updateSession, initDb, type SessionMessage } from "../sessions/registry.js";
+import { getSession, getMessages, insertMessage, updateMessageContent, updateSession, patchSessionTransportMeta, initDb, type SessionMessage } from "../sessions/registry.js";
 import { findTranscriptForSession } from "../engines/claude-interactive.js";
 import type { HookPayload } from "./hook-registry.js";
 
@@ -146,16 +146,8 @@ function anchorMsFor(session: { transportMeta: unknown }, sessionId: string): nu
 }
 
 function setAnchor(sessionId: string, anchorIso: string): void {
-  const live = getSession(sessionId);
-  if (!live) return;
-  const meta = (live.transportMeta && typeof live.transportMeta === "object" && !Array.isArray(live.transportMeta))
-    ? { ...(live.transportMeta as Record<string, unknown>) }
-    : {};
-  meta[TRANSCRIPT_SYNC_META_KEY] = anchorIso;
-  updateSession(sessionId, {
-    transportMeta: meta as any,
-    lastActivity: new Date().toISOString(),
-  });
+  const updated = patchSessionTransportMeta(sessionId, { [TRANSCRIPT_SYNC_META_KEY]: anchorIso });
+  if (updated) updateSession(sessionId, { lastActivity: new Date().toISOString() });
 }
 
 function latestTranscriptTimestampIso(transcriptPath: string): string | undefined {

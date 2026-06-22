@@ -19,14 +19,14 @@
  * or the order of side effects without auditing both call sites.
  */
 
-import type { Employee, Engine, EngineResult, JinnConfig, Session, StreamDelta } from "../shared/types.js";
+import type { Employee, Engine, EngineResult, JinnConfig, JsonObject, Session, StreamDelta } from "../shared/types.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel, engineAvailable, type EngineName } from "../shared/models.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit } from "../shared/rateLimit.js";
 import { recordClaudeRateLimit } from "../shared/usageAwareness.js";
-import { getSession, getMessages, updateSession } from "./registry.js";
+import { getSession, getMessages, updateSession, patchSessionTransportMeta } from "./registry.js";
 
 const WAIT_CANCEL_POLL_MS = 5000;
 
@@ -191,13 +191,17 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
       updateSession(session.id, {
         engine: fallbackName,
         // Keep Claude engine_session_id intact for later restore; Codex will return its own thread id.
-        transportMeta: nextMeta as any,
         status: "running",
         lastActivity: new Date().toISOString(),
         lastError: resumeAt
           ? `Claude usage limit — using GPT until ${resumeAt.toISOString()}`
           : "Claude usage limit — using GPT temporarily",
       });
+      patchSessionTransportMeta(session.id, (current) => ({
+        ...current,
+        engineSessions: engineSessions as JsonObject,
+        engineOverride: nextMeta.engineOverride as JsonObject,
+      }));
 
       const fallbackConfig = config.engines.codex;
       const fallbackEffort = resolveEffort(
@@ -234,10 +238,7 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
       if (fallbackResult.sessionId) {
         nextEngineSessions.codex = fallbackResult.sessionId;
       }
-      const liveMeta = (getSession(session.id)?.transportMeta || nextMeta) as Record<string, unknown>;
-      const metaAfter = { ...liveMeta } as Record<string, unknown>;
-      metaAfter.engineSessions = nextEngineSessions;
-      updateSession(session.id, { transportMeta: metaAfter as any });
+      patchSessionTransportMeta(session.id, { engineSessions: nextEngineSessions as any });
 
       await hooks.onFallbackComplete?.(fallbackResult);
 

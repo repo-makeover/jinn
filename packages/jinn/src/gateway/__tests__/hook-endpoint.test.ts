@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { handleHookPost, isLoopback } from "../hook-endpoint.js";
+import { handleHookPost, isLoopback, type HookEndpointCtx } from "../hook-endpoint.js";
 import { HookRegistry } from "../hook-registry.js";
 
 describe("isLoopback", () => {
@@ -35,25 +35,36 @@ describe("handleHookPost", () => {
   afterEach(() => {
     while (registries.length > 0) registries.pop()!.dispose();
   });
+  const body = (overrides: Record<string, unknown> = {}) => ({
+    jinnSessionId: "s1",
+    hook: { hook_event_name: "Stop" },
+    nonce: `nonce-${Math.random().toString(36).slice(2)}`,
+    timestamp: 1_000,
+    ...overrides,
+  });
+  const ctx = (reg: HookRegistry, overrides: Partial<HookEndpointCtx> = {}): HookEndpointCtx => ({
+    reg,
+    secret: "sek",
+    remoteAddress: "127.0.0.1",
+    now: () => 1_000,
+    ...overrides,
+  });
 
   it("rejects a wrong secret with 403", () => {
     const reg = makeReg();
-    const res = handleHookPost({ reg, secret: "sek", remoteAddress: "127.0.0.1" },
-      "nope", { jinnSessionId: "s1", hook: { hook_event_name: "Stop" } });
+    const res = handleHookPost(ctx(reg), "nope", body());
     expect(res.status).toBe(403);
   });
 
   it("rejects a non-loopback remote with 403", () => {
     const reg = makeReg();
-    const res = handleHookPost({ reg, secret: "sek", remoteAddress: "10.0.0.5" },
-      "sek", { jinnSessionId: "s1", hook: { hook_event_name: "Stop" } });
+    const res = handleHookPost(ctx(reg, { remoteAddress: "10.0.0.5" }), "sek", body());
     expect(res.status).toBe(403);
   });
 
   it("accepts an IPv4-mapped loopback remote", () => {
     const reg = makeReg();
-    const res = handleHookPost({ reg, secret: "sek", remoteAddress: "::ffff:127.0.0.1" },
-      "sek", { jinnSessionId: "s1", hook: { hook_event_name: "Stop" } });
+    const res = handleHookPost(ctx(reg, { remoteAddress: "::ffff:127.0.0.1" }), "sek", body());
     expect(res.status).toBe(200);
   });
 
@@ -61,22 +72,33 @@ describe("handleHookPost", () => {
     const reg = makeReg();
     const seen: string[] = [];
     reg.register("s1", (h) => seen.push(h.hook_event_name));
-    const res = handleHookPost({ reg, secret: "sek", remoteAddress: "127.0.0.1" },
-      "sek", { jinnSessionId: "s1", hook: { hook_event_name: "Stop", last_assistant_message: "hi" } });
+    const res = handleHookPost(ctx(reg), "sek", body({ hook: { hook_event_name: "Stop", last_assistant_message: "hi" } }));
     expect(res.status).toBe(200);
     expect(seen).toEqual(["Stop"]);
   });
 
   it("returns 400 for a malformed body", () => {
     const reg = makeReg();
-    const res = handleHookPost({ reg, secret: "sek", remoteAddress: "127.0.0.1" }, "sek", {});
+    const res = handleHookPost(ctx(reg), "sek", {});
     expect(res.status).toBe(400);
   });
 
   it("returns 401 when the server secret is empty (defense-in-depth)", () => {
     const reg = makeReg();
-    const res = handleHookPost({ reg, secret: "", remoteAddress: "127.0.0.1" },
-      "", { jinnSessionId: "s1", hook: { hook_event_name: "Stop" } });
+    const res = handleHookPost(ctx(reg, { secret: "" }), "", body());
     expect(res.status).toBe(401);
+  });
+
+  it("rejects hook replays by session nonce", () => {
+    const reg = makeReg();
+    const replay = body({ nonce: "nonce-replay-12345" });
+    expect(handleHookPost(ctx(reg), "sek", replay).status).toBe(200);
+    expect(handleHookPost(ctx(reg), "sek", replay).status).toBe(409);
+  });
+
+  it("rejects stale hook timestamps", () => {
+    const reg = makeReg();
+    const res = handleHookPost(ctx(reg, { now: () => 10 * 60 * 1000 }), "sek", body({ timestamp: 1_000 }));
+    expect(res.status).toBe(400);
   });
 });
