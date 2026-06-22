@@ -12,6 +12,7 @@ import os from "node:os";
 import * as pty from "node-pty";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../shared/logger.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import type { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 
@@ -248,7 +249,7 @@ export function forkCodexSession(engineSessionId: string): ForkResult {
     }
   }
 
-  fs.writeFileSync(destFile, lines.join("\n"));
+  safeWriteFile(destFile, lines.join("\n")); // atomic + fsync (forked session transcript)
   logger.info(`Codex fork successful: ${engineSessionId} → ${newUuid} (${destFile})`);
   return { engineSessionId: newUuid };
 }

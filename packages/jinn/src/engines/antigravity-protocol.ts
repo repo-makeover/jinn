@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import type { StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 
 /**
  * Pure protocol helpers for the Antigravity (`agy`) engine — no PTY, no I/O
@@ -227,7 +228,7 @@ export function ensureWorkspaceTrusted(workspacePath: string, settingsPath: stri
 
   try {
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    safeWriteFile(settingsPath, JSON.stringify(settings, null, 2)); // atomic + fsync (antigravity workspace trust)
   } catch (err) {
     logger.warn(`antigravity: failed to seed workspace trust: ${err instanceof Error ? err.message : err}`);
   }

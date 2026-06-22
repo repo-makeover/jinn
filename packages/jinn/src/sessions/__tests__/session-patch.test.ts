@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { JinnConfig } from "../../shared/types.js";
-import { validateNewSessionSelection, validateSessionPatch } from "../session-patch.js";
+import { applyEmployeeSessionDefaults, validateNewSessionSelection, validateSessionPatch } from "../session-patch.js";
 import { invalidateModelRegistry } from "../../shared/models.js";
 
 function cfg(): JinnConfig {
@@ -12,6 +12,7 @@ function cfg(): JinnConfig {
       codex: { bin: "codex", model: "gpt-5.4" },
       antigravity: { model: "gemini-3-flash-preview" },
       grok: { bin: "grok", model: "grok-build" },
+      pi: { bin: "pi", model: "purdue/qwen3-coder:latest" },
     },
     models: {
       claude: {
@@ -29,6 +30,13 @@ function cfg(): JinnConfig {
         models: [
           { id: "grok-build", label: "Grok Build", supportsEffort: true, effortLevels: ["low", "medium", "high", "xhigh", "max"] },
           { id: "grok-composer-2.5-fast", label: "Grok Composer 2.5 Fast", supportsEffort: true, effortLevels: ["low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
+      pi: {
+        default: "purdue/qwen3-coder:latest",
+        models: [
+          { id: "purdue/qwen3-coder:latest", supportsEffort: false, effortLevels: [] },
+          { id: "purdue/qwen3:8b", supportsEffort: false, effortLevels: [] },
         ],
       },
     },
@@ -75,6 +83,46 @@ describe("validateNewSessionSelection", () => {
     const r = validateNewSessionSelection(cfg(), { engine: "antigravity", model: "gemini-3-flash-preview", effortLevel: "high" });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/does not support effort/i);
+  });
+});
+
+describe("applyEmployeeSessionDefaults", () => {
+  it("uses employee engine/model defaults for a new delegated session", () => {
+    const defaults = applyEmployeeSessionDefaults({}, {
+      engine: "pi",
+      model: "purdue/qwen3:8b",
+      effortLevel: undefined,
+    });
+    const r = validateNewSessionSelection(cfg(), defaults);
+
+    expect(r).toEqual({
+      ok: true,
+      engine: "pi",
+      model: "purdue/qwen3:8b",
+      effortLevel: undefined,
+    });
+  });
+
+  it("does not carry an employee model across an explicit engine override", () => {
+    const defaults = applyEmployeeSessionDefaults({ engine: "claude" }, {
+      engine: "pi",
+      model: "purdue/qwen3:8b",
+      effortLevel: undefined,
+    });
+    const r = validateNewSessionSelection(cfg(), defaults);
+
+    expect(defaults).toEqual({ engine: "claude", model: undefined, effortLevel: undefined });
+    expect(r).toEqual({ ok: true, engine: "claude", model: undefined, effortLevel: undefined });
+  });
+
+  it("keeps explicit request values ahead of employee defaults", () => {
+    const defaults = applyEmployeeSessionDefaults({ engine: "pi", model: "purdue/qwen3-coder:latest" }, {
+      engine: "pi",
+      model: "purdue/qwen3:8b",
+      effortLevel: undefined,
+    });
+
+    expect(defaults).toEqual({ engine: "pi", model: "purdue/qwen3-coder:latest", effortLevel: undefined });
   });
 });
 

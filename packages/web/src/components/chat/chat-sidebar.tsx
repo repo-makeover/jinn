@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, startTransition } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, Clock3, Copy, EllipsisVertical, Pencil, Pin, Plus, Search, Trash2, X } from "lucide-react"
+import { ChevronDown, Clock3, Copy, EllipsisVertical, Layers, Pencil, Pin, Plus, Search, Trash2, X } from "lucide-react"
 import { api, type BackgroundActivity, type Employee, type SessionsResponse } from "@/lib/api"
 import { useOrg } from "@/hooks/use-employees"
 import { EmployeeAvatar } from "@/components/ui/employee-avatar"
@@ -35,34 +35,32 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { mergeSidebarEmployees, bucketByDay, summarizeOlder, isFocusedSession } from "@/components/chat/chat-route-helpers"
+import { groupSessionsByDepartment, roomSelectionId } from "@/lib/rooms/grouping"
+import type { DepartmentRoom, RoomEmployee, RoomSession } from "@/lib/rooms/types"
+import type { Session, SidebarOrder, FlatItem, FlatRow, ViewMode, StatusDotState } from "./sidebar-types"
+import {
+  loadExpandedRooms, saveExpandedRooms, getReadSessions, markSessionRead, markAllReadForEmployee,
+  getPinnedSessions, savePinnedSessions, loadCollapsedState, saveCollapsedState,
+  loadExpandedState, saveExpandedState,
+} from "./sidebar-storage"
+import {
+  formatTime, titleCase, resolveRowIdentity, isCronSession, isDirectSession, isVisibleSource,
+  getSessionActivity, sortSessionsByActivity, hasBackgroundActivity, isRecentError, getStatusDot,
+} from "./sidebar-session-helpers"
 
-interface Session {
-  id: string
-  connector?: string | null
-  employee?: string
-  title?: string
-  status?: string
-  source?: string
-  sourceRef?: string
-  sessionKey?: string
-  /** Set on delegated/spawned child sessions; null/empty for top-level chats. */
-  parentSessionId?: string | null
-  transportState?: string
-  queueDepth?: number
-  lastActivity?: string
-  createdAt?: string
-  /** Background work (subagents/background tasks) still running while the
-   *  session is officially idle. null/absent = none. Kept live via the
-   *  session:background WS event (cache patch in useQueryInvalidation). */
-  backgroundActivity?: BackgroundActivity | null
-  [key: string]: unknown
-}
+// Compatibility facade: these moved to ./sidebar-types and ./sidebar-session-helpers
+// (AS-001 modularization) — re-exported so existing importers of this module
+// (chat/page.tsx, chat-sidebar-helpers.test.ts) keep working.
+export type { SidebarOrder }
+export { hasBackgroundActivity, isDirectSession, isRecentError, resolveRowIdentity }
 
-export interface SidebarOrder {
-  sessionIds: string[]
-  employeeNames: string[]
-  employeeSessionMap: Record<string, string[]>
-}
+// Server-side group sentinels — must match CRON_GROUP/DIRECT_GROUP in the
+// backend registry (sessions are bounded per group; "load more" fetches the rest).
+const DIRECT_GROUP = "__direct__"
+const CRON_GROUP = "__cron__"
+
+const OLDER_EXPANDED_STORAGE_KEY = "jinn-sidebar-older-expanded"
+const FOCUS_MODE_STORAGE_KEY = "jinn-sidebar-focus-mode"
 
 interface ChatSidebarProps {
   selectedId: string | null
@@ -75,249 +73,8 @@ interface ChatSidebarProps {
   onOrderComputed?: (order: SidebarOrder) => void
   /** Start a new chat with a session-less roster employee (contactable list). */
   onContactEmployee?: (name: string) => void
-}
-
-interface FlatItem {
-  type: "employee" | "direct"
-  employeeName?: string
-  employeeData?: Employee
-  sessions?: Session[]
-  session?: Session
-  sortKey: string
-  pinKey: string
-  /** Server group key for "load more" (employee slug, or a sentinel). */
-  groupKey?: string
-  /** True total in this group (may exceed loaded `sessions.length`). */
-  total?: number
-}
-
-// One flat session row (Today / Yesterday / search results), carrying the
-// resolved employee identity so the row can render without re-deriving it.
-interface FlatRow {
-  session: Session
-  avatarName: string
-  displayName: string
-}
-
-// Server-side group sentinels — must match CRON_GROUP/DIRECT_GROUP in the
-// backend registry (sessions are bounded per group; "load more" fetches the rest).
-const DIRECT_GROUP = "__direct__"
-const CRON_GROUP = "__cron__"
-const BACKGROUND_ACTIVITY_STALE_MS = 5 * 60 * 1000
-// A red error dot is only worth surfacing while the failure is fresh; older
-// errored sessions fall back to the normal idle/unread treatment so the list
-// isn't littered with stale red dots.
-const RECENT_ERROR_WINDOW_MS = 24 * 60 * 60 * 1000
-
-const COLLAPSE_STORAGE_KEY = "jinn-sidebar-collapsed"
-const EXPANDED_STORAGE_KEY = "jinn-sidebar-expanded"
-const PINNED_STORAGE_KEY = "jinn-pinned-sessions"
-const OLDER_EXPANDED_STORAGE_KEY = "jinn-sidebar-older-expanded"
-const FOCUS_MODE_STORAGE_KEY = "jinn-sidebar-focus-mode"
-
-type FocusMode = "focused" | "all"
-
-const formatTimeCache = new Map<string, string>()
-const FORMAT_TIME_CACHE_MAX = 200
-
-function formatTime(dateStr?: string): string {
-  if (!dateStr) return ""
-  const cached = formatTimeCache.get(dateStr)
-  if (cached !== undefined) return cached
-  const d = new Date(dateStr)
-  const now = Date.now()
-  const diff = now - d.getTime()
-  let result: string
-  if (diff < 60_000) result = "now"
-  else if (diff < 3_600_000) result = `${Math.floor(diff / 60_000)}m`
-  else if (diff < 86_400_000) {
-    result = new Date(dateStr).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-  } else if (diff < 172_800_000) result = "yesterday"
-  else result = new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-  if (formatTimeCache.size >= FORMAT_TIME_CACHE_MAX) {
-    const oldest = formatTimeCache.keys().next().value
-    if (oldest !== undefined) formatTimeCache.delete(oldest)
-  }
-  formatTimeCache.set(dateStr, result)
-  return result
-}
-
-function getReadSessions(): Set<string> {
-  try {
-    const raw = localStorage.getItem("jinn-read-sessions")
-    return raw ? new Set(JSON.parse(raw)) : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function markSessionRead(id: string) {
-  const read = getReadSessions()
-  read.add(id)
-  const arr = Array.from(read)
-  if (arr.length > 500) arr.splice(0, arr.length - 500)
-  localStorage.setItem("jinn-read-sessions", JSON.stringify(arr))
-}
-
-function markAllReadForEmployee(sessions: Session[]) {
-  const read = getReadSessions()
-  for (const s of sessions) read.add(s.id)
-  const arr = Array.from(read)
-  if (arr.length > 500) arr.splice(0, arr.length - 500)
-  localStorage.setItem("jinn-read-sessions", JSON.stringify(arr))
-}
-
-function getPinnedSessions(): Set<string> {
-  try {
-    const raw = localStorage.getItem(PINNED_STORAGE_KEY)
-    return raw ? new Set(JSON.parse(raw)) : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function savePinnedSessions(pinned: Set<string>) {
-  try {
-    localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify(Array.from(pinned)))
-  } catch {}
-}
-
-function loadCollapsedState(): Set<string> {
-  try {
-    const raw = localStorage.getItem(COLLAPSE_STORAGE_KEY)
-    return raw ? new Set(JSON.parse(raw)) : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function saveCollapsedState(collapsed: Set<string>) {
-  try {
-    localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(Array.from(collapsed)))
-  } catch {}
-}
-
-function loadExpandedState(): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(EXPANDED_STORAGE_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    return {}
-  }
-}
-
-function saveExpandedState(expanded: Record<string, boolean>) {
-  try {
-    localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(expanded))
-  } catch {}
-}
-
-function titleCase(slug: string | null | undefined): string {
-  if (!slug) return ""
-  return slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
-}
-
-/** Resolve the avatar slug + human label for a flat session row. Direct/COO
- *  sessions borrow the portal identity; cron/employee-less sessions fall back to
- *  it too — they have no org employee, so search (which flattens cron rows that
- *  the grouped view renders separately) must not `.split()` a null employee.
- *  The rest use their employee's org profile. */
-export function resolveRowIdentity(
-  s: Pick<Session, "source" | "sourceRef" | "employee">,
-  opts: { portalSlug: string; portalName: string; employeeData: Map<string, Employee> },
-): { avatarName: string; displayName: string } {
-  const { portalSlug, portalName, employeeData } = opts
-  if (isDirectSession(s, portalSlug) || !s.employee) {
-    return { avatarName: portalSlug, displayName: portalName }
-  }
-  const emp = s.employee
-  return { avatarName: emp, displayName: employeeData.get(emp)?.displayName || titleCase(emp) }
-}
-
-function isCronSession(session: Pick<Session, "source" | "sourceRef">): boolean {
-  return session.source === "cron" || (session.sourceRef || "").startsWith("cron:")
-}
-
-export function isDirectSession(
-  session: Pick<Session, "source" | "sourceRef" | "employee">,
-  portalSlug?: string,
-): boolean {
-  if (isCronSession(session)) return false
-  if (!session.employee) return true
-  // A session tagged with the portal slug is a direct/COO session, not a
-  // pseudo-employee — fold it into the direct group rather than a phantom one
-  // that renders with the portal's own title.
-  return !!portalSlug && session.employee.toLowerCase() === portalSlug
-}
-
-// Sources the sidebar renders (others, e.g. slack/telegram, are shown elsewhere).
-function isVisibleSource(s: Session): boolean {
-  return s.source === "web" || s.source === "cron" || s.source === "whatsapp" || s.source === "discord" || !s.source
-}
-
-function getSessionActivity(session: Session): string {
-  return session.lastActivity || session.createdAt || ""
-}
-
-function sortSessionsByActivity(sessions: Session[]): Session[] {
-  return [...sessions].sort((a, b) => getSessionActivity(b).localeCompare(getSessionActivity(a)))
-}
-
-/** Idle-but-busy: the session's turn ended but subagents/background tasks are
- *  still making API calls. Running/error status always wins over this. */
-export function hasBackgroundActivity(session: Pick<Session, "status" | "backgroundActivity">): boolean {
-  const activity = session.backgroundActivity
-  const lastActivityAt = activity?.lastActivityAt ? new Date(activity.lastActivityAt).getTime() : 0
-  const stale = lastActivityAt > 0 && Date.now() - lastActivityAt > BACKGROUND_ACTIVITY_STALE_MS
-  return (
-    session.status !== "running" &&
-    session.status !== "error" &&
-    !stale &&
-    (activity?.activeStreams ?? 0) > 0
-  )
-}
-
-interface StatusDotState {
-  color: string
-  label: string
-  pulse: boolean
-}
-
-/** A red error dot fires only for a *recently* errored session — `status` is
- *  "error" AND its last activity is inside the recency window. `nowMs` is passed
- *  in (rather than read at module load) so the window is evaluated at call time
- *  and the helper stays pure/testable. A missing or unparseable timestamp is
- *  treated as not-recent so the row falls through to the quiet treatment. */
-export function isRecentError(
-  status: string | undefined,
-  lastActivityISO: string,
-  nowMs: number,
-): boolean {
-  if (status !== "error") return false
-  if (!lastActivityISO) return false
-  const ts = new Date(lastActivityISO).getTime()
-  if (Number.isNaN(ts)) return false
-  return nowMs - ts < RECENT_ERROR_WINDOW_MS
-}
-
-// Resolve the attention-state dot for a session. Returns null for the resting
-// "read" state so no dot is painted (quiet at rest). Optionally treat the row
-// as unread even when this session is read (e.g. a grouped employee row whose
-// other chats are unread).
-function getStatusDot(
-  session: Session,
-  readSet: Set<string>,
-  forceUnread = false,
-): StatusDotState | null {
-  if (session.status === "running") return { color: "var(--system-blue)", label: "running", pulse: true }
-  if (isRecentError(session.status, getSessionActivity(session), Date.now())) {
-    return { color: "var(--system-red)", label: "error", pulse: false }
-  }
-  if (hasBackgroundActivity(session)) return { color: "var(--system-orange)", label: "background work running", pulse: true }
-  // Unread uses a NEUTRAL dot (not --accent): accent is user-set and may be red,
-  // which would read like an error. Calm grey stays visible without alarming.
-  if (forceUnread || !readSet.has(session.id)) return { color: "var(--text-secondary)", label: "unread", pulse: false }
-  return null
+  /** Open a department project-room's merged timeline (Rooms view-mode). */
+  onSelectRoom?: (roomId: string) => void
 }
 
 function StatusDot({
@@ -895,6 +652,31 @@ const EmployeeRow = React.memo(function EmployeeRow({
   )
 })
 
+/** A contactable roster row (Managers + Team sections). Clicking starts a chat
+ *  with the employee via `onContact`. Shared so the two sections never drift. */
+function ContactRow({ emp, onContact }: { emp: Employee; onContact: (name: string) => void }) {
+  return (
+    <button
+      onClick={() => onContact(emp.name)}
+      title={`Start a chat with ${emp.displayName || titleCase(emp.name)}`}
+      className="group/contact relative flex w-full items-center gap-3 border-l-2 border-l-transparent px-4 py-2.5 text-left transition-colors hover:bg-[var(--fill-tertiary)]"
+    >
+      <div className="relative flex size-9 shrink-0 items-center justify-center">
+        <EmployeeAvatar name={emp.name} size={36} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <span className="block min-w-0 truncate text-[13px] font-medium tracking-[-0.2px] text-foreground">
+          {emp.displayName || titleCase(emp.name)}
+        </span>
+        {emp.department ? (
+          <span className="block truncate text-[11px] text-[var(--text-tertiary)]">{emp.department}</span>
+        ) : null}
+      </div>
+      <Plus className="size-3.5 shrink-0 text-[var(--text-quaternary)] transition-colors group-hover/contact:text-[var(--accent)]" />
+    </button>
+  )
+}
+
 export function ChatSidebar({
   selectedId,
   onSelect,
@@ -905,6 +687,7 @@ export function ChatSidebar({
   onEmployeeSessionsAvailable,
   onOrderComputed,
   onContactEmployee,
+  onSelectRoom,
 }: ChatSidebarProps) {
   const { settings } = useSettings()
   const portalName = settings.portalName ?? "Jinn"
@@ -949,7 +732,8 @@ export function ChatSidebar({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [olderExpanded, setOlderExpanded] = useState(false)
-  const [focusMode, setFocusMode] = useState<FocusMode>("all")
+  const [viewMode, setViewMode] = useState<ViewMode>("rooms")
+  const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set())
   const [loadingMore, setLoadingMore] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<{
     type: "session" | "employee"
@@ -988,7 +772,8 @@ export function ChatSidebar({
     try {
       setOlderExpanded(localStorage.getItem(OLDER_EXPANDED_STORAGE_KEY) === "true")
       const stored = localStorage.getItem(FOCUS_MODE_STORAGE_KEY)
-      if (stored === "focused" || stored === "all") setFocusMode(stored)
+      if (stored === "rooms" || stored === "focused" || stored === "all") setViewMode(stored)
+      setExpandedRooms(loadExpandedRooms())
     } catch {}
   }, [])
 
@@ -1009,9 +794,19 @@ export function ChatSidebar({
     if (searchOpen) searchInputRef.current?.focus()
   }, [searchOpen])
 
-  const selectFocusMode = useCallback((mode: FocusMode) => {
-    setFocusMode(mode)
+  const selectViewMode = useCallback((mode: ViewMode) => {
+    setViewMode(mode)
     try { localStorage.setItem(FOCUS_MODE_STORAGE_KEY, mode) } catch {}
+  }, [])
+
+  const toggleRoomExpanded = useCallback((roomId: string) => {
+    setExpandedRooms((prev) => {
+      const next = new Set(prev)
+      if (next.has(roomId)) next.delete(roomId)
+      else next.add(roomId)
+      saveExpandedRooms(next)
+      return next
+    })
   }, [])
 
   const toggleOlderExpanded = useCallback(() => {
@@ -1191,7 +986,7 @@ export function ChatSidebar({
     // other automated sessions are hidden until "All" is selected. The
     // per-employee groups (drawer in All mode + keyboard cycling + contactable
     // roster) are always built from every non-cron session so they stay stable.
-    const focused = focusMode === "focused"
+    const focused = viewMode === "focused"
     const now = new Date()
     const cronSessions: Session[] = []
     const directSessions: Session[] = []
@@ -1329,7 +1124,16 @@ export function ChatSidebar({
       cronSessions,
       cronTotal,
     }
-  }, [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, focusMode])
+  }, [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, viewMode])
+
+  // Rooms view-mode: group the loaded non-cron sessions into department
+  // project-rooms (pure layer in lib/rooms). Derived independently of the flat
+  // pipeline above so it stays simple and the existing modes are untouched.
+  const rooms = useMemo<DepartmentRoom[]>(() => {
+    if (viewMode !== "rooms") return []
+    const employees = (orgData?.employees ?? []) as RoomEmployee[]
+    return groupSessionsByDepartment(sessions as unknown as RoomSession[], employees)
+  }, [viewMode, sessions, orgData])
 
   const cronCollapsed = collapsed.has("cron")
 
@@ -1352,6 +1156,21 @@ export function ChatSidebar({
       .filter((e): e is Employee => !!e)
   }, [search, pinnedFlat, unpinnedFlat, orgData, employeeData, portalSlug])
 
+  // Managers + executives — a quick-access roster rendered ABOVE Team. Shown
+  // regardless of whether they already have sessions (so all leadership is one
+  // tap away); they may also appear in Team. Executives first, then by name.
+  // Hidden during search (the flat results span everything already).
+  const managerEmployees = useMemo(() => {
+    if (search.trim()) return []
+    return (orgData?.employees ?? [])
+      .filter((e) => (e.rank === "manager" || e.rank === "executive") && e.name !== portalSlug)
+      .sort((a, b) => {
+        const ra = a.rank === "executive" ? 0 : 1
+        const rb = b.rank === "executive" ? 0 : 1
+        return ra - rb || (a.displayName || a.name).localeCompare(b.displayName || b.name)
+      })
+  }, [search, orgData, portalSlug])
+
   // Emit flat session order for keyboard navigation (J/K/E shortcuts).
   // Visual order: Today → Yesterday → (Older drawer, if open) → Scheduled.
   // De-duped — an employee's older sessions can overlap their Today/Yesterday rows.
@@ -1366,10 +1185,28 @@ export function ChatSidebar({
       return { sessionIds: ids, employeeNames: [] as string[], employeeSessionMap: {} as Record<string, string[]> }
     }
 
+    // Rooms mode: keyboard j/k cycles every room's sessions (room order, then
+    // newest-first within), regardless of whether the room is expanded — so nav
+    // is never dead in the default all-collapsed view. Then cron.
+    if (viewMode === "rooms") {
+      const empNames: string[] = []
+      const empMap: Record<string, string[]> = {}
+      for (const room of rooms) {
+        for (const s of room.sessions) push(s.id)
+      }
+      for (const s of sortedCron) push(s.id)
+      for (const item of [...pinnedFlat, ...unpinnedFlat]) {
+        const name = item.employeeName!
+        empNames.push(name)
+        empMap[name] = item.sessions!.map((s) => s.id)
+      }
+      return { sessionIds: ids, employeeNames: empNames, employeeSessionMap: empMap }
+    }
+
     for (const r of todayRows) push(r.session.id)
     for (const r of yesterdayRows) push(r.session.id)
     if (olderExpanded) {
-      if (focusMode === "focused") {
+      if (viewMode === "focused") {
         for (const r of olderFocusedRows) push(r.session.id)
       } else {
         for (const item of [...olderPinned, ...olderUnpinned]) {
@@ -1391,7 +1228,7 @@ export function ChatSidebar({
       empMap[name] = item.sessions!.map((s) => s.id)
     }
     return { sessionIds: ids, employeeNames: empNames, employeeSessionMap: empMap }
-  }, [searching, searchRows, todayRows, yesterdayRows, olderExpanded, focusMode, olderFocusedRows, olderPinned, olderUnpinned, expanded, sortedCron, pinnedFlat, unpinnedFlat])
+  }, [searching, searchRows, todayRows, yesterdayRows, olderExpanded, viewMode, olderFocusedRows, olderPinned, olderUnpinned, expanded, sortedCron, pinnedFlat, unpinnedFlat, rooms])
 
   useEffect(() => {
     const key = allFlatIds.sessionIds.join(',')
@@ -1479,6 +1316,7 @@ export function ChatSidebar({
     | { kind: "older-line" }
     | { kind: "older-header" }
     | { kind: "employee"; item: FlatItem }
+    | { kind: "room-header"; room: DepartmentRoom }
     | { kind: "cron-header" }
     | { kind: "cron-session"; session: Session }
     | { kind: "cron-more" }
@@ -1487,6 +1325,32 @@ export function ChatSidebar({
     const list: VirtualItem[] = []
     if (searching) {
       for (const row of searchRows) list.push({ kind: "flat", row })
+      return list
+    }
+    // Rooms view-mode: a collapsible department header per room, with the room's
+    // sessions nested beneath as the SAME flat rows used elsewhere (so each agent
+    // session stays individually openable — provenance preserved). Cron keeps its
+    // own Scheduled section below, in every mode.
+    if (viewMode === "rooms") {
+      for (const room of rooms) {
+        list.push({ kind: "room-header", room })
+        if (expandedRooms.has(room.id)) {
+          for (const rs of room.sessions) {
+            // room.sessions are the same Session objects fed in (RoomSession is a
+            // structural subset); cast back at the render boundary.
+            const s = rs as unknown as Session
+            const { avatarName, displayName } = resolveRowIdentity(s, { portalSlug, portalName, employeeData })
+            list.push({ kind: "flat", row: { session: s, avatarName, displayName } })
+          }
+        }
+      }
+      if (cronSessions.length > 0) {
+        list.push({ kind: "cron-header" })
+        if (!cronCollapsed) {
+          for (const s of sortedCron) list.push({ kind: "cron-session", session: s })
+          if (cronSessions.length < cronTotal) list.push({ kind: "cron-more" })
+        }
+      }
       return list
     }
     if (todayRows.length > 0) {
@@ -1500,7 +1364,7 @@ export function ChatSidebar({
     if (olderSummary.chats > 0) {
       if (!olderExpanded) {
         list.push({ kind: "older-line" })
-      } else if (focusMode === "focused") {
+      } else if (viewMode === "focused") {
         // Focused Older = flat older user-initiated chats (no per-employee drawer).
         list.push({ kind: "older-header" })
         for (const row of olderFocusedRows) list.push({ kind: "flat", row })
@@ -1518,7 +1382,7 @@ export function ChatSidebar({
       }
     }
     return list
-  }, [searching, searchRows, todayRows, yesterdayRows, olderSummary.chats, olderExpanded, focusMode, olderFocusedRows, olderPinned, olderUnpinned, cronSessions.length, cronCollapsed, sortedCron, cronTotal])
+  }, [searching, searchRows, todayRows, yesterdayRows, olderSummary.chats, olderExpanded, viewMode, olderFocusedRows, olderPinned, olderUnpinned, cronSessions.length, cronCollapsed, sortedCron, cronTotal, rooms, expandedRooms, portalSlug, portalName, employeeData])
 
   const VIRTUALIZE_THRESHOLD = 50
   const shouldVirtualize = virtualItems.length >= VIRTUALIZE_THRESHOLD
@@ -1537,6 +1401,7 @@ export function ChatSidebar({
         case "cron-session": return 36
         case "cron-more": return 28
         case "flat": return 52
+        case "room-header": return 56
         default: return 64 // employee row (dynamic — measured)
       }
     },
@@ -1585,6 +1450,59 @@ export function ChatSidebar({
             {...sharedRowProps}
           />
         )
+      case "room-header": {
+        const room = vi.room
+        const isActive = selectedId === roomSelectionId(room.id)
+        const isExpanded = expandedRooms.has(room.id)
+        const lastActive = formatTime(room.lastActivity)
+        return (
+          <div
+            className={cn(
+              "relative flex w-full items-center border-l-2 transition-colors",
+              isActive
+                ? "border-l-[var(--accent)] bg-[var(--fill-secondary)]"
+                : "border-l-transparent hover:bg-[var(--fill-tertiary)]",
+            )}
+          >
+            <button
+              onClick={() => toggleRoomExpanded(room.id)}
+              aria-label={isExpanded ? `Collapse ${room.name} agents` : `Show ${room.name} agents`}
+              aria-expanded={isExpanded}
+              className="ml-1 flex size-7 shrink-0 items-center justify-center rounded text-[var(--text-quaternary)] transition-colors hover:text-[var(--text-secondary)]"
+            >
+              <ChevronDown className={cn("size-3.5 transition-transform", !isExpanded && "-rotate-90")} />
+            </button>
+            <button
+              onClick={() => onSelectRoom?.(room.id)}
+              title={`Open ${room.name} room`}
+              aria-current={isActive ? "true" : undefined}
+              className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 text-left"
+            >
+              <Layers className="size-4 shrink-0 text-[var(--text-tertiary)]" />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "truncate text-[13px] font-semibold tracking-[-0.2px]",
+                      isActive ? "text-foreground" : "text-[var(--text-secondary)]",
+                    )}
+                  >
+                    {room.name}
+                  </span>
+                  {room.status === "active" && (
+                    <span className="size-1.5 shrink-0 rounded-full bg-[var(--accent)]" aria-label="active" />
+                  )}
+                </span>
+                <span className="block truncate text-[11px] text-[var(--text-tertiary)]">
+                  {room.participantCount} {room.participantCount === 1 ? "agent" : "agents"}
+                  {lastActive ? ` · ${lastActive}` : ""}
+                </span>
+              </span>
+              <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-quaternary)]">{room.sessionCount}</span>
+            </button>
+          </div>
+        )
+      }
       case "older-line":
         return (
           <button
@@ -1663,19 +1581,26 @@ export function ChatSidebar({
             )}
             aria-hidden={searchOpen}
           >
-            {/* Focused (default) shows only the operator's own top-level chats;
-                All reveals delegated/automated sessions too. Persisted; search
-                spans everything regardless. */}
+            {/* Rooms (default) groups chats into department project-rooms;
+                Focused shows only the operator's own top-level chats; All reveals
+                delegated/automated sessions too. Persisted; search spans
+                everything regardless of mode. */}
             <div className="flex items-center gap-0.5 rounded-full bg-[var(--fill-tertiary)] p-0.5 text-[11px] font-medium">
-              {(["focused", "all"] as const).map((mode) => (
+              {(["rooms", "focused", "all"] as const).map((mode) => (
                 <button
                   key={mode}
-                  onClick={() => selectFocusMode(mode)}
-                  aria-pressed={focusMode === mode}
-                  title={mode === "focused" ? "Only chats you started" : "Include automated & delegated sessions"}
+                  onClick={() => selectViewMode(mode)}
+                  aria-pressed={viewMode === mode}
+                  title={
+                    mode === "rooms"
+                      ? "Group chats by department project-room"
+                      : mode === "focused"
+                        ? "Only chats you started"
+                        : "Include automated & delegated sessions"
+                  }
                   className={cn(
                     "rounded-full px-2.5 py-1 capitalize transition-all",
-                    focusMode === mode
+                    viewMode === mode
                       ? "bg-[var(--bg-secondary)] text-foreground shadow-[var(--shadow-subtle)]"
                       : "text-muted-foreground hover:text-foreground"
                   )}
@@ -1751,10 +1676,10 @@ export function ChatSidebar({
           <div className="px-4 py-8 text-center text-xs text-[var(--text-quaternary)]">
             {search.trim() ? (
               "No matching chats"
-            ) : focusMode === "focused" && hiddenAutomated > 0 ? (
+            ) : viewMode === "focused" && hiddenAutomated > 0 ? (
               <>
                 No personal chats here.{" "}
-                <button onClick={() => selectFocusMode("all")} className="text-[var(--accent)] hover:underline">
+                <button onClick={() => selectViewMode("all")} className="text-[var(--accent)] hover:underline">
                   View all ({hiddenAutomated} automated)
                 </button>
               </>
@@ -1786,6 +1711,7 @@ export function ChatSidebar({
                 : vi.kind === "employee" ? vi.item.pinKey
                 : vi.kind === "cron-session" ? vi.session.id
                 : vi.kind === "section" ? `section:${vi.id}`
+                : vi.kind === "room-header" ? `room:${vi.room.id}`
                 : `${vi.kind}:${i}`
               }>
                 {renderItem(vi)}
@@ -1794,29 +1720,23 @@ export function ChatSidebar({
           </>
         )}
 
+        {/* Managers — quick access to leadership ABOVE Team. A manager may also
+            appear in Team below (intentional dup); this section is always present
+            regardless of whether they have sessions. */}
+        {!loading && onContactEmployee && managerEmployees.length > 0 ? (
+          <div className="mt-3 pt-1">
+            <SectionLabel label="Managers" count={managerEmployees.length} />
+            {managerEmployees.map((emp) => (
+              <ContactRow key={emp.name} emp={emp} onContact={onContactEmployee} />
+            ))}
+          </div>
+        ) : null}
+
         {!loading && onContactEmployee && contactableEmployees.length > 0 ? (
           <div className="mt-3 pt-1">
             <SectionLabel label="Team" count={contactableEmployees.length} />
             {contactableEmployees.map((emp) => (
-              <button
-                key={emp.name}
-                onClick={() => onContactEmployee(emp.name)}
-                title={`Start a chat with ${emp.displayName || titleCase(emp.name)}`}
-                className="group/contact relative flex w-full items-center gap-3 border-l-2 border-l-transparent px-4 py-2.5 text-left transition-colors hover:bg-[var(--fill-tertiary)]"
-              >
-                <div className="relative flex size-9 shrink-0 items-center justify-center">
-                  <EmployeeAvatar name={emp.name} size={36} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <span className="block min-w-0 truncate text-[13px] font-medium tracking-[-0.2px] text-foreground">
-                    {emp.displayName || titleCase(emp.name)}
-                  </span>
-                  {emp.department ? (
-                    <span className="block truncate text-[11px] text-[var(--text-tertiary)]">{emp.department}</span>
-                  ) : null}
-                </div>
-                <Plus className="size-3.5 shrink-0 text-[var(--text-quaternary)] transition-colors group-hover/contact:text-[var(--accent)]" />
-              </button>
+              <ContactRow key={emp.name} emp={emp} onContact={onContactEmployee} />
             ))}
           </div>
         ) : null}

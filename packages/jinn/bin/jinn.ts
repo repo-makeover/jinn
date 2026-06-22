@@ -64,6 +64,36 @@ program
     await runStatus();
   });
 
+{
+  const startupCmd = program
+    .command("startup")
+    .description("Manage automatic startup (Linux/systemd user service)");
+
+  startupCmd
+    .command("enable")
+    .description("Start this Jinn instance automatically when your user session starts")
+    .action(async () => {
+      const { runStartupEnable } = await import("../src/cli/startup.js");
+      await runStartupEnable();
+    });
+
+  startupCmd
+    .command("disable")
+    .description("Disable automatic startup for this Jinn instance")
+    .action(async () => {
+      const { runStartupDisable } = await import("../src/cli/startup.js");
+      await runStartupDisable();
+    });
+
+  startupCmd
+    .command("status")
+    .description("Show automatic startup status for this Jinn instance")
+    .action(async () => {
+      const { runStartupStatus } = await import("../src/cli/startup.js");
+      await runStartupStatus();
+    });
+}
+
 program
   .command("limits")
   .description("Show engine rate limits, quota windows, and model capabilities")

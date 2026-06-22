@@ -9,6 +9,10 @@ import { ChatHeaderPills } from '@/components/chat/chat-tabs'
 import { NavRibbon } from '@/components/pill-nav'
 import { MobileTabBar } from '@/components/chat/mobile-tab-bar'
 import { ChatPane } from '@/components/chat/chat-pane'
+import { RoomTimeline } from '@/components/chat/room-timeline'
+import { groupSessionsByDepartment, roomSelectionId, indexSessionsById } from '@/lib/rooms/grouping'
+import type { RoomSession, RoomEmployee } from '@/lib/rooms/types'
+import { useOrg } from '@/hooks/use-employees'
 import { FileView } from '@/components/chat/file-view'
 import { FileOpenContext } from '@/components/chat/file-open-context'
 import { ShortcutOverlay } from '@/components/chat/shortcut-overlay'
@@ -74,6 +78,10 @@ function ChatPage() {
   const { settings } = useSettings()
   const portalName = settings.portalName ?? 'Jinn'
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // When set, the main surface shows a department project-room's merged timeline
+  // (read-only) instead of a single session's ChatPane. Mutually exclusive with
+  // selectedId — selecting a session clears the room, and vice-versa.
+  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null)
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar')
   // sessionMeta carries the sessionId it belongs to so the tab-label effect
   // can ignore stale meta from a previous session mid-switch (title flash fix).
@@ -138,7 +146,24 @@ function ChatPage() {
   const deleteSessionMutation = useDeleteSession()
   const duplicateSessionMutation = useDuplicateSession()
   const sessionsQuery = useSessions()
+  const { data: orgData } = useOrg()
   const qc = useQueryClient()
+
+  // Department project-rooms derived from the same loaded sessions + org the
+  // sidebar uses (react-query dedupes the fetch). Drives the room timeline.
+  const roomSessions = useMemo(
+    () => (sessionsQuery.data ?? []) as unknown as RoomSession[],
+    [sessionsQuery.data],
+  )
+  const rooms = useMemo(
+    () => groupSessionsByDepartment(roomSessions, (orgData?.employees ?? []) as RoomEmployee[]),
+    [roomSessions, orgData],
+  )
+  const selectedRoom = useMemo(
+    () => (selectedRoomId ? rooms.find((r) => r.id === selectedRoomId) ?? null : null),
+    [rooms, selectedRoomId],
+  )
+  const roomSessionsById = useMemo(() => indexSessionsById(roomSessions), [roomSessions])
   const [showShortcutOverlay, setShowShortcutOverlay] = useState(false)
   const sidebarOrderRef = useRef<SidebarOrder>({ sessionIds: [], employeeNames: [], employeeSessionMap: {} })
   const handleOrderComputed = useCallback((order: SidebarOrder) => { sidebarOrderRef.current = order }, [])
@@ -260,6 +285,7 @@ function ChatPage() {
   const handleSelect = useCallback(
     (id: string) => {
       newChatIntentRef.current = false
+      setSelectedRoomId(null)
       setSelectedId(id)
       setMobileView('chat')
       // Open a tab — label will be updated once session meta loads
@@ -267,6 +293,17 @@ function ChatPage() {
     },
     [chatTabs]
   )
+
+  // Open a department project-room's merged read-only timeline. Mutually
+  // exclusive with a session selection; tabs are session-scoped so a room
+  // doesn't open one.
+  const handleSelectRoom = useCallback((roomId: string) => {
+    newChatIntentRef.current = false
+    setSelectedRoomId(roomId)
+    setSelectedId(null)
+    setSessionMeta(null)
+    setMobileView('chat')
+  }, [])
 
   // Auto-focus the input on any session change (sidebar click, tab switch,
   // keyboard nav, "+ New"). Effect runs after ChatPane (key=selectedId)
@@ -278,6 +315,7 @@ function ChatPage() {
   const handleNewChat = useCallback(() => {
     newChatIntentRef.current = true
     setPendingEmployee(null)
+    setSelectedRoomId(null)
     setSelectedId(null)
     setSessionMeta(null)
     setMobileView('chat')
@@ -291,6 +329,7 @@ function ChatPage() {
   const contactEmployee = useCallback((name: string) => {
     newChatIntentRef.current = true
     setPendingEmployee(name)
+    setSelectedRoomId(null)
     setSelectedId(null)
     setSessionMeta(null)
     setMobileView('chat')
@@ -343,7 +382,9 @@ function ChatPage() {
 
   const handleSessionsLoaded = useCallback(
     (sessions: { id: string }[]) => {
-      if (!selectedId && !newChatIntentRef.current && sessions.length > 0) {
+      // Don't auto-open the first session while a room timeline is showing
+      // (read the room from a ref so a refetch can't fire a stale guard).
+      if (!selectedId && !selectedRoomIdRef.current && !newChatIntentRef.current && sessions.length > 0) {
         handleSelect(sessions[0].id)
       }
     },
@@ -368,6 +409,7 @@ function ChatPage() {
     try {
       const result = await duplicateSessionMutation.mutateAsync(id) as { id?: string; title?: string; employee?: string }
       if (result?.id) {
+        setSelectedRoomId(null)
         setSelectedId(result.id)
         chatTabs.openTab({
           sessionId: result.id,
@@ -410,6 +452,11 @@ function ChatPage() {
   // We read selectedId via a ref so this callback stays stable.
   const selectedIdRef = useRef<string | null>(selectedId)
   useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
+  // Mirror selectedRoomId into a ref so the sidebar's ref-captured
+  // onSessionsLoaded guard always reads the live value (no stale-closure window
+  // that could auto-open a session while a room timeline is shown).
+  const selectedRoomIdRef = useRef<string | null>(selectedRoomId)
+  useEffect(() => { selectedRoomIdRef.current = selectedRoomId }, [selectedRoomId])
   const handleSessionMetaChange = useCallback((meta: { title?: string; employee?: string; engine?: string; engineSessionId?: string; model?: string }) => {
     const sid = selectedIdRef.current
     if (!sid) return
@@ -505,6 +552,7 @@ function ChatPage() {
   useEffect(() => {
     const at = chatTabs.activeTab
     if (at && at.kind === 'session' && at.sessionId !== selectedId) {
+      setSelectedRoomId(null) // a session tab takes over the surface from a room
       setSelectedId(at.sessionId)
       return
     }
@@ -650,7 +698,9 @@ function ChatPage() {
 
   // The conversation title — slim inline title (desktop) / centered nav-bar title
   // (mobile thread). "New chat" on a fresh composer, else nothing until meta loads.
-  const headerTitle = sessionMeta?.title?.trim() || (selectedId ? '' : 'New chat')
+  const headerTitle = selectedRoom
+    ? selectedRoom.name
+    : sessionMeta?.title?.trim() || (selectedId ? '' : 'New chat')
 
   const onMobileList = mobileView === 'sidebar'
 
@@ -678,7 +728,7 @@ function ChatPage() {
           >
             <div className="h-full w-[280px]">
               <ChatSidebar
-                selectedId={selectedId}
+                selectedId={selectedRoomId ? roomSelectionId(selectedRoomId) : selectedId}
                 onSelect={handleSelect}
                 onNewChat={handleNewChat}
                 onDelete={handleDeleteSession}
@@ -687,6 +737,7 @@ function ChatPage() {
                 onEmployeeSessionsAvailable={handleEmployeeSessionsAvailable}
                 onOrderComputed={handleOrderComputed}
                 onContactEmployee={contactEmployee}
+                onSelectRoom={handleSelectRoom}
               />
             </div>
           </div>
@@ -728,7 +779,7 @@ function ChatPage() {
             {/* Mobile: the chat list is the full-width body; the bottom tab bar
                 (rendered below) is the persistent nav. */}
             <ChatSidebar
-              selectedId={selectedId}
+              selectedId={selectedRoomId ? roomSelectionId(selectedRoomId) : selectedId}
               onSelect={handleSelect}
               onNewChat={handleNewChat}
               onDelete={handleDeleteSession}
@@ -737,6 +788,7 @@ function ChatPage() {
               onEmployeeSessionsAvailable={handleEmployeeSessionsAvailable}
               onOrderComputed={handleOrderComputed}
               onContactEmployee={contactEmployee}
+              onSelectRoom={handleSelectRoom}
             />
           </div>
 
@@ -751,6 +803,19 @@ function ChatPage() {
                 keep-alive panes (they caused stacked WS subscriptions + races). */}
             {chatTabs.activeTab?.kind === 'file' ? (
               <FileView path={chatTabs.activeTab.path} embedded onBack={handleFileBack} />
+            ) : selectedRoomId ? (
+              selectedRoom ? (
+                <RoomTimeline
+                  room={selectedRoom}
+                  employees={(orgData?.employees ?? []) as RoomEmployee[]}
+                  sessionsById={roomSessionsById}
+                  onOpenSession={handleSelect}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--text-tertiary)]">
+                  This room has no conversations yet.
+                </div>
+              )
             ) : (
               <ChatPane
                 key={selectedId ?? `__new__:${pendingEmployee ?? ''}`}

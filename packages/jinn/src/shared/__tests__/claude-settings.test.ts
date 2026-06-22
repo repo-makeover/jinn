@@ -10,6 +10,7 @@ describe("claude-settings", () => {
     const stop = s.hooks.Stop[0].hooks[0];
     expect(stop.type).toBe("command");
     expect(stop.command).toBe("node '/h/relay.mjs' 'jinn-abc'");
+    expect(s.skipDangerousModePermissionPrompt).toBe(true);
     expect(s.hooks.SessionStart && s.hooks.PreToolUse && s.hooks.PostToolUse && s.hooks.StopFailure).toBeTruthy();
     expect(s.statusLine?.command).toMatch(/jinn-abc/);
     expect(s.statusLine?.command).toMatch(/\/tmp\/limits/);

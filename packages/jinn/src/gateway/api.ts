@@ -4,93 +4,55 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import type { CronJob, Engine, IncomingMessage, JinnConfig, JsonObject, Session, StreamDelta, Target } from "../shared/types.js";
+import type { CronJob, Engine, IncomingMessage, JinnConfig, JsonObject, Session, Target } from "../shared/types.js";
 import { isInterruptibleEngine } from "../shared/types.js";
-import { getModelRegistry, invalidateModelRegistry, effortLevelsForModel, refreshGrokModels, refreshPiModels, engineAvailable, isKnownEngine, engineUnavailableMessage } from "../shared/models.js";
-import { validateNewSessionSelection, validateSessionPatch } from "../sessions/session-patch.js";
+import { getModelRegistry, invalidateModelRegistry, refreshGrokModels, refreshPiModels } from "../shared/models.js";
+import { applyEmployeeSessionDefaults, validateNewSessionSelection, validateSessionPatch, validateCwd } from "../sessions/session-patch.js";
+import { getApproval, listApprovals, resolveApproval } from "./approvals.js";
+import { deriveWorkState, emptyWorkCounts } from "../shared/work-state.js";
+import { listDirectory, FsBrowseError } from "./fs-browse.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 import type { SessionManager } from "../sessions/manager.js";
-import { buildContext } from "../sessions/context.js";
-import {
-  listSessions,
-  listRecentPerGroup,
-  listSessionsForGroup,
-  getSessionGroupCounts,
-  coercePortalEmployee,
-  searchSessions,
-  listChildSessions,
-  getSession,
-  createSession,
-  updateSession,
-  UpdateSessionFields,
-  deleteSession,
-  deleteSessions,
-  duplicateSession,
-  insertMessage,
-  insertPartialMessage,
-  updatePartialMessage,
-  deletePartialMessages,
-  finalizePartialMessages,
-  getMessages,
-  enqueueQueueItem,
-  cancelQueueItem,
-  getQueueItems,
-  cancelAllPendingQueueItems,
-  listAllPendingQueueItems,
-  getFile,
-  initDb,
-} from "../sessions/registry.js";
+import { listSessions, listRecentCwds, listRecentPerGroup, listSessionsForGroup, getSessionGroupCounts, coercePortalEmployee, searchSessions, listChildSessions, getSession, createSession, updateSession, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, getMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
-import {
-  CONFIG_PATH,
-  CRON_JOBS,
-  CRON_RUNS,
-  ORG_DIR,
-  SKILLS_DIR,
-  LOGS_DIR,
-  TMP_DIR,
-  FILES_DIR,
-} from "../shared/paths.js";
+import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR, FILES_DIR } from "../shared/paths.js";
 import { saveConfigAtomic } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import { getSttStatus, downloadModel, transcribe as sttTranscribe, resolveLanguages, WHISPER_LANGUAGES } from "../stt/stt.js";
 import { JINN_HOME } from "../shared/paths.js";
-import { resolveEffort } from "../shared/effort.js";
-import { detectRateLimit } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt } from "../shared/usageAwareness.js";
 import { collectEngineLimits } from "../shared/engine-limits.js";
-import { handleRateLimit } from "../sessions/rate-limit-handler.js";
 import { pickEncoding, compressBuffer, MIN_COMPRESS_BYTES } from "./compress.js";
 import { loadJobs, saveJobs } from "../cron/jobs.js";
 import { reloadScheduler } from "../cron/scheduler.js";
 import { runCronJob } from "../cron/runner.js";
 import QRCode from "qrcode";
 import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
-import { handleFilesRequest, handleSessionAttachment, fileIdsToMedia, rehomeAttachmentsToSession, ensureFilesDir } from "./files.js";
+import { handleFilesRequest, handleSessionAttachment, fileIdsToMedia, rehomeAttachmentsToSession } from "./files.js";
 import { readJsonBody, readBodyRaw } from "./http-helpers.js";
 import { readJsonlTail } from "./jsonl-tail.js";
-import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel, notifyAttachedTalkSessions } from "../sessions/callbacks.js";
+import { notifyParentSession, notifyAttachedTalkSessions } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
 import { handleHookPost, isLoopback } from "./hook-endpoint.js";
-import { markTranscriptSyncedThrough, scheduleOnLoadTailSync, transcriptEntryText } from "./external-turns.js";
+import { scheduleOnLoadTailSync } from "./external-turns.js";
 import { handleTalkApi } from "../talk/routes.js";
-import { getOrchestratorPersona } from "../talk/orchestrator-persona.js";
-import {
-  feedTalkText,
-  flushTalkSpeech,
-  discardTalkSpeech,
-  streamTtsSentences,
-  ttsStatus,
-  validateTtsText,
-} from "../talk/tts-stream.js";
-import { isTalkMuted } from "../talk/mute-state.js";
+import { streamTtsSentences, ttsStatus, validateTtsText } from "../talk/tts-stream.js";
 import { maybeEmitTalkGraph } from "../talk/graph.js";
 import { onboardingNeeded, applyEngineChoice } from "./onboarding-policy.js";
-
+import { sanitizeConfigForApi, deepMerge } from "./config-sanitize.js";
+// Compatibility facade: these moved to ./config-sanitize.js (AS-001 modularization);
+// re-exported so existing importers of "./api.js" keep working.
+export { isSensitiveConfigKey, sanitizeConfigForApi } from "./config-sanitize.js";
+import { loadRawTranscript, scheduleTranscriptBackfill } from "./transcript-backfill.js";
+import { resolveUserHeader } from "./connector-reply.js";
+// Compatibility facade: moved to ./connector-reply.js (AS-001 modularization).
+export { resolveUserHeader, deliverConnectorReply } from "./connector-reply.js";
+import { supersedeRunningTurn } from "./session-turn-state.js";
+import { runWebSession } from "./run-web-session.js";
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
 const SESSION_LIST_PER_GROUP = 50;
 const BACKGROUND_ACTIVITY_STALE_MS = 5 * 60 * 1000;
-const SUPERSEDED_TURN_META_KEY = "supersededRunningTurnAt";
 
 export interface ApiContext {
   config: JinnConfig;
@@ -360,75 +322,6 @@ function serverError(res: ServerResponse, message: string): void {
   json(res, { error: message }, 500);
 }
 
-const REDACTED_SECRET = "***";
-
-export function isSensitiveConfigKey(key: string): boolean {
-  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return (
-    normalized.includes("token") ||
-    normalized.includes("secret") ||
-    normalized.includes("apikey") ||
-    normalized.includes("privatekey") ||
-    normalized.includes("password") ||
-    normalized === "authorization"
-  );
-}
-
-/**
- * Replace any secret-bearing fields with the "***" sentinel before sending
- * config to the UI.
- * deepMerge round-trips the sentinel back to the original value on PUT.
- */
-export function sanitizeConfigForApi<T>(value: T, key = ""): T {
-  if (isSensitiveConfigKey(key) && value !== undefined && value !== null && value !== "") {
-    return REDACTED_SECRET as T;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeConfigForApi(item)) as T;
-  }
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
-      out[childKey] = sanitizeConfigForApi(childValue, childKey);
-    }
-    return out as T;
-  }
-  return value;
-}
-
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
-  const result = { ...target };
-  for (const key of Object.keys(source)) {
-    const sv = source[key];
-    const tv = target[key];
-    // Skip sanitized secret placeholders — keep original value
-    if (isSensitiveConfigKey(key) && sv === REDACTED_SECRET) continue;
-    if (Array.isArray(sv)) {
-      // For arrays (e.g. instances), preserve secrets from matching items
-      if (Array.isArray(tv)) {
-        result[key] = sv.map((item: unknown) => {
-          if (item && typeof item === "object" && !Array.isArray(item)) {
-            const srcItem = item as Record<string, unknown>;
-            // Find matching target item by id
-            const matchTarget = (tv as unknown[]).find(
-              (t) => t && typeof t === "object" && (t as Record<string, unknown>).id === srcItem.id
-            ) as Record<string, unknown> | undefined;
-            if (matchTarget) return deepMerge(matchTarget, srcItem);
-          }
-          return item;
-        });
-      } else {
-        result[key] = sv;
-      }
-    } else if (sv && typeof sv === "object" && !Array.isArray(sv) && tv && typeof tv === "object" && !Array.isArray(tv)) {
-      result[key] = deepMerge(tv as Record<string, unknown>, sv as Record<string, unknown>);
-    } else {
-      result[key] = sv;
-    }
-  }
-  return result;
-}
-
 export function matchRoute(
   pattern: string,
   pathname: string,
@@ -474,38 +367,6 @@ function serializeSession(session: Session, context: ApiContext): Session {
       ? { activeStreams: bg.activeStreams, lastActivityAt: new Date(bg.lastActivityAt).toISOString() }
       : null,
   };
-}
-
-function withTransportMeta(session: Session, updates: JsonObject): JsonObject {
-  const base =
-    session.transportMeta && typeof session.transportMeta === "object" && !Array.isArray(session.transportMeta)
-      ? session.transportMeta
-      : {};
-  return { ...base, ...updates };
-}
-
-function supersedeRunningTurn(session: Session): void {
-  updateSession(session.id, {
-    transportMeta: withTransportMeta(session, {
-      [SUPERSEDED_TURN_META_KEY]: new Date().toISOString(),
-    }),
-  });
-}
-
-function clearSupersededTurnMeta(sessionId: string): void {
-  const session = getSession(sessionId);
-  const meta = session?.transportMeta;
-  if (!meta || typeof meta !== "object" || Array.isArray(meta) || !(SUPERSEDED_TURN_META_KEY in meta)) return;
-  const next = { ...meta };
-  delete next[SUPERSEDED_TURN_META_KEY];
-  updateSession(sessionId, { transportMeta: next });
-}
-
-function isTurnSuperseded(sessionId: string, turnStartedAt: number): boolean {
-  const marker = getSession(sessionId)?.transportMeta?.[SUPERSEDED_TURN_META_KEY];
-  if (typeof marker !== "string") return false;
-  const markedAt = new Date(marker).getTime();
-  return Number.isFinite(markedAt) && markedAt >= turnStartedAt;
 }
 
 function isSessionLiveRunning(session: Session, context: ApiContext): boolean {
@@ -898,6 +759,149 @@ export async function handleApiRequest(
     }
 
     // POST /api/sessions
+    // ── Working folder: directory browser for the new-chat picker ──────────
+    // GET /api/fs/list?path=<abs>  → { path, parent, entries:[{name,isDir}] }
+    if (method === "GET" && pathname === "/api/fs/list") {
+      const config = context.getConfig();
+      const requested = url.searchParams.get("path") ?? undefined;
+      const defaultDir = config.workspaces?.defaultCwd || JINN_HOME;
+      try {
+        return json(res, listDirectory(requested, { roots: config.workspaces?.roots, defaultDir }));
+      } catch (err) {
+        if (err instanceof FsBrowseError) return json(res, { error: err.message }, err.status);
+        throw err;
+      }
+    }
+    // GET /api/fs/recent → most-recently-used working dirs (MRU) for the picker.
+    if (method === "GET" && pathname === "/api/fs/recent") {
+      const config = context.getConfig();
+      const defaultDir = config.workspaces?.defaultCwd || JINN_HOME;
+      return json(res, { default: defaultDir, recent: listRecentCwds(8) });
+    }
+
+    // ── Feature 2: Unified work visibility ─────────────────────────────────
+    // GET /api/work — normalize every session into one work-state + grouped counts.
+    if (method === "GET" && pathname === "/api/work") {
+      const queue = context.sessionManager.getQueue();
+      // Pending approvals are the authoritative "waiting on human" signal.
+      const pendingApprovalSessionIds = new Set(listApprovals({ state: "pending" }).map((a) => a.sessionId));
+      let deptByEmployee: Map<string, string | undefined> | null = null;
+      try {
+        const { scanOrg } = await import("./org.js");
+        const reg = scanOrg();
+        deptByEmployee = new Map(Array.from(reg.values()).map((e) => [e.name, e.department]));
+      } catch { /* org scan optional — dept stays null */ }
+
+      const counts = emptyWorkCounts();
+      const items = listSessions().map((s) => {
+        const transportState = queue.getTransportState(s.sessionKey || s.sourceRef, s.status);
+        const workState = deriveWorkState({
+          status: s.status,
+          transportState,
+          approvalRequired: pendingApprovalSessionIds.has(s.id),
+          cron: s.source === "cron",
+        });
+        counts[workState]++;
+        return {
+          sessionId: s.id,
+          employee: s.employee ?? null,
+          dept: (s.employee && deptByEmployee?.get(s.employee)) ?? null,
+          workState,
+          title: s.title ?? null,
+        };
+      });
+      return json(res, { counts, items });
+    }
+
+    // ── Feature 1: Approval queue ──────────────────────────────────────────
+    // GET /api/approvals?state=pending|approved|rejected|all  (default pending)
+    if (method === "GET" && pathname === "/api/approvals") {
+      const stateParam = (url.searchParams.get("state") ?? "pending") as
+        | "pending" | "approved" | "rejected" | "all";
+      return json(res, listApprovals({ state: stateParam }));
+    }
+    // POST /api/approvals/:id/approve — approve a pending approval.
+    let approvalParams = matchRoute("/api/approvals/:id/approve", pathname);
+    if (method === "POST" && approvalParams) {
+      const approval = getApproval(approvalParams.id);
+      if (!approval) return notFound(res);
+      if (approval.state !== "pending") return json(res, { error: `approval already ${approval.state}` }, 409);
+      const config = context.getConfig();
+      const actor = resolveUserHeader(req.headers, config.gateway.userHeader) ?? null;
+
+      // Only `fallback` approvals carry a resume side-effect today. Other types
+      // are accepted by the store generically and simply marked approved.
+      if (approval.type !== "fallback") {
+        const resolved = resolveApproval(approval.id, "approved", actor);
+        context.emit("approval:resolved", { approvalId: resolved.id, sessionId: resolved.sessionId, state: "approved" });
+        return json(res, { approval: resolved });
+      }
+
+      const session = getSession(approval.sessionId);
+      if (!session) return notFound(res);
+      const to = (approval.payload.to ?? {}) as { engine?: string; model?: string; effortLevel?: string | null };
+      if (!to.engine) return badRequest(res, "approval payload missing target engine");
+      const nextEngine = context.sessionManager.getEngine(to.engine);
+      // Explicit 422 (never a silent no-op) when the fallback target engine is gone.
+      if (!nextEngine) return json(res, { error: `fallback target engine '${to.engine}' is not available` }, 422);
+
+      // Reuse the handoff packet written at ask_user time to build the resume prompt.
+      const handoffPath = typeof approval.payload.handoffPath === "string" ? approval.payload.handoffPath : null;
+      let handoffMd = "";
+      if (handoffPath) {
+        try { handoffMd = fs.readFileSync(path.join(JINN_HOME, handoffPath), "utf-8"); } catch { /* fall back to minimal prompt */ }
+      }
+
+      const prevMeta = (session.transportMeta ?? {}) as Record<string, unknown>;
+      const prevFallback = (prevMeta.modelFallback ?? {}) as Record<string, unknown>;
+      const rolled = updateSession(session.id, {
+        engine: to.engine,
+        model: to.model ?? session.model ?? undefined,
+        effortLevel: (to.effortLevel ?? session.effortLevel) ?? undefined,
+        engineSessionId: null,
+        status: "running",
+        transportMeta: { ...prevMeta, modelFallback: { ...prevFallback, status: "running_on_fallback", approvedAt: new Date().toISOString() } } as JsonObject,
+        lastActivity: new Date().toISOString(),
+        lastError: null,
+      }) ?? session;
+      deletePartialMessages(session.id);
+      const resolved = resolveApproval(approval.id, "approved", actor);
+      insertMessage(session.id, "notification", `✅ Fallback approved → ${to.engine}/${to.model ?? "default"}. Resuming on fallback.`);
+      context.emit("approval:resolved", { approvalId: resolved.id, sessionId: session.id, state: "approved" });
+      context.emit("session:updated", { sessionId: session.id });
+
+      const fallbackPrompt = handoffMd
+        ? "You are taking over this task after a model fallback. Read the handoff packet below, preserve prior decisions and technical truth, then continue the original task.\n\n" + handoffMd
+        : "Continue this conversation and respond to the last USER message after an operator-approved model fallback.";
+      dispatchWebSessionRun(rolled, fallbackPrompt, nextEngine, config, context);
+      return json(res, { approval: resolved, session: serializeSession(rolled, context) });
+    }
+    // POST /api/approvals/:id/reject — reject a pending approval; session surfaces as errored.
+    approvalParams = matchRoute("/api/approvals/:id/reject", pathname);
+    if (method === "POST" && approvalParams) {
+      const approval = getApproval(approvalParams.id);
+      if (!approval) return notFound(res);
+      if (approval.state !== "pending") return json(res, { error: `approval already ${approval.state}` }, 409);
+      const config = context.getConfig();
+      const actor = resolveUserHeader(req.headers, config.gateway.userHeader) ?? null;
+      const resolved = resolveApproval(approval.id, "rejected", actor);
+      const session = getSession(approval.sessionId);
+      if (session) {
+        const prevMeta = (session.transportMeta ?? {}) as Record<string, unknown>;
+        const prevFallback = (prevMeta.modelFallback ?? {}) as Record<string, unknown>;
+        updateSession(session.id, {
+          status: "error",
+          transportMeta: { ...prevMeta, modelFallback: { ...prevFallback, status: "rejected", rejectedAt: new Date().toISOString() } } as JsonObject,
+          lastError: "Model fallback rejected by operator",
+          lastActivity: new Date().toISOString(),
+        });
+        insertMessage(session.id, "notification", "🚫 Model fallback rejected by operator. Session stopped — surfaced, not silently stalled.");
+        context.emit("session:updated", { sessionId: session.id });
+      }
+      context.emit("approval:resolved", { approvalId: resolved.id, sessionId: approval.sessionId, state: "rejected" });
+      return json(res, { approval: resolved });
+    }
+
     if (method === "POST" && pathname === "/api/sessions") {
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
@@ -906,12 +910,27 @@ export async function handleApiRequest(
       const prompt = body.prompt || body.message;
       if (!prompt) return badRequest(res, "prompt or message is required");
       const config = context.getConfig();
-      const selection = validateNewSessionSelection(config, {
+      const requestedEmployee = coercePortalEmployee(body.employee, config.portal?.portalName);
+      let employeeDefaults: import("../shared/types.js").Employee | undefined;
+      if (requestedEmployee) {
+        const { findEmployee, scanOrg } = await import("./org.js");
+        employeeDefaults = findEmployee(requestedEmployee, scanOrg());
+      }
+      const selection = validateNewSessionSelection(config, applyEmployeeSessionDefaults({
         engine: body.engine,
         model: body.model,
         effortLevel: body.effortLevel,
-      });
+      }, employeeDefaults));
       if (!selection.ok) return badRequest(res, selection.error || "invalid engine/model/effort");
+      // Per-chat working folder (optional). Absent/empty → null → engine runs in
+      // JINN_HOME (backward-compatible). Invalid/out-of-bounds → 400, never a
+      // silent fallback (AGENTS.md). Validated against workspaces.roots if set.
+      let cwd: string | null = null;
+      if (body.cwd !== undefined && body.cwd !== null && body.cwd !== "") {
+        const cwdResult = validateCwd(body.cwd, { roots: config.workspaces?.roots });
+        if (!cwdResult.ok) return badRequest(res, cwdResult.error || "invalid cwd");
+        cwd = cwdResult.cwd ?? null;
+      }
       const engineName = selection.engine || config.engines.default;
       const sessionKey = `web:${Date.now()}`;
       // Opt-in SSO identity capture: when an auth proxy fronts the gateway and
@@ -930,7 +949,7 @@ export async function handleApiRequest(
         // pseudo-employee (there is no org employee by the portal's name).
         // Coerce it to null so it buckets into the direct group rather than
         // spawning a phantom group that renders with the portal's own title.
-        employee: coercePortalEmployee(body.employee, config.portal?.portalName),
+        employee: requestedEmployee,
         parentSessionId: body.parentSessionId,
         effortLevel: selection.effortLevel,
         // Honor body.model so API clients can pin per-employee models
@@ -939,6 +958,7 @@ export async function handleApiRequest(
         // back to config.engines.claude.model, breaking per-employee routing.
         // Fixes #38.
         model: selection.model,
+        cwd,
         prompt,
         // Optional excerpt override (talk delegation passes the operator's
         // verbatim ask so list UIs don't show the scaffolded prompt).
@@ -1353,7 +1373,7 @@ export async function handleApiRequest(
       if (!_parsed.ok) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
-      fs.writeFileSync(boardPath, JSON.stringify(body, null, 2));
+      safeWriteFile(boardPath, JSON.stringify(body, null, 2)); // atomic + fsync (manual board edit)
       context.emit("board:updated", { department: p.name });
       return json(res, { status: "ok" });
     }
@@ -1758,7 +1778,7 @@ export async function handleApiRequest(
         // Reset any prior language section, then append the new one if needed.
         md = md.replace(/\n\n## Language\nAlways respond in .+\. All communication with the user must be in .+\./m, "");
         if (languageSection) md = md.trimEnd() + languageSection + "\n";
-        fs.writeFileSync(filePath, md);
+        safeWriteFile(filePath, md); // atomic + fsync (persona/CLAUDE.md)
       };
 
       // CLAUDE.md is canonical. AGENTS.md is normally a symlink → CLAUDE.md, so we
@@ -1834,6 +1854,8 @@ export async function handleApiRequest(
 
       const tmpFile = path.join(TMP_DIR, `stt-${crypto.randomUUID()}${ext}`);
       fs.mkdirSync(TMP_DIR, { recursive: true });
+      // safeWrite EXCEPTION (intentional): single-use STT temp, read once by the
+      // transcriber then unlinked. No durability/atomicity benefit.
       fs.writeFileSync(tmpFile, audioBuffer);
 
       try {
@@ -1999,807 +2021,3 @@ export async function handleApiRequest(
   }
 }
 
-/**
- * Load messages from a Claude Code JSONL transcript file.
- * Used as a fallback when the messages DB is empty (pre-existing sessions).
- */
-interface TranscriptContentBlock {
-  type: "text" | "tool_use" | "tool_result" | "thinking";
-  text?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-  content?: unknown;
-  id?: string;
-}
-
-interface TranscriptEntry {
-  role: "user" | "assistant" | "system";
-  content: TranscriptContentBlock[];
-}
-
-function loadRawTranscript(engineSessionId: string): TranscriptEntry[] {
-  const claudeProjectsDir = path.join(
-    process.env.HOME || process.env.USERPROFILE || "",
-    ".claude",
-    "projects",
-  );
-  if (!fs.existsSync(claudeProjectsDir)) return [];
-
-  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true });
-  for (const dir of projectDirs) {
-    if (!dir.isDirectory()) continue;
-    const jsonlPath = path.join(claudeProjectsDir, dir.name, `${engineSessionId}.jsonl`);
-    if (!fs.existsSync(jsonlPath)) continue;
-
-    const entries: TranscriptEntry[] = [];
-    const lines = fs.readFileSync(jsonlPath, "utf-8").trim().split("\n").filter(Boolean);
-    for (const line of lines) {
-      try {
-        const obj = JSON.parse(line);
-        const type = obj.type;
-        if (type !== "user" && type !== "assistant") continue;
-        const msg = obj.message;
-        if (!msg) continue;
-
-        const rawContent = msg.content;
-        const blocks: TranscriptContentBlock[] = [];
-
-        if (typeof rawContent === "string") {
-          if (rawContent.trim()) blocks.push({ type: "text", text: rawContent });
-        } else if (Array.isArray(rawContent)) {
-          for (const block of rawContent) {
-            if (!block || typeof block !== "object") continue;
-            const b = block as Record<string, unknown>;
-            const blockType = String(b.type || "");
-            if (blockType === "text") {
-              blocks.push({ type: "text", text: String(b.text || "") });
-            } else if (blockType === "tool_use") {
-              blocks.push({
-                type: "tool_use",
-                name: String(b.name || ""),
-                input: (b.input as Record<string, unknown>) || {},
-              });
-            } else if (blockType === "tool_result") {
-              const resultContent = b.content;
-              let resultText: string;
-              if (typeof resultContent === "string") {
-                resultText = resultContent;
-              } else if (Array.isArray(resultContent)) {
-                resultText = (resultContent as Record<string, unknown>[])
-                  .filter((rc) => rc.type === "text")
-                  .map((rc) => String(rc.text || ""))
-                  .join("");
-              } else {
-                resultText = "";
-              }
-              blocks.push({ type: "tool_result", text: resultText });
-            } else if (blockType === "thinking") {
-              blocks.push({ type: "thinking", text: String(b.thinking || b.text || "") });
-            }
-          }
-        }
-
-        if (blocks.length > 0) {
-          entries.push({ role: type as "user" | "assistant", content: blocks });
-        }
-      } catch {
-        continue;
-      }
-    }
-    return entries;
-  }
-  return [];
-}
-
-/**
- * Track which sessions currently have an in-flight transcript backfill so
- * concurrent GETs don't kick off duplicate (expensive) parses. Once a backfill
- * finishes and inserts rows, subsequent GETs see messages.length > 0 and skip
- * scheduling entirely.
- */
-const backfillInProgress = new Set<string>();
-
-function scheduleTranscriptBackfill(sessionId: string, engineSessionId: string, context: ApiContext): void {
-  if (backfillInProgress.has(sessionId)) return;
-  backfillInProgress.add(sessionId);
-  // Defer off the request-handling tick so the GET returns immediately.
-  setImmediate(() => {
-    try {
-      // Re-check inside the deferred task: another concurrent GET may have
-      // backfilled this session already (extremely unlikely given the Set
-      // guard, but cheap insurance).
-      const existing = getMessages(sessionId);
-      if (existing.length > 0) return;
-      const transcriptMessages = loadTranscriptMessages(engineSessionId);
-      if (transcriptMessages.length === 0) return;
-      // One transaction for the whole backfill — better-sqlite3 executes the
-      // inner inserts synchronously inside a single BEGIN/COMMIT, which is
-      // dramatically faster than autocommitting per row.
-      const db = initDb();
-      const txn = db.transaction((items: Array<{ role: string; content: string }>) => {
-        for (const tm of items) {
-          insertMessage(sessionId, tm.role, tm.content);
-        }
-      });
-      txn(transcriptMessages);
-      logger.info(`Backfilled ${transcriptMessages.length} transcript message(s) for session ${sessionId}`);
-      // Notify subscribers (web client) so they re-fetch and display the
-      // newly backfilled messages instead of waiting for another event.
-      context.emit("session:updated", { sessionId });
-    } catch (err) {
-      logger.warn(`Transcript backfill failed for session ${sessionId}: ${err instanceof Error ? err.message : err}`);
-    } finally {
-      backfillInProgress.delete(sessionId);
-    }
-  });
-}
-
-function loadTranscriptMessages(engineSessionId: string): Array<{ role: string; content: string }> {
-  // Claude Code stores transcripts in ~/.claude/projects/<project-key>/<sessionId>.jsonl
-  const claudeProjectsDir = path.join(
-    process.env.HOME || process.env.USERPROFILE || "",
-    ".claude",
-    "projects",
-  );
-  if (!fs.existsSync(claudeProjectsDir)) return [];
-
-  // Search all project dirs for the transcript
-  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true });
-  for (const dir of projectDirs) {
-    if (!dir.isDirectory()) continue;
-    const jsonlPath = path.join(claudeProjectsDir, dir.name, `${engineSessionId}.jsonl`);
-    if (!fs.existsSync(jsonlPath)) continue;
-
-    const messages: Array<{ role: string; content: string }> = [];
-    const lines = fs.readFileSync(jsonlPath, "utf-8").trim().split("\n").filter(Boolean);
-    for (const line of lines) {
-      try {
-        const obj = JSON.parse(line);
-        const text = transcriptEntryText(obj);
-        if (text) messages.push(text);
-      } catch {
-        continue;
-      }
-    }
-    return messages;
-  }
-  return [];
-}
-
-/**
- * Sources that are NOT backed by an external chat connector. Anything else
- * (slack, telegram, discord, whatsapp, …) is connector-sourced and its turn
- * results must be relayed back to the originating channel.
- */
-const NON_CONNECTOR_SOURCES = new Set(["web", "talk", "cron"]);
-
-/**
- * Resolve the forwarded SSO identity from request headers, given the configured
- * `gateway.userHeader` (a single header name or a priority-ordered list). Node
- * lowercases incoming header keys, so we look up case-insensitively. Returns the
- * first present, non-empty, trimmed value; `undefined` when the config is unset
- * or no configured header is present. Unset config = single-user no-op: the
- * header is never read and the caller falls back to "web-user".
- */
-export function resolveUserHeader(
-  headers: Record<string, string | string[] | undefined>,
-  userHeaderConfig: string | string[] | undefined,
-): string | undefined {
-  if (!userHeaderConfig) return undefined;
-  const names = Array.isArray(userHeaderConfig) ? userHeaderConfig : [userHeaderConfig];
-  for (const name of names) {
-    if (!name) continue;
-    const raw = headers[name.toLowerCase()];
-    const value = Array.isArray(raw) ? raw[0] : raw;
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (trimmed) return trimmed;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Relay a completed turn's assistant text back to the connector channel that
- * originated the session. Inbound connector messages reply via `manager.route`,
- * but turns completed through `runWebSession` (parent callbacks, cron
- * follow-ups, rate-limit resumes) otherwise never reach the channel. No-ops for
- * web/talk/cron sources, empty text, or a missing connector/replyContext; errors
- * are logged and swallowed so delivery failure never breaks completion.
- */
-export async function deliverConnectorReply(
-  session: Pick<Session, "source" | "connector" | "replyContext"> & { id?: string },
-  text: string,
-  connectors: Map<string, import("../shared/types.js").Connector>,
-): Promise<void> {
-  if (!text || NON_CONNECTOR_SOURCES.has(session.source)) return;
-  if (!session.connector || !session.replyContext) return;
-  const connector = connectors.get(session.connector);
-  if (!connector) return;
-  try {
-    const target = connector.reconstructTarget(session.replyContext);
-    await connector.replyMessage(target, text);
-  } catch (err) {
-    logger.warn(
-      `Connector reply delivery failed for session ${session.id ?? "?"}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-}
-
-async function runWebSession(
-  session: Session,
-  prompt: string,
-  engine: Engine,
-  config: JinnConfig,
-  context: ApiContext,
-  attachments?: string[],
-): Promise<void> {
-  const currentSession = getSession(session.id);
-  if (!currentSession) {
-    logger.info(`Skipping deleted web session ${session.id} before run start`);
-    return;
-  }
-  config = context.getConfig();
-  const preferredPtyView = context.ptyViewEngines?.[session.engine] === engine;
-  const runtimeEngine =
-    (preferredPtyView ? context.ptyViewEngines?.[currentSession.engine] : undefined)
-    ?? context.sessionManager.getEngine(currentSession.engine);
-  if (!runtimeEngine) {
-    const errMsg = `Engine "${currentSession.engine}" not available`;
-    logger.error(`Web session ${currentSession.id} blocked: ${errMsg}`);
-    insertMessage(currentSession.id, "assistant", `⛔ ${errMsg}`);
-    const erroredSession = updateSession(currentSession.id, {
-      status: "error",
-      lastActivity: new Date().toISOString(),
-      lastError: errMsg,
-    });
-    context.emit("session:completed", { sessionId: currentSession.id, result: null, error: errMsg });
-    maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-    if (erroredSession) notifyParentSession(erroredSession, { error: errMsg });
-    return;
-  }
-  engine = runtimeEngine;
-  logger.info(`Web session ${currentSession.id} running engine "${currentSession.engine}" (model: ${currentSession.model || "default"})`);
-
-  // Ensure status is "running" (may already be set by the POST handler)
-  const currentStatus = getSession(currentSession.id);
-  if (currentStatus && currentStatus.status !== "running") {
-    updateSession(currentSession.id, {
-      status: "running",
-      lastActivity: new Date().toISOString(),
-    });
-  }
-
-  // If this session has an assigned employee, load their persona
-  let employee: import("../shared/types.js").Employee | undefined;
-  if (currentSession.employee) {
-    const { findEmployee } = await import("./org.js");
-    const { scanOrg } = await import("./org.js");
-    const registry = scanOrg();
-    employee = findEmployee(currentSession.employee, registry);
-  }
-
-  // Pre-flight: fail fast with an actionable error if the engine's CLI binary
-  // isn't installed. Otherwise the (interactive PTY) engine spawns a missing
-  // command, exits silently, and the turn produces no output and no error.
-  // We surface it the way runWebSession reports errors and return normally
-  // (throwing here would escape the queue task as an unhandled rejection).
-  if (isKnownEngine(currentSession.engine) && !engineAvailable(config, currentSession.engine)) {
-    const errMsg = engineUnavailableMessage(config, currentSession.engine);
-    logger.error(`Web session ${currentSession.id} blocked: ${errMsg}`);
-    insertMessage(currentSession.id, "assistant", `⛔ ${errMsg}`);
-    const erroredSession = updateSession(currentSession.id, {
-      status: "error",
-      lastActivity: new Date().toISOString(),
-      lastError: errMsg,
-    });
-    context.emit("session:completed", { sessionId: currentSession.id, result: null, error: errMsg });
-    maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-    // Wake the parent COO if this was a delegated child session (parity with
-    // the normal error path; no-op for top-level sessions).
-    if (erroredSession) {
-      notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
-    }
-    return;
-  }
-
-  const { scanOrg: scanOrgForHierarchy } = await import("./org.js");
-  const { resolveOrgHierarchy } = await import("./org-hierarchy.js");
-  const orgHierarchy = resolveOrgHierarchy(scanOrgForHierarchy());
-
-  try {
-
-    const systemPrompt = buildContext({
-      source: currentSession.source,
-      channel: currentSession.sourceRef,
-      user: currentSession.userId ?? "web-user",
-      employee,
-      connectors: Array.from(context.connectors.keys()),
-      config,
-      sessionId: currentSession.id,
-      hierarchy: orgHierarchy,
-      // Hands-free voice orchestrator: layer the AURA persona on top of the
-      // base identity so it behaves as the thin voice layer above the COO.
-      voicePersona: currentSession.source === "talk" ? getOrchestratorPersona() : undefined,
-      talkThreads:
-        currentSession.source === "talk"
-          ? listChildSessions(currentSession.id).slice(0, 12).map((c) => ({
-              id: c.id,
-              label: c.title || "(untitled)",
-              status: c.status,
-              lastActivity: c.lastActivity,
-            }))
-          : undefined,
-    });
-
-    // Per-engine config is keyed by engine name; unconfigured optional engines
-    // (antigravity/pi) resolve to {} so the engine falls back to dynamic bin/model
-    // resolution. Adding an engine needs no change here.
-    const engineConfig =
-      (config.engines as unknown as Record<string, { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string } | undefined>)[
-        currentSession.engine
-      ] ?? {};
-    const effortLevel = resolveEffort(
-      engineConfig,
-      currentSession,
-      employee,
-      effortLevelsForModel(config, currentSession.engine, currentSession.model ?? undefined),
-    );
-
-    let lastHeartbeatAt = 0;
-    const runHeartbeat = setInterval(() => {
-      // If the session was deleted mid-turn, stop heartbeating immediately —
-      // the engine.run promise may still take minutes to resolve, and we don't
-      // want to keep writing status:"running" rows for a session the user
-      // already removed (and risk re-creating registry state in some paths).
-      if (!getSession(currentSession.id)) {
-        clearInterval(runHeartbeat);
-        return;
-      }
-      updateSession(currentSession.id, {
-        status: "running",
-        lastActivity: new Date().toISOString(),
-      });
-    }, 5000);
-
-    // Mid-turn persistence: mirror the live stream into `partial` DB rows so a
-    // refresh restores in-progress blocks. Coalesced — text grows ONE row
-    // (debounced, never per-token, so SQLite isn't hammered); each tool call is
-    // its own row. All wiped + replaced by the single final message at turn end
-    // (deletePartialMessages below). Only the primary engine stream is mirrored;
-    // the rate-limit fallback stream stays WS-only (rare path).
-    let partialSeq = 0;
-    let curTextId: string | null = null; // the growing text-block row, null between blocks
-    let curText = "";
-    let lastToolId: string | null = null; // last tool row, for the tool_result → "Used" update
-    let partialFlushTimer: ReturnType<typeof setTimeout> | null = null;
-    const flushPartialText = () => {
-      partialFlushTimer = null;
-      if (!curText.trim()) return;
-      if (curTextId) updatePartialMessage(curTextId, curText);
-      else curTextId = insertPartialMessage(currentSession.id, "assistant", curText, partialSeq++);
-    };
-    const persistPartialDelta = (delta: StreamDelta) => {
-      if (delta.type === "text" || delta.type === "text_snapshot") {
-        if (typeof delta.content !== "string") return;
-        if (delta.type === "text_snapshot") {
-          if (delta.content.length > curText.length) curText = delta.content;
-        } else {
-          curText += delta.content;
-        }
-        if (!partialFlushTimer) partialFlushTimer = setTimeout(flushPartialText, 600);
-      } else if (delta.type === "tool_use") {
-        flushPartialText(); // finalize the text block before the tool
-        if (partialFlushTimer) { clearTimeout(partialFlushTimer); partialFlushTimer = null; }
-        const tool = delta.toolName || String(delta.content ?? "");
-        lastToolId = insertPartialMessage(currentSession.id, "assistant", `Using ${tool}`, partialSeq++, tool);
-        curTextId = null; curText = ""; // a fresh text block begins after the tool
-      } else if (delta.type === "tool_result") {
-        const tool = delta.toolName || String(delta.content ?? "");
-        if (lastToolId) updatePartialMessage(lastToolId, `Used ${tool}`);
-      }
-    };
-
-    const syncSinceIso = (currentSession.transportMeta as any)?.claudeSyncSince;
-    const syncSinceMs = typeof syncSinceIso === "string" ? new Date(syncSinceIso).getTime() : NaN;
-    const syncRequested = currentSession.engine === "claude" && typeof syncSinceIso === "string" && Number.isFinite(syncSinceMs);
-    const promptToRun = syncRequested
-      ? (() => {
-        const sinceMessages = getMessages(currentSession.id)
-          .filter((m) => (m.role === "user" || m.role === "assistant") && m.timestamp >= syncSinceMs)
-          .map((m) => `${m.role.toUpperCase()}: ${m.content}`);
-        const transcript = sinceMessages.slice(-20).join("\n\n");
-        return `We temporarily switched to GPT due to a Claude usage limit. Sync your context with this transcript (most recent last), then respond to the last USER message.\n\n${transcript}`;
-      })()
-      : prompt;
-
-    const turnStartedAt = Date.now();
-    const result = await engine.run({
-      prompt: promptToRun,
-      resumeSessionId: currentSession.engineSessionId ?? undefined,
-      systemPrompt,
-      cwd: JINN_HOME,
-      bin: engineConfig.bin,
-      model: currentSession.model ?? engineConfig.model,
-      effortLevel,
-      cliFlags: employee?.cliFlags,
-      attachments: attachments?.length ? attachments : undefined,
-      sessionId: currentSession.id,
-      source: currentSession.source,
-      onStream: (delta) => {
-        // Same guard as runHeartbeat: a delta may arrive after the user
-        // deleted the session; don't resurrect registry state for it.
-        if (!getSession(currentSession.id)) return;
-        // Live context-meter: message_start.usage arrives as a `context` delta
-        // (once per assistant message — infrequent). Persist it immediately so the
-        // meter ticks during the turn, not just at completion. The delta also flows
-        // to the FE below for an instant in-pane update.
-        if (delta.type === "context") {
-          // Only the MAIN agent's stream reaches here (the proxy suppresses
-          // sub-agent/auxiliary streams), so its usage drives the session meter.
-          const ctx = Number(delta.content);
-          if (Number.isFinite(ctx) && ctx > 0) {
-            updateSession(currentSession.id, { lastContextTokens: ctx });
-          }
-        }
-        const now = Date.now();
-        if (now - lastHeartbeatAt >= 2000) {
-          lastHeartbeatAt = now;
-          updateSession(currentSession.id, {
-            status: "running",
-            lastActivity: new Date(now).toISOString(),
-          });
-        }
-        try {
-          context.emit("session:delta", {
-            sessionId: currentSession.id,
-            type: delta.type,
-            content: delta.content,
-            toolName: delta.toolName,
-            toolId: delta.toolId,
-            input: delta.input,
-          });
-        } catch (err) {
-          logger.warn(`Failed to emit stream delta for session ${currentSession.id}: ${err instanceof Error ? err.message : err}`);
-        }
-        // Mirror the block into a persisted partial row (refresh survival). Guarded
-        // so a DB hiccup never breaks the live stream above.
-        try {
-          persistPartialDelta(delta);
-        } catch (err) {
-          logger.warn(`Failed to persist partial block for session ${currentSession.id}: ${err instanceof Error ? err.message : err}`);
-        }
-        // Voice mode: stream the orchestrator's spoken text — complete sentences
-        // synthesize immediately (per-sentence streaming); the flush at completion
-        // speaks the remainder. Only `text` deltas are spoken; tool_use/context
-        // are not. Skip entirely when the client is muted (silent/read mode) —
-        // there's no point buffering or synthesizing audio the browser will discard.
-        if (
-          currentSession.source === "talk" &&
-          !isTalkMuted(currentSession.id) &&
-          delta.type === "text" &&
-          typeof delta.content === "string"
-        ) {
-          feedTalkText(currentSession.id, delta.content, config.talk?.kokoro, context.emit);
-        }
-      },
-      // A turn that settled as failed but whose CLI later finished delivers the
-      // recovered text here. Append it and restore a clean idle status — unless
-      // the session is gone or a NEW turn owns it (status back to "running").
-      onLateRecovery: ({ result: lateText, sessionId: engineSid }) => {
-        const live = getSession(currentSession.id);
-        if (!live || live.status === "running") return;
-        insertMessage(currentSession.id, "assistant", lateText);
-        const recovered = updateSession(currentSession.id, {
-          ...(engineSid.trim() ? { engineSessionId: engineSid } : {}),
-          status: "idle",
-          lastActivity: new Date().toISOString(),
-          lastError: null,
-        });
-        // The parent/channel already saw this turn fail — label the late answer
-        // so it reads as a supersede, not a fresh unprompted turn.
-        const labelled = `(recovered — this supersedes the earlier reported failure)\n\n${lateText}`;
-        if (recovered) {
-          notifyParentSession(recovered, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify });
-          void deliverConnectorReply(recovered, labelled, context.connectors);
-        }
-        context.emit("session:completed", {
-          sessionId: currentSession.id,
-          employee: currentSession.employee || config.portal?.portalName || "Jinn",
-          title: currentSession.title,
-          result: lateText,
-          error: null,
-        });
-        logger.info(`Web session ${currentSession.id} recovered by late Stop after a failed turn`);
-      },
-    }).finally(() => {
-      clearInterval(runHeartbeat);
-      // Stop any pending debounced text flush so it can't re-insert a partial row
-      // after the turn-end cleanup below deletes them.
-      if (partialFlushTimer) { clearTimeout(partialFlushTimer); partialFlushTimer = null; }
-      flushPartialText();
-    });
-
-    if (!getSession(currentSession.id)) {
-      logger.info(`Skipping completion for deleted web session ${currentSession.id}`);
-      return;
-    }
-
-    const wasInterrupted = result.error?.startsWith("Interrupted");
-    const wasSuperseded = !wasInterrupted && isTurnSuperseded(currentSession.id, turnStartedAt);
-    const quietPreempted = wasInterrupted || wasSuperseded;
-
-    // Turn settled. Most engines replace live partials with a single final
-    // assistant message. Antigravity's transcript is already interleaved text +
-    // tool rows, so preserve those blocks when tool cards were streamed. If the
-    // turn was preempted by a newer user message, drop stale partials/results so
-    // the old assistant answer cannot land after the new user bubble.
-    const streamedBlocks = getMessages(currentSession.id).filter((m) => m.partial);
-    const preserveStreamedBlocks =
-      !quietPreempted && currentSession.engine === "antigravity" && streamedBlocks.some((m) => !!m.toolCall);
-    const resultAlreadyPersisted =
-      preserveStreamedBlocks &&
-      !!result.result?.trim() &&
-      streamedBlocks.some((m) => !m.toolCall && m.content.trim() === result.result.trim());
-    if (preserveStreamedBlocks) finalizePartialMessages(currentSession.id);
-    else deletePartialMessages(currentSession.id);
-
-    const rateLimit = !quietPreempted ? detectRateLimit(result) : { limited: false as const };
-
-    if (rateLimit.limited) {
-      // Drop any buffered voice text — we won't speak a rate-limited turn.
-      if (currentSession.source === "talk") discardTalkSpeech(currentSession.id);
-      const emitDelta = (delta: StreamDelta) => {
-        context.emit("session:delta", {
-          sessionId: currentSession.id,
-          type: delta.type,
-          content: delta.content,
-          toolName: delta.toolName,
-        });
-      };
-
-      const outcome = await handleRateLimit({
-        session: currentSession,
-        prompt,
-        systemPrompt,
-        engineConfig,
-        effortLevel,
-        cliFlags: employee?.cliFlags,
-        attachments: attachments?.length ? attachments : undefined,
-        config,
-        engines: context.sessionManager.getEngines(),
-        employee,
-        engine,
-        rateLimit,
-        originalResult: result,
-        hooks: {
-          onFallbackStart: ({ resumeAt }) => {
-            const resumeText = resumeAt
-              ? resumeAt.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
-              : null;
-            const notificationText =
-              `⚠️ Claude usage limit reached${resumeText ? `. Resets ${resumeText}` : ""}. Switching to GPT for now.`;
-            insertMessage(currentSession.id, "notification", notificationText);
-
-            notifyDiscordChannel(
-              `⚠️ Claude usage limit reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} switching to GPT.`,
-            );
-
-            // Switching away from Claude — drop any warm Claude PTY AND its armed
-            // late-recovery listener so the abandoned claude turn can't double-answer
-            // after the GPT fallback delivers.
-            const claudeEngine = context.sessionManager.getEngines().get("claude");
-            if (claudeEngine && isInterruptibleEngine(claudeEngine)) {
-              claudeEngine.kill(currentSession.id, "Interrupted: engine switched");
-            }
-          },
-          onFallbackStream: emitDelta,
-          onFallbackComplete: (fallbackResult) => {
-            if (fallbackResult.result) {
-              insertMessage(currentSession.id, "assistant", fallbackResult.result);
-            }
-
-            const completedFallback = updateSession(currentSession.id, {
-              engineSessionId: fallbackResult.sessionId,
-              status: fallbackResult.error ? "error" : "idle",
-              lastActivity: new Date().toISOString(),
-              lastError: fallbackResult.error ?? null,
-            });
-            if (completedFallback) {
-              notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
-              // Relay the fallback turn to the originating connector channel (#51).
-              if (fallbackResult.result) void deliverConnectorReply(completedFallback, fallbackResult.result, context.connectors);
-            }
-
-            context.emit("session:completed", {
-              sessionId: currentSession.id,
-              employee: currentSession.employee || config.portal?.portalName || "Jinn",
-              title: currentSession.title,
-              result: fallbackResult.result,
-              error: fallbackResult.error || null,
-              cost: fallbackResult.cost,
-              durationMs: fallbackResult.durationMs,
-            });
-            maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-          },
-          onWaitingStart: ({ resumeAt }) => {
-            const resumeText = resumeAt
-              ? resumeAt.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
-              : null;
-
-            // Send hardcoded Discord notification — does not depend on the LLM
-            notifyDiscordChannel(
-              `⚠️ Claude usage limit reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
-            );
-
-            const notificationText =
-              `⏳ Claude usage limit reached${resumeText ? `. Resets ${resumeText}` : ""} — I'll continue automatically.`;
-            insertMessage(currentSession.id, "notification", notificationText);
-
-            // Notify parent session about rate limit (fire-and-forget)
-            const waitingSession = getSession(currentSession.id);
-            notifyRateLimited(
-              (waitingSession ?? { ...currentSession, status: "waiting" }) as Session,
-              resumeAt
-                ? resumeAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
-                : undefined,
-            );
-
-            context.emit("session:rate-limited", {
-              sessionId: currentSession.id,
-              employee: currentSession.employee,
-              error: result.error,
-              resetsAt: rateLimit.resetsAt ?? null,
-            });
-          },
-          onRetryStream: emitDelta,
-          onRetrySuccess: (retryResult) => {
-            // Usage limit cleared — handle result
-            if (retryResult.result) {
-              insertMessage(currentSession.id, "assistant", retryResult.result);
-            }
-
-            const completedAfterRetry = updateSession(currentSession.id, {
-              ...(retryResult.sessionId?.trim() ? { engineSessionId: retryResult.sessionId } : {}),
-              status: retryResult.error ? "error" : "idle",
-              lastActivity: new Date().toISOString(),
-              lastError: retryResult.error ?? null,
-            });
-
-            if (completedAfterRetry) {
-              notifyRateLimitResumed(completedAfterRetry);
-              notifyDiscordChannel(
-                `✅ Claude usage limit cleared. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} resumed.`,
-              );
-              notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
-              // Relay the resumed (rate-limit-cleared) turn to the originating connector channel (#51).
-              if (retryResult.result) void deliverConnectorReply(completedAfterRetry, retryResult.result, context.connectors);
-            }
-
-            context.emit("session:completed", {
-              sessionId: currentSession.id,
-              employee: currentSession.employee || config.portal?.portalName || "Jinn",
-              title: currentSession.title,
-              result: retryResult.result,
-              error: retryResult.error || null,
-              cost: retryResult.cost,
-              durationMs: retryResult.durationMs,
-            });
-            maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-          },
-          onTimeout: () => {
-            notifyDiscordChannel(
-              `❌ Claude usage limit did not clear in time. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} has been stopped.`,
-            );
-            const erroredSession = updateSession(currentSession.id, {
-              status: "error",
-              lastActivity: new Date().toISOString(),
-              lastError: "Claude usage limit did not clear in time",
-            });
-            if (erroredSession) {
-              notifyParentSession(erroredSession, { error: "Claude usage limit did not clear in time" }, { alwaysNotify: employee?.alwaysNotify });
-            }
-            context.emit("session:completed", {
-              sessionId: currentSession.id,
-              result: null,
-              error: "Claude usage limit did not clear in time",
-            });
-            maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-          },
-        },
-      });
-
-      void outcome; // outcome handled entirely via hooks
-      return;
-    }
-
-    // Persist the assistant response
-    if (result.result && !resultAlreadyPersisted && !quietPreempted) {
-      insertMessage(currentSession.id, "assistant", result.result);
-    }
-
-    // Voice mode: flush the remainder of the turn's spoken text (final chunk,
-    // carries last:true). Fire-and-forget so completion isn't blocked on audio.
-    // Discard (don't synthesize) on a half-finished interrupt OR when the client
-    // is muted — the browser plays nothing in silent mode.
-    if (currentSession.source === "talk") {
-      if (quietPreempted || isTalkMuted(currentSession.id)) discardTalkSpeech(currentSession.id);
-      else void flushTalkSpeech(currentSession.id, config.talk?.kokoro, context.emit);
-    }
-
-    const completedSession = updateSession(currentSession.id, {
-      ...(result.sessionId?.trim() ? { engineSessionId: result.sessionId } : {}),
-      ...(typeof result.contextTokens === "number" ? { lastContextTokens: result.contextTokens } : {}),
-      // An interrupt (new message arrived / user stopped) is NOT an error — land idle
-      // with no lastError, mirroring the connector path (manager.ts). Otherwise the
-      // session would stick in "error" with a misleading "Interrupted" message and
-      // fire a false parent-callback failure when the interrupt is the last action.
-      status: quietPreempted ? "idle" : (result.error ? "error" : "idle"),
-      lastActivity: new Date().toISOString(),
-      lastError: quietPreempted ? null : (result.error ?? null),
-    });
-    if (!quietPreempted && currentSession.engine === "claude") {
-      markTranscriptSyncedThrough(currentSession.id, result.sessionId);
-    }
-    if (syncRequested && !rateLimit.limited && !quietPreempted) {
-      const meta = (getSession(currentSession.id)?.transportMeta || currentSession.transportMeta || {}) as Record<string, unknown>;
-      if (meta && typeof meta === "object" && !Array.isArray(meta)) {
-        const nextMeta = { ...meta } as Record<string, unknown>;
-        delete nextMeta["claudeSyncSince"];
-        updateSession(currentSession.id, { transportMeta: nextMeta as any });
-      }
-    }
-    clearSupersededTurnMeta(currentSession.id);
-    const reportedError = quietPreempted ? null : (result.error ?? null);
-    if (completedSession && !quietPreempted) {
-      notifyParentSession(completedSession, { result: result.result, error: reportedError, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
-    }
-
-    // Relay the turn back to the originating connector channel (#51). Only
-    // connector-sourced sessions reaching this path (parent callbacks, cron
-    // follow-ups) deliver; web/talk/cron + interrupted turns no-op.
-    if (completedSession && !quietPreempted && result.result) {
-      await deliverConnectorReply(completedSession, result.result, context.connectors);
-    }
-
-    context.emit("session:completed", {
-      sessionId: currentSession.id,
-      employee: currentSession.employee || config.portal?.portalName || "Jinn",
-      title: currentSession.title,
-      result: quietPreempted ? null : result.result,
-      error: reportedError,
-      cost: result.cost,
-      durationMs: result.durationMs,
-    });
-    maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-
-    logger.info(
-      `Web session ${currentSession.id} completed` +
-      (result.durationMs ? ` in ${result.durationMs}ms` : "") +
-      (result.cost ? ` ($${result.cost.toFixed(4)})` : ""),
-    );
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    if (!getSession(currentSession.id)) {
-      logger.info(`Skipping error handling for deleted web session ${currentSession.id}: ${errMsg}`);
-      return;
-    }
-    // The run threw — drop any orphaned mid-turn partial blocks.
-    deletePartialMessages(currentSession.id);
-    const erroredSession = updateSession(currentSession.id, {
-      status: "error",
-      lastActivity: new Date().toISOString(),
-      lastError: errMsg,
-    });
-    if (erroredSession) {
-      notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
-    }
-    context.emit("session:completed", {
-      sessionId: currentSession.id,
-      result: null,
-      error: errMsg,
-    });
-    maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-    logger.error(`Web session ${currentSession.id} error: ${errMsg}`);
-  }
-}

@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { McpGlobalConfig, McpServerConfig, McpServerUrlConfig, Employee } from "../shared/types.js";
+import type { McpGlobalConfig, McpServerConfig, McpServerStdioConfig, McpServerUrlConfig, Employee } from "../shared/types.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 
 export interface ResolvedMcpConfig {
   mcpServers: Record<string, McpServerConfig>;
@@ -61,7 +62,7 @@ function buildAvailableServers(config: McpGlobalConfig): Record<string, McpServe
     if (provider === "playwright") {
       servers.browser = {
         command: "npx",
-        args: ["-y", "@anthropic-ai/mcp-server-playwright"],
+        args: ["-y", "@playwright/mcp@latest"],
       };
     } else if (provider === "puppeteer") {
       servers.browser = {
@@ -119,15 +120,70 @@ function buildAvailableServers(config: McpGlobalConfig): Record<string, McpServe
   return servers;
 }
 
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function tomlStringArray(values: string[]): string {
+  return `[${values.map(tomlString).join(", ")}]`;
+}
+
+function codexMcpServerFlags(name: string, server: McpServerConfig): string[] {
+  const prefix = `mcp_servers.${name}`;
+  const flags: string[] = [];
+  if ("url" in server && server.url) {
+    flags.push("-c", `${prefix}.url=${tomlString(server.url)}`);
+    const bearer = (server as any).bearer_token_env_var ?? (server as any).bearerTokenEnvVar;
+    if (typeof bearer === "string" && bearer) flags.push("-c", `${prefix}.bearer_token_env_var=${tomlString(bearer)}`);
+    return flags;
+  }
+
+  const stdio = server as McpServerStdioConfig & { cwd?: string };
+  flags.push("-c", `${prefix}.command=${tomlString(stdio.command)}`);
+  if (stdio.args?.length) flags.push("-c", `${prefix}.args=${tomlStringArray(stdio.args)}`);
+  if (stdio.cwd) flags.push("-c", `${prefix}.cwd=${tomlString(stdio.cwd)}`);
+  if (stdio.env) {
+    for (const [key, value] of Object.entries(stdio.env)) {
+      flags.push("-c", `${prefix}.env.${key}=${tomlString(value)}`);
+    }
+  }
+  return flags;
+}
+
+/**
+ * Convert a resolved Jinn MCP config into Codex CLI config overrides.
+ * Codex does not accept Claude's --mcp-config JSON file; it reads
+ * mcp_servers.<name> from config.toml, and `-c` can inject those keys per run.
+ */
+export function codexMcpConfigFlags(config: ResolvedMcpConfig): string[] {
+  const flags: string[] = [];
+  for (const [name, server] of Object.entries(config.mcpServers)) {
+    flags.push(...codexMcpServerFlags(name, server));
+  }
+  return flags;
+}
+
+export function codexMcpConfigFlagsFromFile(configPath: string | undefined): string[] {
+  if (!configPath) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8")) as ResolvedMcpConfig;
+    return codexMcpConfigFlags(parsed);
+  } catch (err) {
+    logger.warn(`Failed to read MCP config for Codex from ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
 /**
  * Write a resolved MCP config to a temp file and return the path.
- * Claude Code reads this via --mcp-config <path>.
+ * Claude Code reads this via --mcp-config <path>; Codex reads the same file
+ * through codexMcpConfigFlagsFromFile() and receives equivalent -c overrides.
  */
 export function writeMcpConfigFile(config: ResolvedMcpConfig, sessionId: string): string {
   const tmpDir = path.join(JINN_HOME, "tmp", "mcp");
   fs.mkdirSync(tmpDir, { recursive: true });
   const filePath = path.join(tmpDir, `${sessionId}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(config, null, 2));
+  safeWriteFile(filePath, JSON.stringify(config, null, 2)); // atomic + fsync (resolved MCP config read by the engine)
   return filePath;
 }
 

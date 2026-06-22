@@ -12,6 +12,7 @@ import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
 import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
 import { codexCliFlags, extractCodexContextTokens } from "./codex.js";
+import { codexMcpConfigFlagsFromFile } from "../mcp/resolver.js";
 
 const CODEX_SESSIONS_DIR = path.join(os.homedir(), ".codex", "sessions");
 const TURN_TIMEOUT_MS = 14 * 24 * 60 * 60 * 1000;
@@ -42,6 +43,7 @@ interface CodexSpawnParams {
   cwd?: string;
   bin?: string;
   cliFlags?: string[];
+  mcpConfigPath?: string;
 }
 
 function pasteAndSubmit(proc: pty.IPty, text: string): void {
@@ -386,6 +388,7 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
     if (opts.model) args.push("--model", opts.model);
     if (opts.effortLevel && opts.effortLevel !== "default") args.push("-c", `model_reasoning_effort="${opts.effortLevel}"`);
     if (opts.cwd) args.push("-C", opts.cwd);
+    args.push(...codexMcpConfigFlagsFromFile(opts.mcpConfigPath));
     args.push(...codexCliFlags(opts.cliFlags));
     if (resumeSessionId) args.push(resumeSessionId);
     if (prompt) args.push(prompt);
@@ -407,6 +410,7 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
       || norm(prev.resumeSessionId) !== norm(opts.resumeSessionId)
       || norm(prev.cwd) !== norm(opts.cwd)
       || norm(prev.bin) !== norm(opts.bin)
+      || norm(prev.mcpConfigPath) !== norm(opts.mcpConfigPath)
       || !sameFlags(prev.cliFlags, opts.cliFlags);
   }
 
@@ -434,6 +438,7 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
       cwd: opts.cwd,
       bin: opts.bin,
       cliFlags: opts.cliFlags,
+      mcpConfigPath: opts.mcpConfigPath,
     });
     return this.wireProcToStream(jinnSessionId, proc);
   }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { safeWriteFile } from "./safe-write.js";
 
 export interface SessionSettingsOpts {
   sessionId: string;
@@ -15,10 +16,15 @@ interface HookMatcher { hooks: HookCommand[]; }
 // billing_error, server_error, …) — confirmed by the Phase 0 spike. It is the
 // structured rate-limit signal, so it must be registered alongside Stop.
 export interface ClaudeSettings {
+  skipDangerousModePermissionPrompt: true;
   hooks: Record<"SessionStart" | "Stop" | "StopFailure" | "PreToolUse" | "PostToolUse", HookMatcher[]>;
   statusLine?: HookCommand;
   appendSystemPrompt?: string;
 }
+
+export const CLAUDE_BYPASS_PERMISSIONS_CONSENT_SETTINGS = {
+  skipDangerousModePermissionPrompt: true,
+} as const;
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -53,6 +59,7 @@ export function buildSessionSettings(opts: SessionSettingsOpts): ClaudeSettings 
     hooks: [{ type: "command", command: `node ${shellQuote(opts.relayScript)} ${shellQuote(opts.sessionId)}` }],
   });
   return {
+    ...CLAUDE_BYPASS_PERMISSIONS_CONSENT_SETTINGS,
     hooks: {
       SessionStart: [cmd()],
       Stop: [cmd()],
@@ -72,11 +79,8 @@ export function sessionSettingsPath(dir: string, sessionId: string): string {
 export function writeSessionSettings(dir: string, sessionId: string, opts: SessionSettingsOpts): string {
   fs.mkdirSync(dir, { recursive: true });
   const filePath = sessionSettingsPath(dir, sessionId);
-  const tmp = `${filePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(buildSessionSettings(opts), null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, filePath);
-  // Defensive: ensure the final file has 0o600 even if the target pre-existed.
-  fs.chmodSync(filePath, 0o600);
+  // Atomic + fsync + 0o600. No audit: per-session derived settings (high churn).
+  safeWriteFile(filePath, JSON.stringify(buildSessionSettings(opts), null, 2), { mode: 0o600 });
   return filePath;
 }
 
@@ -90,14 +94,11 @@ export function cleanupSessionSettings(dir: string, sessionId: string): void {
  * blocks on a one-time consent dialog.
  *
  * Recent Claude Code versions gate the interactive TUI behind blocking first-run
- * prompts: the "Bypass Permissions mode" consent (triggered by
- * --dangerously-skip-permissions) and the "Claude in Chrome (beta)" intro
- * (triggered by --chrome). The InteractiveClaudeEngine launches `claude`
- * interactively with both flags and never sends a keystroke to dismiss the
- * dialogs, so on any install where onboarding is not already complete (fresh,
- * headless/CI, or after a Claude Code upgrade resets onboarding for a new
- * version) every work turn hangs forever before reaching the API. Pre-seeding
- * these flags at gateway boot answers the dialogs up front. See upstream issue #66.
+ * prompts. seedTrust handles global onboarding, project trust, and the Chrome
+ * intro; buildSessionSettings handles the Bypass Permissions consent by writing
+ * skipDangerousModePermissionPrompt into the per-session --settings file. The
+ * InteractiveClaudeEngine never sends a keystroke to dismiss dialogs, so both
+ * layers must be pre-answered before spawning the PTY. See upstream issue #66.
  */
 export function seedTrust(claudeJsonPath: string, projectDir: string): void {
   const realDir = fs.realpathSync(projectDir);
@@ -126,11 +127,6 @@ export function seedTrust(claudeJsonPath: string, projectDir: string): void {
   proj.hasTrustDialogAccepted = true;
   proj.hasCompletedProjectOnboarding = true;
   proj.allowedTools ??= [];
-  const tmp = `${claudeJsonPath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, claudeJsonPath);
-  // Defensive: ensure the final file has 0o600 even if the target pre-existed
-  // with a more permissive mode (rename preserves the destination inode's perms
-  // on some platforms / filesystems is not guaranteed — be explicit).
-  fs.chmodSync(claudeJsonPath, 0o600);
+  // Atomic + fsync + 0o600 (safeWriteFile re-applies mode defensively post-rename).
+  safeWriteFile(claudeJsonPath, JSON.stringify(data, null, 2), { mode: 0o600 });
 }

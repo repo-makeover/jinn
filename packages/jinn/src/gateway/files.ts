@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import Busboy from "busboy";
 import { FILES_DIR, UPLOADS_DIR, JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
+import { checkPublicUrl } from "../shared/ssrf-guard.js";
 import { insertFile, getFile, listFiles, deleteFile, setFilePath, insertMessage, type FileMeta, type MessageMedia } from "../sessions/registry.js";
 import type { ApiContext } from "./api.js";
 
@@ -433,7 +434,9 @@ async function handleJsonUpload(req: HttpRequest, res: ServerResponse, context: 
       return badRequest(res, "Invalid base64 content");
     }
   } else {
-    // URL fetch
+    // URL fetch — SSRF guard before reaching out (SEC-F-003).
+    const urlCheck = await checkPublicUrl(url!);
+    if (!urlCheck.ok) return badRequest(res, `Refusing to fetch URL: ${urlCheck.reason}`);
     try {
       const response = await fetch(url!);
       if (!response.ok) {
@@ -800,6 +803,9 @@ async function handleAttachmentJson(
     if (buffer.length > MAX) return badRequest(res, "File exceeds 50 MB limit");
     if (!filename) return badRequest(res, "filename is required when sending base64 content");
   } else {
+    // URL fetch — SSRF guard before reaching out (SEC-F-003).
+    const urlCheck = await checkPublicUrl(url!);
+    if (!urlCheck.ok) return badRequest(res, `Refusing to fetch URL: ${urlCheck.reason}`);
     try {
       const response = await fetch(url!);
       if (!response.ok) return serverError(res, `Failed to fetch URL: ${response.status} ${response.statusText}`);

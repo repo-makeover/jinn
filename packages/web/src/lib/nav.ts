@@ -8,6 +8,7 @@ import {
   Gauge,
   Zap,
   Settings,
+  ShieldCheck,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
@@ -22,6 +23,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/talk", label: "Talk", icon: AudioLines },
   { href: "/org", label: "Organization", icon: Users },
   { href: "/kanban", label: "Kanban", icon: LayoutGrid },
+  { href: "/approvals", label: "Approvals", icon: ShieldCheck },
   { href: "/cron", label: "Cron", icon: Clock },
   { href: "/limits", label: "Limits", icon: Gauge },
   { href: "/logs", label: "Activity", icon: Activity },

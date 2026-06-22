@@ -5,6 +5,7 @@ import readline from "node:readline";
 import { execSync, spawn } from "node:child_process";
 import yaml from "js-yaml";
 import { isInstalled, resolveBin } from "../shared/resolve-bin.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 import {
   JINN_HOME,
   CONFIG_PATH,
@@ -78,8 +79,7 @@ function ensureDir(dir: string): boolean {
 
 function ensureFile(filePath: string, content: string): boolean {
   if (fs.existsSync(filePath)) return false;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, "utf-8");
+  safeWriteFile(filePath, content); // atomic + fsync (setup bootstrap)
   return true;
 }
 
@@ -128,7 +128,7 @@ function copyTemplateDir(
       const ext = path.extname(entry.name).toLowerCase();
       if (replacements && (ext === ".md" || ext === ".yaml" || ext === ".yml")) {
         const content = fs.readFileSync(srcPath, "utf-8");
-        fs.writeFileSync(destPath, applyTemplateReplacements(content, replacements), "utf-8");
+        safeWriteFile(destPath, applyTemplateReplacements(content, replacements)); // atomic + fsync (templated setup file)
       } else {
         fs.copyFileSync(srcPath, destPath);
       }

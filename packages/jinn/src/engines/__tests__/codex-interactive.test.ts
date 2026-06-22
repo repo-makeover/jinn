@@ -255,6 +255,29 @@ describe("CodexInteractiveEngine — effort/model PTY args + respawn", () => {
     lifecycle.dispose();
   });
 
+  it("passes Jinn MCP config to interactive Codex as mcp_servers overrides", async () => {
+    const mcpConfigPath = path.join(osMockState.home, "mcp.json");
+    fs.writeFileSync(mcpConfigPath, JSON.stringify({
+      mcpServers: {
+        browser: { command: "npx", args: ["-y", "@playwright/mcp@latest"] },
+      },
+    }));
+
+    const run = engine.run({
+      prompt: "hello",
+      sessionId: "sess-mcp",
+      cwd: "/tmp",
+      model: "gpt-5.5",
+      mcpConfigPath,
+    } as any);
+    const args = lastArgs();
+    expect(args).toContain('mcp_servers.browser.command="npx"');
+    expect(args).toContain('mcp_servers.browser.args=["-y", "@playwright/mcp@latest"]');
+    spawnCalls[spawnCalls.length - 1]!.proc._exit(0);
+    await run;
+    lifecycle.dispose();
+  });
+
   it('omits the reasoning-effort flag when effortLevel is "default" or absent', () => {
     engine.ensureIdleSpawn("sess-default", { model: "gpt-5.5", effortLevel: "default" });
     expect(reasoningEffortArg(lastArgs())).toBeUndefined();

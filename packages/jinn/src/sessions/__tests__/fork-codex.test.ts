@@ -15,15 +15,22 @@ import os from "node:os";
 
 let fakeHome: string;
 
+// fork.ts now transitively imports shared/paths.js (via safe-write), whose
+// INSTANCES_REGISTRY/resolveHome call os.homedir() at MODULE-EVAL — before
+// beforeEach runs. Referencing the `let fakeHome` from the (hoisted) mock
+// factory hits its TDZ. Back the mock with a vi.hoisted holder instead (safe to
+// read at any time); beforeEach points it at the real temp home.
+const homeHolder = vi.hoisted(() => ({ dir: "" }));
+
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return {
     ...actual,
     default: {
       ...actual,
-      homedir: () => fakeHome,
+      homedir: () => homeHolder.dir,
     },
-    homedir: () => fakeHome,
+    homedir: () => homeHolder.dir,
   };
 });
 
@@ -74,6 +81,7 @@ function findForkedFile(excludeSourceFile: string): string | null {
 
 beforeEach(() => {
   fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "fork-codex-"));
+  homeHolder.dir = fakeHome; // point the mocked os.homedir() at the temp home
 });
 
 afterEach(() => {

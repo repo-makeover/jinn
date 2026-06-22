@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { JINN_HOME, SKILLS_DIR } from "../shared/paths.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
@@ -37,7 +38,7 @@ export function readManifest(): SkillManifestEntry[] {
 }
 
 export function writeManifest(entries: SkillManifestEntry[]): void {
-  fs.writeFileSync(SKILLS_JSON, JSON.stringify(entries, null, 2) + "\n");
+  safeWriteFile(SKILLS_JSON, JSON.stringify(entries, null, 2) + "\n"); // atomic + fsync (skills registry)
 }
 
 export function upsertManifest(name: string, source: string): void {
@@ -126,7 +127,14 @@ export function runNpxSkills(args: string[], stdio: "inherit" | "pipe" = "inheri
 }
 
 export function copySkillToInstance(name: string, sourceDir: string): void {
-  const destDir = path.join(SKILLS_DIR, name);
+  // Path-traversal guard (CRC-01): `name` derives from package strings that can
+  // contain `..` or separators (e.g. `jinn skills add owner/../../evil`). Ensure
+  // the resolved destination stays inside SKILLS_DIR before writing anything.
+  const root = path.resolve(SKILLS_DIR);
+  const destDir = path.resolve(root, name);
+  if (destDir !== root && !destDir.startsWith(root + path.sep)) {
+    throw new Error(`Refusing to install skill outside skills directory: ${name}`);
+  }
   fs.mkdirSync(destDir, { recursive: true });
   copyDirRecursive(sourceDir, destDir);
 }

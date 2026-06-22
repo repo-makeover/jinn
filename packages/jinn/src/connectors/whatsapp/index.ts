@@ -22,6 +22,7 @@ import { JINN_HOME } from "../../shared/paths.js";
 import { formatResponse } from "./format.js";
 import path from "node:path";
 import fs from "node:fs";
+import { safeWriteFile } from "../../shared/safe-write.js";
 
 export interface WhatsAppConnectorConfig {
   /** Where to store session credentials (default: JINN_HOME/.whatsapp-auth) */
@@ -295,7 +296,7 @@ export class WhatsAppConnector implements Connector {
         const tmpDir = path.join(JINN_HOME, "tmp");
         const localPath = path.join(tmpDir, filename);
         fs.mkdirSync(tmpDir, { recursive: true });
-        fs.writeFileSync(localPath, buffer as Buffer);
+        safeWriteFile(localPath, buffer as Buffer, { fsync: false }); // atomic media write; durability unneeded
         const mimeType = ext === "jpg" ? "image/jpeg"
           : ext === "ogg" ? "audio/ogg"
           : "application/octet-stream";

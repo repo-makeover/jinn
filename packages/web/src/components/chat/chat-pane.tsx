@@ -9,6 +9,7 @@ import { ChatEmployeePicker } from '@/components/chat/chat-employee-picker'
 import { QueuePanel } from '@/components/chat/queue-panel'
 import { BackgroundActivityPill } from '@/components/chat/background-activity-pill'
 import { ModelSelectorRow, type SelectorValue } from '@/components/chat/model-selector-row'
+import { FolderPicker } from '@/components/chat/folder-picker'
 import { useLiveSession } from '@/hooks/use-live-session'
 
 const CliTerminal = lazy(() => import('@/components/cli-terminal').then(m => ({ default: m.CliTerminal })))
@@ -197,6 +198,8 @@ export function ChatPane({
   const [selector, setSelector] = useState<SelectorValue>(() => readNewSessionSelector())
   const [effortPendingNote, setEffortPendingNote] = useState(false)
   const [selectorError, setSelectorError] = useState<string | null>(null)
+  // Per-chat working folder (new-chat only). null = default (JINN_HOME).
+  const [cwd, setCwd] = useState<string | null>(null)
   const cliTerminalRef = useRef<CliTerminalHandle | null>(null)
 
   // Pre-fill for a NEW chat. Explicit employee selection uses employee config;
@@ -308,6 +311,7 @@ export function ChatPane({
             engine: selector.engine,
             model: selector.model,
             effortLevel: selector.effortLevel,
+            cwd,
           })
           if (viewMode === 'cli' && supportsCliPreference(selector.engine)) (params as Record<string, unknown>).mode = 'interactive'
           const session = (await api.createSession(params)) as Record<string, unknown>
@@ -352,6 +356,7 @@ export function ChatPane({
         session.employee ? `Employee: ${session.employee}` : null,
         session.engine ? `Engine: ${session.engine}` : null,
         session.model ? `Model: ${session.model}` : null,
+        session.cwd ? `Working folder: \`${session.cwd}\`` : null,
         session.createdAt ? `Created: ${session.createdAt}` : null,
       ]
         .filter(Boolean)
@@ -525,16 +530,20 @@ export function ChatPane({
         focusTrigger={focusTrigger}
         onShortcutsClick={onShortcutsClick}
         selectorSlot={
-          <ModelSelectorRow
-            mode={sessionId ? 'existing' : 'new'}
-            value={selector}
-            onChange={handleSelectorChange}
-            pendingNote={effortPendingNote}
-            errorNote={selectorError ?? undefined}
-            disabled={loading}
-            contextTokens={liveContextTokens ?? (currentSession?.lastContextTokens as number | null | undefined) ?? undefined}
-            onNewChat={handleNewSession}
-          />
+          <div className="flex items-center gap-1.5 min-w-0">
+            <ModelSelectorRow
+              mode={sessionId ? 'existing' : 'new'}
+              value={selector}
+              onChange={handleSelectorChange}
+              pendingNote={effortPendingNote}
+              errorNote={selectorError ?? undefined}
+              disabled={loading}
+              contextTokens={liveContextTokens ?? (currentSession?.lastContextTokens as number | null | undefined) ?? undefined}
+              onNewChat={handleNewSession}
+            />
+            {/* Working-folder picker — new chats only (cwd is fixed once a session starts). */}
+            {!sessionId && <FolderPicker value={cwd} onChange={setCwd} disabled={loading} />}
+          </div>
         }
         terminalActionsSlot={
           viewMode === 'cli' && sessionId ? (

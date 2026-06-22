@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import yaml from "js-yaml";
 import { CONFIG_PATH } from "./paths.js";
+import { safeWriteYaml } from "./safe-write.js";
 import type { JinnConfig } from "./types.js";
 
 type ClaudeEngineConfig = JinnConfig["engines"]["claude"];
@@ -93,7 +94,6 @@ export function loadConfig(): JinnConfig {
  * `dumpOptions` is forwarded to yaml.dump so call sites keep their formatting.
  */
 export function saveConfigAtomic(config: unknown, dumpOptions?: yaml.DumpOptions): void {
-  const tmpPath = `${CONFIG_PATH}.tmp-${process.pid}`;
-  fs.writeFileSync(tmpPath, yaml.dump(config, dumpOptions), "utf-8");
-  fs.renameSync(tmpPath, CONFIG_PATH);
+  // Atomic + fsync-durable + audited (canonical config; hot-reloaded by a watcher).
+  safeWriteYaml(CONFIG_PATH, config, { dumpOptions, audit: { actor: "gateway", op: "config.save" } });
 }

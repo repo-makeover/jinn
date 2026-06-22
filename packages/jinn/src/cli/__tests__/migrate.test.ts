@@ -101,7 +101,7 @@ describe("migrate: AI session launcher", () => {
     expect(argsArray).not.toContain("--print");
   });
 
-  it("should still pass --dangerously-skip-permissions and the migration prompt", async () => {
+  it("should still pass --dangerously-skip-permissions, consent-skip settings, and the migration prompt", async () => {
     const { runMigrate } = await import("../migrate.js");
 
     await runMigrate({});
@@ -112,6 +112,11 @@ describe("migrate: AI session launcher", () => {
     const argsArray = args as string[];
 
     expect(argsArray).toContain("--dangerously-skip-permissions");
+    const settingsIndex = argsArray.indexOf("--settings");
+    expect(settingsIndex).toBeGreaterThan(-1);
+    expect(argsArray[settingsIndex + 1]).toContain("settings.json");
+    const settingsWrite = vi.mocked(fs.writeFileSync).mock.calls.find(([file]) => String(file).endsWith("settings.json"));
+    expect(settingsWrite?.[1]).toContain("skipDangerousModePermissionPrompt");
     // The prompt is the last positional arg and references the migration.
     expect(argsArray[argsArray.length - 1]).toContain("migration");
   });

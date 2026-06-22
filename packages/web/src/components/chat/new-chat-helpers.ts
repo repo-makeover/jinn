@@ -13,6 +13,8 @@ export function buildNewSessionParams(opts: {
   model?: string | null
   /** Effort level for the new session (only sent for effort-capable models). */
   effortLevel?: string | null
+  /** Working directory for the new session. Omit/null = default (JINN_HOME). */
+  cwd?: string | null
 }): Record<string, unknown> {
   const params: Record<string, unknown> = {
     source: 'web',
@@ -30,6 +32,7 @@ export function buildNewSessionParams(opts: {
   if (opts.engine) params.engine = opts.engine
   if (opts.model) params.model = opts.model
   if (opts.effortLevel) params.effortLevel = opts.effortLevel
+  if (opts.cwd) params.cwd = opts.cwd
 
   return params
 }

@@ -1,5 +1,6 @@
 import type { Engine } from "../shared/types.js";
 import { listSessions, updateSession } from "../sessions/registry.js";
+import { notifyParentSession } from "../sessions/callbacks.js";
 import { logger } from "../shared/logger.js";
 
 const DEFAULT_INTERVAL_MS = 15_000;
@@ -64,21 +65,36 @@ export function sweepOnce(deps: StatusReconcilerDeps): number {
       continue; // confirm on the next sweep — could be a turn-boundary race
     }
     pending?.delete(session.id);
+    // Don't erase the evidence. A session stuck at running with no live turn did
+    // NOT complete cleanly — it stalled. Record an actionable error (instead of
+    // nulling lastError), surface it on the completion event, and WAKE THE PARENT.
+    // Without the parent wake, a delegated worker that stalls is silently dropped
+    // to idle and the orchestrating director never learns its slice died — the
+    // failure mode that previously required a human to notice. Status stays idle
+    // so the spinner clears and the session can be re-driven.
+    const stallError =
+      `Stalled: session was stuck at status=running with no live turn ` +
+      `(heartbeat stale ${Math.round(staleFor / 1000)}s) — auto-reset by the reconciler.`;
     updateSession(session.id, {
       status: "idle",
       lastActivity: new Date(now).toISOString(),
-      lastError: null,
+      lastError: stallError,
     });
     deps.emit("session:completed", {
       sessionId: session.id,
       employee: session.employee ?? undefined,
       title: session.title,
       result: null,
-      error: null,
+      error: stallError,
+      stalled: true,
     });
+    // Fire-and-forget wake to the delegating parent (no-op for top-level sessions
+    // with no parentSessionId). This is the link that was missing: detection
+    // existed, but its signal never reached the director.
+    notifyParentSession(session, { error: stallError });
     logger.warn(
       `[reconciler] session ${session.id} (${session.engine}) was stuck status=running with no live turn ` +
-      `(heartbeat stale ${Math.round(staleFor / 1000)}s) — reset to idle`,
+      `(heartbeat stale ${Math.round(staleFor / 1000)}s) — reset to idle, parent notified`,
     );
     fixed++;
   }

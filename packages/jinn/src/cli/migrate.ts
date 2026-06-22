@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { execFileSync } from "node:child_process";
 import yaml from "js-yaml";
 import {
@@ -12,12 +13,14 @@ import {
   AGENTS_SKILLS_DIR,
 } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
+import { safeWriteYaml } from "../shared/safe-write.js";
 import {
   compareSemver,
   getPackageVersion,
   getInstanceVersion,
   getPendingMigrations,
 } from "../shared/version.js";
+import { CLAUDE_BYPASS_PERMISSIONS_CONSENT_SETTINGS } from "../shared/claude-settings.js";
 
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
@@ -70,18 +73,25 @@ function stampVersion(version: string): void {
   if (!config.jinn) config.jinn = {};
   config.jinn.version = version;
 
-  // Atomic write: the live gateway hot-reloads config.yaml, so a partial write
-  // would corrupt it. Write to a tmp file in the same directory, then rename.
-  const tmpPath = `${CONFIG_PATH}.tmp`;
-  fs.writeFileSync(tmpPath, yaml.dump(config, { lineWidth: -1 }), "utf-8");
-  fs.renameSync(tmpPath, CONFIG_PATH);
+  // Atomic + fsync (live gateway hot-reloads config.yaml; a partial write corrupts it).
+  safeWriteYaml(CONFIG_PATH, config, { dumpOptions: { lineWidth: -1 } });
 }
 
 /**
  * Build engine-specific CLI args for running a one-shot migration prompt.
  * Each engine CLI uses different flags for prompt input.
  */
-function buildMigrateArgs(engine: string, prompt: string): string[] {
+function writeClaudeMigrateSettings(): { settingsPath: string; tempDir: string } {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-claude-migrate-"));
+  const settingsPath = path.join(tempDir, "settings.json");
+  // safeWrite EXCEPTION (intentional): throwaway file in a fresh mkdtemp, read
+  // once by the spawned CLI then discarded. Atomicity/fsync add nothing here, so
+  // this stays a plain write.
+  fs.writeFileSync(settingsPath, JSON.stringify(CLAUDE_BYPASS_PERMISSIONS_CONSENT_SETTINGS, null, 2), { mode: 0o600 });
+  return { settingsPath, tempDir };
+}
+
+function buildMigrateArgs(engine: string, prompt: string, claudeSettingsPath?: string): string[] {
   switch (engine) {
     case "codex":
       // `codex exec` is Codex's own non-interactive mode (not a claude `-p`).
@@ -98,7 +108,11 @@ function buildMigrateArgs(engine: string, prompt: string): string[] {
       // the turn — the operator closes it (e.g. /exit) once the migration looks
       // complete. Acceptable for a rare maintenance command, and it keeps the
       // call fully subsidy-safe with no trace of `-p`.
-      return ["--dangerously-skip-permissions", prompt];
+      return [
+        "--dangerously-skip-permissions",
+        ...(claudeSettingsPath ? ["--settings", claudeSettingsPath] : []),
+        prompt,
+      ];
   }
 }
 
@@ -183,6 +197,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
   const config = loadConfig();
   const defaultEngine = config.engines.default ?? "claude";
   const engineConfig = config.engines[defaultEngine] ?? config.engines.claude;
+  const claudeMigrateSettings = defaultEngine === "claude" ? writeClaudeMigrateSettings() : undefined;
 
   try {
     const prompt = [
@@ -197,7 +212,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
       `Clean up the migrations/ directory when done.`,
     ].join("\n");
 
-    const args = buildMigrateArgs(defaultEngine, prompt);
+    const args = buildMigrateArgs(defaultEngine, prompt, claudeMigrateSettings?.settingsPath);
     // `bin` may be absent for engines with optional config (e.g. antigravity);
     // fall back to the engine name so spawn resolves via PATH (or fails clearly).
     // Note: antigravity (`agy`) has no headless mode, so migrate is unsupported there.
@@ -214,6 +229,10 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
     console.error(`\n${RED}Migration failed.${RESET} You can retry with: jinn migrate`);
     console.error(`The staged files are still in ${MIGRATIONS_DIR}\n`);
     process.exit(1);
+  } finally {
+    if (claudeMigrateSettings) {
+      fs.rmSync(claudeMigrateSettings.tempDir, { recursive: true, force: true });
+    }
   }
 }
 

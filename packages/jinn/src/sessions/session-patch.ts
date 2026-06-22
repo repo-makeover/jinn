@@ -1,6 +1,63 @@
-import type { JinnConfig } from "../shared/types.js";
+import fs from "node:fs";
+import path from "node:path";
+import type { Employee, JinnConfig } from "../shared/types.js";
 import { getModelRegistry, effortLevelsForModel } from "../shared/models.js";
 import { logger } from "../shared/logger.js";
+
+export interface CwdValidationResult {
+  ok: boolean;
+  /** Realpath-resolved absolute directory when ok. */
+  cwd?: string;
+  error?: string;
+}
+
+/**
+ * Validate a requested working directory for a new session.
+ *
+ * No silent fallback (AGENTS.md "never silently fail"): a missing/invalid/
+ * out-of-bounds path returns `{ ok:false, error }` for the caller to surface as
+ * a 400 — it does NOT quietly revert to JINN_HOME. Resolves realpath first so
+ * `..` traversal and symlinks cannot escape `roots`.
+ *
+ * @param roots Optional allow-list. Empty/omitted = free-browse (any readable
+ *   directory) — appropriate for single-user loopback; operators fronting the
+ *   gateway with SSO should configure `workspaces.roots` to lock this down.
+ */
+export function validateCwd(input: unknown, opts?: { roots?: string[] }): CwdValidationResult {
+  if (typeof input !== "string" || input.trim() === "") {
+    return { ok: false, error: "cwd must be a non-empty string" };
+  }
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(path.resolve(input));
+  } catch {
+    return { ok: false, error: `cwd does not exist: ${input}` };
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    return { ok: false, error: `cwd is not accessible: ${input}` };
+  }
+  if (!stat.isDirectory()) {
+    return { ok: false, error: `cwd is not a directory: ${input}` };
+  }
+  const roots = (opts?.roots ?? []).filter((r) => typeof r === "string" && r.trim() !== "");
+  if (roots.length > 0) {
+    const realRoots = roots.map((r) => {
+      try {
+        return fs.realpathSync(path.resolve(r));
+      } catch {
+        return path.resolve(r);
+      }
+    });
+    const inside = realRoots.some((r) => resolved === r || resolved.startsWith(r + path.sep));
+    if (!inside) {
+      return { ok: false, error: `cwd is outside allowed workspace roots: ${input}` };
+    }
+  }
+  return { ok: true, cwd: resolved };
+}
 
 /**
  * Validate a mid-chat model/effort change for an existing session.
@@ -28,14 +85,38 @@ export interface NewSessionSelectionResult {
   error?: string;
 }
 
+export interface NewSessionSelectionInput {
+  engine?: unknown;
+  model?: unknown;
+  effortLevel?: unknown;
+}
+
 export interface SessionPatchContext {
   engineSessionId?: string | null;
   defaultModel?: string | null;
 }
 
+export function applyEmployeeSessionDefaults(
+  body: NewSessionSelectionInput,
+  employee?: Pick<Employee, "engine" | "model" | "effortLevel">,
+): NewSessionSelectionInput {
+  if (!employee) return body;
+
+  const bodyEngine = typeof body.engine === "string" && body.engine.trim() ? body.engine.trim() : undefined;
+  const employeeEngine = typeof employee.engine === "string" && employee.engine.trim() ? employee.engine.trim() : undefined;
+  const effectiveEngine = bodyEngine ?? employeeEngine;
+  const inheritEmployeeModel = !bodyEngine || bodyEngine === employeeEngine;
+
+  return {
+    engine: body.engine ?? employee.engine,
+    model: body.model ?? (inheritEmployeeModel ? employee.model : undefined),
+    effortLevel: body.effortLevel ?? (effectiveEngine === employeeEngine ? employee.effortLevel : undefined),
+  };
+}
+
 export function validateNewSessionSelection(
   config: JinnConfig,
-  body: { engine?: unknown; model?: unknown; effortLevel?: unknown },
+  body: NewSessionSelectionInput,
 ): NewSessionSelectionResult {
   const registry = getModelRegistry(config);
   let engine: string = config.engines.default;

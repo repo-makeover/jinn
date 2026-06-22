@@ -46,7 +46,7 @@ export interface EngineRunOpts {
   attachments?: string[];
   /** Extra CLI flags to pass to the engine binary (e.g. ["--chrome"]) */
   cliFlags?: string[];
-  /** Path to MCP config JSON file (passed as --mcp-config to Claude Code) */
+  /** Path to resolved Jinn MCP config JSON. Claude gets --mcp-config; Codex gets equivalent -c mcp_servers.* overrides. */
   mcpConfigPath?: string;
   onStream?: (delta: StreamDelta) => void;
   /** Unique Jinn session ID for tracking the spawned process. */
@@ -77,6 +77,54 @@ export interface EngineResult {
    * `resetsAt` is a Unix timestamp in seconds.
    */
   rateLimit?: EngineRateLimitInfo;
+}
+
+export type EngineFailureReason =
+  | "rate_limit"
+  | "quota_exhausted"
+  | "engine_unavailable"
+  | "timeout"
+  | "auth_failure"
+  | "context_overflow"
+  | "unknown";
+
+export type ModelFallbackMode = "ask_user" | "auto" | "never";
+
+export interface ModelFallbackTarget {
+  engine: string;
+  model?: string;
+  effortLevel?: string;
+  employee?: string;
+  reason?: string;
+}
+
+export interface ModelFallbackBehavior {
+  mode?: ModelFallbackMode;
+  triggers?: EngineFailureReason[];
+  preserve_primary_session?: boolean;
+  create_handoff_summary?: boolean;
+  return_to_primary_when_available?: "ask_user" | "auto" | "never" | "stay_on_fallback";
+}
+
+export interface AgentModelPolicy {
+  primary?: ModelFallbackTarget;
+  fallback_chain?: ModelFallbackTarget[];
+  fallback_behavior?: ModelFallbackBehavior;
+}
+
+export interface GlobalModelFallbackConfig {
+  enabled?: boolean;
+  defaultMode?: ModelFallbackMode;
+  globalChain?: ModelFallbackTarget[];
+  triggers?: Partial<Record<EngineFailureReason, boolean>>;
+  handoff?: {
+    createSummary?: boolean;
+    includeArtifacts?: boolean;
+    includeLogs?: boolean;
+    includeOpenQuestions?: boolean;
+    includeRecentTranscriptTurns?: number;
+  };
+  returnPolicy?: { whenPrimaryAvailable?: "ask_user" | "auto" | "never" | "stay_on_fallback" };
 }
 
 export interface EngineRateLimitInfo {
@@ -180,6 +228,9 @@ export interface Session {
   userId?: string | null;
   status: "idle" | "running" | "error" | "waiting" | "interrupted";
   effortLevel: string | null;
+  /** Working directory the engine runs in for this session. NULL/undefined =
+   *  use the default (JINN_HOME). Set at new-chat time (web folder picker). */
+  cwd?: string | null;
   totalCost: number;
   totalTurns: number;
   /** Most recent turn's input-context token count (for the UI context meter). */
@@ -193,6 +244,24 @@ export interface Session {
   createdAt: string;
   lastActivity: string;
   lastError: string | null;
+}
+
+/**
+ * A human approval gate. Generic from day one so future producers (tool-use,
+ * custom gates) need no schema change — only `fallback` is wired as a producer
+ * today (model fallback that requires operator sign-off before switching engine).
+ */
+export interface Approval {
+  id: string;
+  sessionId: string;
+  type: "fallback" | "tool" | "custom";
+  /** Producer-specific. For `fallback`: { from, to, handoffPath, reason }. */
+  payload: JsonObject;
+  state: "pending" | "approved" | "rejected";
+  createdAt: string;
+  resolvedAt?: string | null;
+  /** Who resolved it (SSO identity / "web-user"). */
+  actor?: string | null;
 }
 
 export interface CronJob {
@@ -235,6 +304,8 @@ export interface Employee {
   alwaysNotify?: boolean;
   /** Who this employee reports to. String = single parent. Array = primary + dotted-line (future). */
   reportsTo?: string | string[];
+  /** Optional policy-driven model fallback/backup chain for this employee. */
+  modelPolicy?: AgentModelPolicy;
   /** Services this employee provides to the org */
   provides?: ServiceDeclaration[];
 }
@@ -527,6 +598,13 @@ export type ModelsConfig = Record<string, EngineModelsConfig>;
 
 export interface JinnConfig {
   jinn?: { version?: string };
+  /** Per-chat working-folder selection. Optional; absent = free-browse + JINN_HOME default. */
+  workspaces?: {
+    /** Allow-list of roots a session cwd must resolve inside. Empty/absent = any readable dir. */
+    roots?: string[];
+    /** Default working dir offered in the new-chat picker. Absent = JINN_HOME. */
+    defaultCwd?: string;
+  };
   gateway: {
     port: number;
     host: string;
@@ -573,6 +651,7 @@ export interface JinnConfig {
   };
   logging: { file: boolean; stdout: boolean; level: string };
   mcp?: McpGlobalConfig;
+  modelFallback?: GlobalModelFallbackConfig;
   sessions?: {
     maxDurationMinutes?: number;
     maxCostUsd?: number;

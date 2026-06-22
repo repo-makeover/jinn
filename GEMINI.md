@@ -1,0 +1,8 @@
+# GEMINI.md
+
+The canonical agent contract for this repository is **`AGENTS.md`** at the repo
+root. See `AGENTS.md` and follow it. This file adds no rules of its own.
+
+Governance & compliance: this repo follows the governance and control rules under
+`governance/`, `control/`, and `docs/INDEX.md`. Refer to `AGENTS.md` for all
+governance, validation, and operating rules.

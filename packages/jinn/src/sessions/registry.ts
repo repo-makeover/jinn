@@ -137,6 +137,7 @@ function rowToSession(row: Record<string, unknown>): Session {
     parentSessionId: (row.parent_session_id as string) ?? null,
     userId: (row.user_id as string) ?? null,
     effortLevel: (row.effort_level as string) ?? null,
+    cwd: (row.cwd as string) ?? null,
     status: row.status as Session['status'],
     totalCost: (row.total_cost as number) ?? 0,
     totalTurns: (row.total_turns as number) ?? 0,
@@ -455,6 +456,8 @@ export function migrateSessionsSchema(database: Database.Database): void {
     ['user_id', 'TEXT'],
     // No backfill: pre-existing sessions stay NULL (no excerpt); only new sessions populate it.
     ['prompt_excerpt', 'TEXT'],
+    // NULL = use default working dir (JINN_HOME); existing sessions unaffected.
+    ['cwd', 'TEXT'],
   ];
 
   for (const [name, type, defaultVal] of missingColumns) {
@@ -489,6 +492,8 @@ export interface CreateSessionOpts {
   parentSessionId?: string;
   userId?: string | null;
   effortLevel?: string;
+  /** Working directory for this session's engine runs. Omitted/null = JINN_HOME. */
+  cwd?: string | null;
   /**
    * Optional human-facing excerpt override. When the prompt is scaffolded
    * (e.g. talk delegation wraps the operator's ask in a brief + verbatim
@@ -537,9 +542,9 @@ export function createSession(opts: CreateSessionOpts & { prompt?: string; porta
   const stmt = db.prepare(`
     INSERT INTO sessions (
       id, engine, source, source_ref, connector, session_key, reply_context, message_id, transport_meta,
-      employee, model, title, prompt_excerpt, parent_session_id, user_id, effort_level, status, created_at, last_activity
+      employee, model, title, prompt_excerpt, parent_session_id, user_id, effort_level, cwd, status, created_at, last_activity
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
   `);
   stmt.run(
     id,
@@ -558,6 +563,7 @@ export function createSession(opts: CreateSessionOpts & { prompt?: string; porta
     opts.parentSessionId ?? null,
     opts.userId ?? null,
     opts.effortLevel ?? null,
+    opts.cwd ?? null,
     now,
     now,
   );
@@ -580,6 +586,7 @@ export function createSession(opts: CreateSessionOpts & { prompt?: string; porta
     parentSessionId: opts.parentSessionId ?? null,
     userId: opts.userId ?? null,
     effortLevel: opts.effortLevel ?? null,
+    cwd: opts.cwd ?? null,
     status: 'idle',
     totalCost: 0,
     totalTurns: 0,
@@ -622,10 +629,33 @@ export interface UpdateSessionFields {
   userId?: string | null;
 }
 
+/** The only legal session lifecycle states. Mirrors `Session['status']` in
+ *  shared/types.ts and is enforced at the persistence boundary so a stray /
+ *  caller-supplied string can never be written to the sessions table. */
+export const VALID_SESSION_STATUSES: ReadonlySet<Session['status']> = new Set([
+  'idle',
+  'running',
+  'error',
+  'waiting',
+  'interrupted',
+]);
+
+/** Type guard: true when `status` is a known session lifecycle state. */
+export function isValidSessionStatus(status: unknown): status is Session['status'] {
+  return typeof status === 'string' && VALID_SESSION_STATUSES.has(status as Session['status']);
+}
+
 export function updateSession(id: string, updates: UpdateSessionFields): Session | undefined {
   const db = initDb();
   const sets: string[] = [];
   const values: unknown[] = [];
+
+  // Precondition guard (ST-001): reject illegal status strings before they reach
+  // the database instead of accepting any value. Fails closed — handleApiRequest's
+  // top-level try/catch turns the throw into an error response.
+  if (updates.status !== undefined && !isValidSessionStatus(updates.status)) {
+    throw new Error(`Illegal session status: ${JSON.stringify(updates.status)}`);
+  }
 
   if (updates.engine !== undefined) {
     sets.push('engine = ?');
@@ -691,6 +721,25 @@ export interface ListSessionsFilter {
   status?: Session['status'];
   source?: string;
   engine?: string;
+}
+
+/**
+ * Most-recently-used distinct working directories (for the new-chat folder
+ * picker's "recent" list). NULL cwds (default JINN_HOME sessions) are excluded.
+ */
+export function listRecentCwds(limit = 8): string[] {
+  const db = initDb();
+  const rows = db
+    .prepare(
+      `SELECT cwd, MAX(last_activity) AS last
+         FROM sessions
+        WHERE cwd IS NOT NULL AND cwd != ''
+        GROUP BY cwd
+        ORDER BY last DESC
+        LIMIT ?`,
+    )
+    .all(limit) as Array<{ cwd: string }>;
+  return rows.map((r) => r.cwd);
 }
 
 export function listSessions(filter?: ListSessionsFilter): Session[] {
@@ -913,10 +962,10 @@ export function duplicateSession(sourceId: string, newTitle?: string): { session
       INSERT INTO sessions (
         id, engine, engine_session_id, source, source_ref, connector, session_key,
         reply_context, message_id, transport_meta,
-        employee, model, title, parent_session_id, effort_level, status,
+        employee, model, title, parent_session_id, effort_level, cwd, status,
         total_cost, total_turns, created_at, last_activity
       )
-      VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'idle', 0, 0, ?, ?)
+      VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'idle', 0, 0, ?, ?)
     `).run(
       newId,
       source.engine,
@@ -931,6 +980,7 @@ export function duplicateSession(sourceId: string, newTitle?: string): { session
       source.model,
       title,
       source.effortLevel,
+      source.cwd ?? null,
       now,
       now,
     );

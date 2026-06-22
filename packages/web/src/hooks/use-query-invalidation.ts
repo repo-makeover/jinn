@@ -23,9 +23,11 @@ export function useQueryInvalidation() {
       switch (event) {
         case 'session:started':
           pendingRef.current.add('sessions')
+          pendingRef.current.add('work')
           break
         case 'session:updated':
           pendingRef.current.add('sessions')
+          pendingRef.current.add('work')
           if (p?.sessionId) {
             qc.invalidateQueries({ queryKey: queryKeys.sessions.detail(p.sessionId as string) })
           }
@@ -53,6 +55,21 @@ export function useQueryInvalidation() {
         case 'session:completed':
         case 'session:error':
           pendingRef.current.add('sessions')
+          pendingRef.current.add('work')
+          if (p?.sessionId) {
+            qc.invalidateQueries({ queryKey: queryKeys.sessions.detail(p.sessionId as string) })
+          }
+          break
+        // Feature 1: model-fallback approval lifecycle. Previously these events
+        // fell through to the no-op default, so a session that hit a rate limit
+        // and asked for approval would silently stall in the UI. Now they refresh
+        // the approvals queue + the sessions list (status flips waiting↔running/error).
+        case 'session:fallback-required':
+        case 'approval:created':
+        case 'approval:resolved':
+          pendingRef.current.add('approvals')
+          pendingRef.current.add('sessions')
+          pendingRef.current.add('work')
           if (p?.sessionId) {
             qc.invalidateQueries({ queryKey: queryKeys.sessions.detail(p.sessionId as string) })
           }
@@ -101,6 +118,12 @@ export function useQueryInvalidation() {
               break
             case 'engines':
               qc.invalidateQueries({ queryKey: queryKeys.engines.all })
+              break
+            case 'approvals':
+              qc.invalidateQueries({ queryKey: queryKeys.approvals.all })
+              break
+            case 'work':
+              qc.invalidateQueries({ queryKey: queryKeys.work.all })
               break
             case 'config':
               qc.invalidateQueries({ queryKey: queryKeys.config })

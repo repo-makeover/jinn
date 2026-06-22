@@ -23,6 +23,12 @@ export const queryKeys = {
   engines: {
     all: ['engines'] as const,
   },
+  approvals: {
+    all: ['approvals'] as const,
+  },
+  work: {
+    all: ['work'] as const,
+  },
   config: ['config'] as const,
   status: ['status'] as const,
 } as const

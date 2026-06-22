@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { codexMcpConfigFlagsFromFile } from "../mcp/resolver.js";
 
 const CODEX_SESSIONS_DIR = path.join(os.homedir(), ".codex", "sessions");
 
@@ -405,6 +406,7 @@ export class CodexEngine implements InterruptibleEngine {
     if (opts.effortLevel && opts.effortLevel !== "default") args.push("-c", `model_reasoning_effort="${opts.effortLevel}"`);
     args.push("--json", "--color", "never", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
     if (opts.cwd) args.push("-C", opts.cwd);
+    args.push(...codexMcpConfigFlagsFromFile(opts.mcpConfigPath));
     args.push(...codexCliFlags(opts.cliFlags));
     args.push(prompt);
     return args;
@@ -415,6 +417,7 @@ export class CodexEngine implements InterruptibleEngine {
     if (opts.model) args.push("--model", opts.model);
     if (opts.effortLevel && opts.effortLevel !== "default") args.push("-c", `model_reasoning_effort="${opts.effortLevel}"`);
     args.push("--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
+    args.push(...codexMcpConfigFlagsFromFile(opts.mcpConfigPath));
     args.push(...codexCliFlags(opts.cliFlags));
     args.push(opts.resumeSessionId!);
     args.push(prompt);

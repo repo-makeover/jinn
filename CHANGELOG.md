@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased]
+
+### 💥 Breaking
+- **Node.js 24 is now required** (`engines.node` raised from `>=22` to `>=24`; `.nvmrc` pins `24.13.0`). The bundled native modules (`better-sqlite3`, `node-pty`) are built against the Node 24 ABI, so running on Node 22 fails. README and CONTRIBUTING prerequisites updated to match.
+
+### ⚡ Performance / Reliability
+- **Engine lifecycle & queue hardening.** Another pass on interactive-engine teardown and per-session work queues to further reduce leaked process state and stuck turns.
+
+### 🪄 Docs
+- Refreshed the README showcase GIF and added a **showcase video-capture** skill playbook (mock/sandbox instance recording, Playwright capture, WebM→MP4/GIF conversion).
+
+## [0.21.1] - 2026-06-17
+
+### 🪄 Docs
+- **npm discoverability.** Added a dedicated `jinn-cli` package README plus `keywords`, `homepage`, and `repository` metadata so the package surfaces in npm search.
+
+### 🐛 Fixes
+- Typed the `applyEngineChoice` test inputs so `tsc --noEmit` passes cleanly.
+
+## [0.21.0] - 2026-06-17
+
+> Engines and onboarding grow up: the **Grok** interactive-PTY engine lands end-to-end, a new **engine limits** surface (CLI + web page + backend telemetry) shows rate limits and quota windows for Claude and Codex, a **gamified onboarding wizard** seeds your first employee/delegation/cron, and the web dashboard gets a universal **Ribbon** nav plus a Claude-app chat redesign. Rounded out with per-message read-aloud, security hardening, and a Node version pin.
+
+### ✨ Features
+- **Grok engine (`grok`).** New interactive-PTY engine driven like Claude (subscription-billed, so every turn runs the real interactive `grok` binary inside a PTY). Model + effort support is discovered from the CLI; mid-turn **progress** is surfaced (not raw reasoning/thoughts), the answer is emitted exactly once, and turns settle reliably via reconcile + terminal-event gating.
+- **Engine limits surface.** New `jinn limits` CLI, a redesigned **Limits** web page, and backend telemetry expose engine rate limits, quota windows, and model capabilities for Claude and Codex. Codex limits are read from the session rollout (no spawn race); the page reports honest data freshness.
+- **Gamified onboarding wizard.** A multi-beat setup flow with a genie mascot walks a fresh install through hatching its first employee, demoing delegation, and creating a first cron job. The wizard includes an **engine / model / effort picker** (driven by the config registry, no clobbering of a non-Claude default engine) and auto-launches the COO setup chat; `completeOnboarding` persists the chosen engine/model/effort as the global default. Setup state is tracked separately from wizard state (`portal.setupComplete` vs `onboarded`).
+- **Universal Ribbon navigation.** A global desktop **Ribbon** is now the single left nav across every page; the legacy left rail and per-page header bars were retired in favor of a shared **PillNav** system. The Ribbon's Chat icon opens a foldable Chat List, breadcrumb/page titles render in the pill, and mobile gets an icons-only tab bar.
+- **Per-message read-aloud.** Any chat message can be played back (play/pause) using **Kokoro** neural TTS with a **Web Speech** fallback. Audio is streamed per sentence, cutting time-to-first-audio from ~11s to ~1s.
+- **Chat redesign (Claude-app aesthetic).** Borderless frosted composer + model selector, rebuilt scroll-to-bottom (`useStickToBottom`, fixes streaming detach), a focused Today/Yesterday sidebar with a user-initiated default filter and an **All** toggle, collapsible long user messages (Show more/less), in-place engine switching from the model menu, and a "+New employee" picker.
+
+### ⚡ Performance / Reliability
+- **Engine lifecycle & queue hardening** across interactive engines; **org-reload now recycles only idle PTYs** so writing to `org/` never kills an in-flight web session.
+- **Codex** batch turns settle on a terminal event with a timeout backstop (same hang class fixed for Grok); **Claude** transcript duplicate-sync fixed and `/usage` / `/limits` no longer duplicate the previous assistant message.
+
+### 🔒 Security / Privacy
+- **Local gateway security surfaces hardened** and public privacy leaks scrubbed from shipped source.
+- **Same-origin gateway access over Tailscale/LAN** is now allowed (so the dashboard works across your tailnet) without opening cross-origin holes.
+
+### 🛠️ Build / CI
+- **Pinned dev Node to 24.13.0** (`.nvmrc` tracked) to stop the `better-sqlite3` ABI mismatch; CI runs on the pinned Node and the lockfile syncs `@vitest/coverage-v8`. Added vitest coverage and wired in previously-untracked test files.
+
 ## [0.20.0] - 2026-06-11
 
 > Talk becomes a real delegation workspace: searchable session memory, server-owned delegation graphs, persistent conversation flow, and live work rails. The gateway also gets a stability pass for interactive engines, stuck-session recovery, restart safety, and context telemetry.

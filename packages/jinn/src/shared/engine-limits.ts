@@ -13,6 +13,7 @@ import type {
 import { CLAUDE_LIMITS_DIR } from "./paths.js";
 import { getModelRegistry } from "./models.js";
 import { resolveBin } from "./resolve-bin.js";
+import { DEFAULT_PI_MESSAGES_PER_MINUTE, getPiThrottleSnapshot } from "./pi-throttle.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -426,6 +427,30 @@ function collectUnsupported(config: JinnConfig, engine: string, reason: string):
   };
 }
 
+function collectPiLimits(config: JinnConfig): EngineLimitEngineSnapshot {
+  const snap = baseSnapshot(config, "pi");
+  if (!snap.available) {
+    return collectUnsupported(config, "pi", "Pi CLI is not installed or no Pi models are configured.");
+  }
+
+  const throttle = getPiThrottleSnapshot({ messagesPerMinute: DEFAULT_PI_MESSAGES_PER_MINUTE });
+  const resetsAt = throttle.resetsAtMs ? Math.floor(throttle.resetsAtMs / 1000) : undefined;
+  return {
+    ...snap,
+    status: "snapshot",
+    source: "local Jinn throttle for Purdue GenAI / Pi",
+    accountPlan: `Conservative local cap: ${DEFAULT_PI_MESSAGES_PER_MINUTE} messages/minute`,
+    windows: [{
+      name: "1m local throttle",
+      usedPercent: throttle.usedPercent,
+      windowDurationMins: 1,
+      resetsAt,
+      resetsAtIso: isoFromSeconds(resetsAt),
+    }],
+    unsupportedReason: "Purdue GenAI / Pi has short-window message limits; Jinn conservatively spaces Pi starts at 10 messages/minute. No aggregate account quota endpoint is available.",
+  };
+}
+
 export async function collectEngineLimits(
   config: JinnConfig,
   opts: CollectEngineLimitsOptions = {},
@@ -463,11 +488,7 @@ export async function collectEngineLimits(
         unsupportedReason: "Antigravity exposes plan windows and G1 credit controls through the interactive `/credits` and `/settings` UI, but no stable non-interactive JSON quota endpoint was found.",
       };
     } else if (name === "pi") {
-      engines[name] = collectUnsupported(
-        config,
-        name,
-        "Pi exposes model capabilities and per-session usage, but no aggregate account quota endpoint.",
-      );
+      engines[name] = collectPiLimits(config);
     } else if (name === "grok") {
       engines[name] = collectUnsupported(
         config,

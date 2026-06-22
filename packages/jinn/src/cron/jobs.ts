@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CronJob } from "../shared/types.js";
 import { CRON_JOBS, CRON_RUNS } from "../shared/paths.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 import { logger } from "../shared/logger.js";
 
 export function loadJobs(): CronJob[] {
@@ -36,12 +37,10 @@ export function loadJobs(): CronJob[] {
 }
 
 export function saveJobs(jobs: CronJob[]): void {
-  const dir = path.dirname(CRON_JOBS);
-  fs.mkdirSync(dir, { recursive: true });
-  // Atomic write: tmp file + rename so a crash mid-write can't corrupt jobs.json.
-  const tmpPath = `${CRON_JOBS}.tmp-${process.pid}`;
-  fs.writeFileSync(tmpPath, JSON.stringify(jobs, null, 2) + "\n", "utf-8");
-  fs.renameSync(tmpPath, CRON_JOBS);
+  // Atomic + fsync-durable + audited (canonical, low-churn state).
+  safeWriteFile(CRON_JOBS, JSON.stringify(jobs, null, 2) + "\n", {
+    audit: { actor: "gateway", op: "cron.save" },
+  });
 }
 
 export function appendRunLog(jobId: string, entry: object): void {

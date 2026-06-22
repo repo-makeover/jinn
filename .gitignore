@@ -11,3 +11,29 @@ test-results/
 packages/jinn/.npmrc
 .worktrees/
 .DS_Store
+
+# Local agent/session tooling artifacts — never published
+.dory/
+.giles/
+.remember/
+.playwright-mcp/
+
+# Activity logs, audits, and session logs are local-only artifacts
+logs/
+docs/logs/
+docs/audits/
+docs/modularity-logs/
+docs/patch-logs/
+
+# Volatile per-scan governance registries (regenerable; not tracked)
+governance/logs/agent_activity_registry.json
+governance/logs/bug_registry.json
+governance/logs/config_deviation_registry.json
+governance/logs/doc_drift_registry.json
+
+# Skills — ignore locally-added skills, but keep the ones from the original repo
+.agents/skills/*
+.claude/skills/*
+!.agents/skills/showcase-video-capture/
+!.claude/skills/release-jinn-cli/
+!.claude/skills/showcase-video-capture/

@@ -16,6 +16,10 @@ export const JINN_HOME = resolveHome();
 export const CONFIG_PATH = path.join(JINN_HOME, "config.yaml");
 export const SESSIONS_DB = path.join(JINN_HOME, "sessions", "registry.db");
 export const CRON_JOBS = path.join(JINN_HOME, "cron", "jobs.json");
+/** Hash-chained, append-only integrity ledger for safe-write file mutations. */
+export const AUDIT_LOG = path.join(JINN_HOME, "audit.jsonl");
+/** Persisted approval queue (model-fallback + future tool/custom approvals). */
+export const APPROVALS_FILE = path.join(JINN_HOME, "approvals.json");
 export const CRON_RUNS = path.join(JINN_HOME, "cron", "runs");
 export const ORG_DIR = path.join(JINN_HOME, "org");
 export const SKILLS_DIR = path.join(JINN_HOME, "skills");

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { convertOutsideCode, formatAndChunk } from "../shared/format.js";
+import { safeWriteFile } from "../../shared/safe-write.js";
 
 const SLACK_MAX_LENGTH = 3000;
 
@@ -61,7 +62,7 @@ export async function downloadAttachment(
   const localPath = path.join(destDir, filename);
 
   const buffer = Buffer.from(await response.arrayBuffer());
-  fs.writeFileSync(localPath, buffer);
+  safeWriteFile(localPath, buffer, { fsync: false }); // atomic media write; durability unneeded
 
   return localPath;
 }

@@ -6,6 +6,7 @@ import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared
 import { logger } from "../shared/logger.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { JINN_HOME } from "../shared/paths.js";
+import { acquirePiMessageSlot, DEFAULT_PI_MESSAGES_PER_MINUTE } from "../shared/pi-throttle.js";
 
 interface LiveProcess {
   proc: ChildProcess;
@@ -28,8 +29,8 @@ const AGENT_END_EXIT_GRACE_MS = 5000;
 /**
  * Pi coding agent (https://pi.dev) run headlessly against a local model.
  *
- * Invocation: `pi --provider <p> --model <id> -p --mode json [--thinking <lvl>] \
- *   --session-id <id> --session-dir <dir> "<prompt>"`.
+ * Invocation: `pi --provider <p> --model <id> -p --mode json [--system-prompt ...] \
+ *   [--thinking <lvl>] --session-id <id> --session-dir <dir> "<prompt>"`.
  *
  * Pi emits one JSON event per stdout line and exits when the run ends. The final
  * assistant answer is the last `text` block of the last assistant message in the
@@ -95,9 +96,6 @@ export class PiEngine implements InterruptibleEngine {
     const piSessionId = opts.resumeSessionId || trackingId;
 
     let prompt = opts.prompt;
-    if (opts.systemPrompt && !opts.resumeSessionId) {
-      prompt = opts.systemPrompt + "\n\n---\n\n" + prompt;
-    }
     if (opts.attachments?.length) {
       prompt += "\n\nAttached files:\n" + opts.attachments.map((a) => `- ${a}`).join("\n");
     }
@@ -127,6 +125,9 @@ export class PiEngine implements InterruptibleEngine {
     const args: string[] = [];
     if (provider) args.push("--provider", provider);
     args.push("--model", model, "-p", "--mode", "json");
+    if (opts.systemPrompt && !opts.resumeSessionId) {
+      args.push("--system-prompt", opts.systemPrompt);
+    }
     // Effort → Pi thinking level. Only reasoning-capable models ever carry an
     // effort level (the registry exposes effortLevels for those models only), so
     // passing it through verbatim is safe — mirrors codex/claude.
@@ -142,6 +143,14 @@ export class PiEngine implements InterruptibleEngine {
         `${opts.effortLevel && opts.effortLevel !== "default" ? ` --thinking ${opts.effortLevel}` : ""}` +
         ` (resume: ${opts.resumeSessionId || "none"})`,
     );
+
+    const throttleSlot = await acquirePiMessageSlot();
+    if (throttleSlot.waitedMs > 0) {
+      logger.info(
+        `Pi local throttle waited ${Math.ceil(throttleSlot.waitedMs / 1000)}s ` +
+          `(limit: ${DEFAULT_PI_MESSAGES_PER_MINUTE} messages/minute)`,
+      );
+    }
 
     const cleanEnv = this.buildCleanEnv();
 

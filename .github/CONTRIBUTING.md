@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This guide covers the basics.
 
 ## Prerequisites
 
-- Node.js 22 or later
+- Node.js 24 or later (the repo pins 24.13.0 via `.nvmrc`)
 - pnpm 10+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm install -g @anthropic-ai/claude-code`)
 

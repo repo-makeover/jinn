@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import { ORG_DIR } from "../shared/paths.js";
+import { safeWriteYaml } from "../shared/safe-write.js";
 import type { Employee, JinnConfig } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { getModelRegistry, effortLevelsForModel } from "../shared/models.js";
@@ -59,6 +60,7 @@ export function scanOrg(): Map<string, Employee> {
           alwaysNotify: typeof data.alwaysNotify === "boolean" ? data.alwaysNotify : true,
           reportsTo: data.reportsTo ?? undefined,
           mcp: data.mcp ?? undefined,
+          modelPolicy: (data.model_policy && typeof data.model_policy === "object") ? data.model_policy : ((data.modelPolicy && typeof data.modelPolicy === "object") ? data.modelPolicy : undefined),
           provides: Array.isArray(data.provides)
             ? data.provides.filter((s: unknown) => s && typeof s === "object" && typeof (s as any).name === "string" && typeof (s as any).description === "string")
               .map((s: any) => ({ name: s.name as string, description: s.description as string }))
@@ -303,7 +305,7 @@ export function updateEmployeeYaml(
     }
     // `name` is immutable — never write or rename it, even if present in `updates`.
 
-    fs.writeFileSync(filePath, yaml.dump(data, { lineWidth: -1 }), "utf-8");
+    safeWriteYaml(filePath, data, { dumpOptions: { lineWidth: -1 }, audit: { actor: "gateway", op: "org.employee.save" } });
     return true;
   } catch (err) {
     logger.warn(`Failed to update employee YAML for ${name}: ${err}`);

@@ -279,8 +279,52 @@ export type TalkDelegateResult =
   | { ok: true; threadId: string; attached: true; mode: "observe" | "engage" }
   | { ok: true; threadId: string; detached: true }
 
+export interface Approval {
+  id: string
+  sessionId: string
+  type: 'fallback' | 'tool' | 'custom'
+  payload: Record<string, unknown>
+  state: 'pending' | 'approved' | 'rejected'
+  createdAt: string
+  resolvedAt?: string | null
+  actor?: string | null
+}
+
+export type WorkState =
+  | 'queued' | 'running' | 'waiting_on_human' | 'blocked' | 'completed' | 'failed'
+
+export interface WorkItem {
+  sessionId: string
+  employee: string | null
+  dept: string | null
+  workState: WorkState
+  title: string | null
+}
+
+export interface WorkOverview {
+  counts: Record<WorkState, number>
+  items: WorkItem[]
+}
+
+export interface FsEntry { name: string; isDir: boolean }
+export interface FsListResult { path: string; parent: string | null; entries: FsEntry[] }
+export interface FsRecent { default: string; recent: string[] }
+
 export const api = {
   getStatus: () => get<Record<string, unknown>>("/api/status"),
+  /** Working-folder picker: list subdirectories of a path (dirs only). */
+  fsList: (p?: string) => get<FsListResult>(`/api/fs/list${p ? `?path=${encodeURIComponent(p)}` : ""}`),
+  /** Working-folder picker: default dir + most-recently-used working dirs. */
+  fsRecent: () => get<FsRecent>("/api/fs/recent"),
+  /** Feature 2: normalized work-state across all sessions. */
+  getWork: () => get<WorkOverview>("/api/work"),
+  /** Feature 1: human approval queue (model-fallback gates). */
+  getApprovals: (state: 'pending' | 'approved' | 'rejected' | 'all' = 'pending') =>
+    get<Approval[]>(`/api/approvals?state=${state}`),
+  approveApproval: (id: string) =>
+    post<{ approval: Approval; session?: Record<string, unknown> }>(`/api/approvals/${id}/approve`, {}),
+  rejectApproval: (id: string) =>
+    post<{ approval: Approval }>(`/api/approvals/${id}/reject`, {}),
   /** Resolved model + capability registry (engines, their models, effort levels). */
   getEngines: () => get<EnginesResponse>("/api/engines"),
   /** Force re-discovery of dynamic (pi) models, returning the rebuilt registry. */

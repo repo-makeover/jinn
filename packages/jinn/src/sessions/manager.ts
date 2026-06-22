@@ -299,7 +299,7 @@ export class SessionManager {
         (this.config.engines as unknown as Record<string, { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string } | undefined>)[
           session.engine
         ] ?? {};
-      if (session.engine === "claude") {
+      if (session.engine === "claude" || session.engine === "codex") {
         const mcpConfig = resolveMcpServers(this.config.mcp, employee);
         if (Object.keys(mcpConfig.mcpServers).length > 0) {
           mcpConfigPath = writeMcpConfigFile(mcpConfig, session.id);
@@ -387,7 +387,7 @@ export class SessionManager {
         prompt: promptToRun,
         resumeSessionId: session.engineSessionId ?? undefined,
         systemPrompt,
-        cwd: JINN_HOME,
+        cwd: session.cwd || JINN_HOME,
         bin: engineConfig.bin,
         model: session.model ?? engineConfig.model,
         effortLevel,

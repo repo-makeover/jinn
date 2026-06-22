@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { JINN_HOME } from "./paths.js";
+import { safeWriteFile } from "./safe-write.js";
 
 interface ClaudeUsageState {
   lastRateLimitAt?: string; // ISO
@@ -37,9 +38,7 @@ export function recordClaudeRateLimit(resetsAtSeconds?: number): void {
 
   try {
     ensureStateDir();
-    const tmp = `${STATE_PATH}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(next, null, 2), "utf-8");
-    fs.renameSync(tmp, STATE_PATH);
+    safeWriteFile(STATE_PATH, JSON.stringify(next, null, 2)); // atomic + fsync; best-effort (no audit)
   } catch {
     // best-effort only
   }

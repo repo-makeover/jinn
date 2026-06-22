@@ -295,6 +295,24 @@ describe("CodexEngine — systemPrompt / developer_instructions injection", () =
     expect(call.args).not.toContain("--chrome");
     expect(call.args).toContain("prev-thread");
   });
+
+  it("passes Jinn MCP config to Codex as mcp_servers overrides", async () => {
+    const mcpConfigPath = path.join(os.tmpdir(), `codex-mcp-${Date.now()}.json`);
+    fs.writeFileSync(mcpConfigPath, JSON.stringify({
+      mcpServers: {
+        browser: { command: "npx", args: ["-y", "@playwright/mcp@latest"] },
+      },
+    }));
+
+    const { call } = await runWith(
+      { mcpConfigPath },
+      [threadStarted("t1"), agentMessage("ok")],
+    );
+
+    expect(call.args).toContain("-c");
+    expect(call.args).toContain('mcp_servers.browser.command="npx"');
+    expect(call.args).toContain('mcp_servers.browser.args=["-y", "@playwright/mcp@latest"]');
+  });
 });
 
 describe("CodexEngine — usage / context-token extraction", () => {

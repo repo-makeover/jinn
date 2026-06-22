@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { safeWriteFile } from "../shared/safe-write.js";
 import {
   loadInstances,
   saveInstances,
@@ -74,7 +75,7 @@ export async function runCreate(name: string, port?: number): Promise<void> {
     if (config.includes("portal: {}")) {
       config = config.replace("portal: {}", `portal:\n  portalName: "${displayName}"`);
     }
-    fs.writeFileSync(configPath, config);
+    safeWriteFile(configPath, config); // atomic + fsync (new instance config)
   }
 
   // Register the instance

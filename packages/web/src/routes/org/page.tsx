@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState, useRef, useCallback } from "react"
 import { api } from "@/lib/api";
 import type { Employee, OrgData, OrgHierarchy } from "@/lib/api";
 import { EmployeeDetail } from "@/components/org/employee-detail";
+import { WorkSummary } from "@/components/org/work-summary";
 import { PageLayout } from "@/components/page-layout";
 import { useSettings } from "@/routes/settings-provider";
 import { useBreadcrumbs } from "@/context/breadcrumb-context";
@@ -107,6 +108,10 @@ export default function OrgPage() {
       <div className="flex h-full relative bg-[var(--bg)]">
         {/* Map (the only view) */}
         <div className="flex-1 h-full relative">
+          {/* Feature 2: live work-state strip overlaying the top of the map. */}
+          <div className="absolute top-0 left-0 z-20 max-w-full overflow-x-auto bg-gradient-to-b from-[var(--bg)] to-transparent">
+            <WorkSummary />
+          </div>
           {loading ? (
             <div className="flex items-center justify-center h-full text-[var(--text-tertiary)] text-[length:var(--text-caption1)]">
               Loading...

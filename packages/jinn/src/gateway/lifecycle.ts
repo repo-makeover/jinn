@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { safeWriteFile } from "../shared/safe-write.js";
 import { PID_FILE, JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
@@ -54,7 +55,7 @@ export function startDaemon(config: JinnConfig): void {
 
   if (child.pid) {
     fs.mkdirSync(path.dirname(PID_FILE), { recursive: true });
-    fs.writeFileSync(PID_FILE, String(child.pid));
+    safeWriteFile(PID_FILE, String(child.pid), { fsync: false }); // atomic; durability unneeded for a pid file
     logger.info(`Gateway daemon started with PID ${child.pid}`);
   }
 

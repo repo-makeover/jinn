@@ -11,6 +11,10 @@ vi.mock("../../shared/paths.js", () => ({
   get ORG_DIR() {
     return tmpDir;
   },
+  // safeWriteYaml(audit) appends to AUDIT_LOG; keep it inside the temp dir.
+  get AUDIT_LOG() {
+    return path.join(tmpDir, "audit.jsonl");
+  },
 }));
 
 vi.mock("../../shared/logger.js", () => ({

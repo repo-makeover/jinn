@@ -24,7 +24,7 @@ import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { HookRegistry } from "./hook-registry.js";
 import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids } from "./gateway-info.js";
 import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js";
-import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR } from "../shared/paths.js";
+import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR, ORG_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { startStatusReconciler } from "./status-reconciler.js";
 import { syncExternalTurn } from "./external-turns.js";
@@ -42,6 +42,7 @@ import { TelegramConnector } from "../connectors/telegram/index.js";
 import { loadJobs } from "../cron/jobs.js";
 import { startScheduler, reloadScheduler, stopScheduler } from "../cron/scheduler.js";
 import { scanOrg } from "./org.js";
+import { syncBoardForEvent } from "./board-sync.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -127,19 +128,22 @@ function serveStatic(
   }
 
   // Hashed assets (Vite emits /assets/<name>-<hash>.<ext>) are content-addressed
-  // — safe to cache forever. Everything else (index.html, root files) must
-  // revalidate so the user picks up new hash refs after a deploy. Without this,
-  // iOS Safari over Tailscale caches HTML indefinitely and serves stale JS/CSS.
+  // — safe to cache forever. The HTML shell + root files use `no-store` (not just
+  // `no-cache`) so a back-forward / session-restored tab — e.g. after a reboot, or
+  // iOS Safari over Tailscale — can never reuse a stale shell that points at old
+  // hashed JS/CSS. `no-cache` still lets the browser store and replay the response
+  // without revalidating in those paths; `no-store` forces a fresh fetch of
+  // index.html every load, so the current asset hashes are always picked up.
   const isHashedAsset = urlPath.startsWith("/assets/");
   const cacheControl = isHashedAsset
     ? "public, max-age=31536000, immutable"
-    : "no-cache";
+    : "no-store";
 
   if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) {
     // SPA fallback to index.html for client-side routing
     const indexPath = path.join(webDir, "index.html");
     if (fs.existsSync(indexPath)) {
-      res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" });
+      res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
       fs.createReadStream(indexPath).pipe(res);
       return true;
     }
@@ -736,6 +740,25 @@ export async function startGateway(
           logger.warn(`WebSocket send failed, removing dead client: ${err instanceof Error ? err.message : err}`);
           wsClients.delete(client);
         }
+      }
+    }
+    // Auto-reflect running jobs on the department Kanban. Catches every session
+    // lifecycle emit (web/talk/cron/manager/reconciler) at this single chokepoint.
+    // Fire-and-forget; never let a board write break the broadcast. `board:updated`
+    // is re-emitted (not a session event) so this does not recurse.
+    if (
+      event === "session:started" || event === "session:completed" ||
+      event === "session:fallback-required" || event === "approval:resolved"
+    ) {
+      try {
+        syncBoardForEvent(event, payload, {
+          getSession,
+          resolveDepartment: (name) => employeeRegistry.get(name)?.department,
+          orgDir: ORG_DIR,
+          emit,
+        });
+      } catch (err) {
+        logger.warn(`[board-sync] failed for ${event}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   };

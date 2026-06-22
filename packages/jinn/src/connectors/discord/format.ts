@@ -15,12 +15,13 @@ export async function downloadAttachment(
   destDir: string,
   filename: string,
 ): Promise<string> {
-  const { default: fs } = await import("node:fs");
   const { default: path } = await import("node:path");
+  const { safeWriteFile } = await import("../../shared/safe-write.js");
   const destPath = path.join(destDir, filename);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download attachment: ${res.status}`);
   const buffer = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(destPath, buffer);
+  // Atomic (no torn media served); fsync:false — a lost download just re-fetches.
+  safeWriteFile(destPath, buffer, { fsync: false });
   return destPath;
 }

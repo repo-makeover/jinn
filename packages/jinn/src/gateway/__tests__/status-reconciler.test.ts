@@ -122,12 +122,27 @@ describe("status reconciler sweepOnce", () => {
     expect(rec.sweepOnce(deps)).toBe(1); // now fixed
   });
 
-  it("clears lastError and restamps lastActivity on fix", () => {
+  it("records a stall error and restamps lastActivity on fix", () => {
     insert("stuck-meta", "running", iso(120_000));
     db.prepare("UPDATE sessions SET last_error = 'boom' WHERE id = ?").run("stuck-meta");
     rec.sweepOnce({ engines: new Map(), emit: () => {}, now: () => NOW });
     const s = reg.getSession("stuck-meta");
-    expect(s?.lastError ?? null).toBeNull();
+    // Evidence preserved (not nulled): a stuck reset is a stall, not a clean finish.
+    expect(s?.lastError ?? "").toMatch(/^Stalled:/);
     expect(new Date(s!.lastActivity).getTime()).toBe(NOW);
+  });
+
+  it("surfaces the stall on the completion event so consumers can act on it", () => {
+    insert("stuck-evt", "running", iso(120_000));
+    const events: any[] = [];
+    rec.sweepOnce({
+      engines: new Map([["claude", fakeEngine(false)]]),
+      emit: (event, payload) => events.push({ event, payload }),
+      now: () => NOW,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBe("session:completed");
+    expect(events[0].payload).toMatchObject({ sessionId: "stuck-evt", stalled: true });
+    expect(events[0].payload.error).toMatch(/^Stalled:/);
   });
 });

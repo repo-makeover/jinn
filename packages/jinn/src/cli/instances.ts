@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { INSTANCES_REGISTRY, TEMPLATE_DIR } from "../shared/paths.js";
+import { safeWriteFile } from "../shared/safe-write.js";
 
 export interface Instance {
   name: string;
@@ -21,7 +22,9 @@ export function loadInstances(): Instance[] {
 
 export function saveInstances(instances: Instance[]): void {
   fs.mkdirSync(path.dirname(INSTANCES_REGISTRY), { recursive: true });
-  fs.writeFileSync(INSTANCES_REGISTRY, JSON.stringify(instances, null, 2) + "\n");
+  safeWriteFile(INSTANCES_REGISTRY, JSON.stringify(instances, null, 2) + "\n", {
+    audit: { actor: "cli", op: "instances.save" },
+  });
 }
 
 /** Find the next available port starting from 7777, skipping ports already used by instances. */
