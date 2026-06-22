@@ -155,11 +155,12 @@ export function buildContext(opts: {
     });
   }
 
-  // ── STANDARD: Onboarding (gated on portal.onboarded) ────────
+  // ── STANDARD: Onboarding (gated on portal setup completion) ────────
   // Steady-state self-evolution guidance lives in CLAUDE.md/AGENTS.md (auto-loaded).
   // Only the dynamic onboarding flow for a fresh install is emitted here.
   if (!opts.employee) {
-    const setupComplete = opts.config?.portal?.setupComplete === true;
+    const portal = opts.config?.portal;
+    const setupComplete = portal?.setupComplete === true || portal?.onboarded === true;
     const onboarding = buildOnboardingContext({ portalName, operatorName, setupComplete });
     if (onboarding) {
       sections.push({
@@ -690,6 +691,7 @@ function buildEnvironmentContext(): string | null {
 
 /**
  * Operator-aware onboarding directive, gated on portal.setupComplete.
+ * Legacy installs that only have portal.onboarded are handled by buildContext.
  * Returns null once the setup conversation is complete — no repeat noise on steady-state sessions.
  */
 export function buildOnboardingContext(opts: {
