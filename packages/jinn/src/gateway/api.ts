@@ -1,28 +1,24 @@
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
-import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import type { ArchiveKind, CronJob, Engine, IncomingMessage, JinnConfig, JsonObject, Session, Target } from "../shared/types.js";
+import type { CronJob, Engine, IncomingMessage, JinnConfig, JsonObject, Session, Target } from "../shared/types.js";
 import { isInterruptibleEngine } from "../shared/types.js";
 import { getModelRegistry, invalidateModelRegistry, refreshGrokModels, refreshPiModels } from "../shared/models.js";
 import { applyEmployeeSessionDefaults, validateNewSessionSelection, validateSessionPatch, validateCwd } from "../sessions/session-patch.js";
 import { getApproval, listApprovals, resolveApproval } from "./approvals.js";
-import { deriveWorkState, emptyWorkCounts } from "../shared/work-state.js";
 import { listDirectory, FsBrowseError } from "./fs-browse.js";
 import { safeWriteFile } from "../shared/safe-write.js";
-import type { SessionManager } from "../sessions/manager.js";
-import { listSessions, listRecentCwds, listRecentPerGroup, listSessionsForGroup, getSessionGroupCounts, coercePortalEmployee, searchSessions, listChildSessions, getSession, createSession, updateSession, patchSessionTransportMeta, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, getMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
+import { listSessions, listRecentCwds, coercePortalEmployee, getSession, createSession, updateSession, patchSessionTransportMeta, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
-import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR, FILES_DIR } from "../shared/paths.js";
+import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR } from "../shared/paths.js";
 import { saveConfigAtomic, validateConfigShape } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import { getSttStatus, downloadModel, transcribe as sttTranscribe, resolveLanguages, WHISPER_LANGUAGES } from "../stt/stt.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { getClaudeExpectedResetAt } from "../shared/usageAwareness.js";
 import { collectEngineLimits } from "../shared/engine-limits.js";
-import { pickEncoding, compressBuffer, MIN_COMPRESS_BYTES } from "./compress.js";
 import { loadJobs, saveJobs } from "../cron/jobs.js";
 import { reloadScheduler, startCronJobRun } from "../cron/scheduler.js";
 import { buildCronJob, patchCronJob } from "../cron/validation.js";
@@ -34,224 +30,42 @@ import { readJsonlTail } from "./jsonl-tail.js";
 import { notifyParentSession, notifyAttachedTalkSessions } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
 import { handleHookPost, isLoopback } from "./hook-endpoint.js";
-import { scheduleOnLoadTailSync } from "./external-turns.js";
 import { handleTalkApi } from "../talk/routes.js";
 import { streamTtsSentences, ttsStatus, validateTtsText } from "../talk/tts-stream.js";
 import { maybeEmitTalkGraph } from "../talk/graph.js";
 import { onboardingNeeded, applyEngineChoice } from "./onboarding-policy.js";
 import { sanitizeConfigForApi, deepMerge } from "./config-sanitize.js";
+import type { ApiContext } from "./api/context.js";
+import { handleSessionQueryRoutes } from "./api/session-query-routes.js";
+import { handleStatusRoutes } from "./api/routes/status.js";
+import { json, notFound, badRequest, serverError } from "./api/responses.js";
+import { matchRoute } from "./api/match-route.js";
+import { serializeSession } from "./api/serialize-session.js";
+import {
+  dispatchWebSessionRun,
+  isArchiveKind,
+  killSessionEngines,
+  maybeRevertEngineOverride,
+  resolveAttachmentPaths,
+  resumePendingWebQueueItems,
+  teardownAndDeleteSession,
+} from "./api/session-dispatch.js";
 // Compatibility facade: these moved to ./config-sanitize.js (AS-001 modularization);
 // re-exported so existing importers of "./api.js" keep working.
 export { isSensitiveConfigKey, sanitizeConfigForApi } from "./config-sanitize.js";
-import { loadRawTranscript, scheduleTranscriptBackfill } from "./transcript-backfill.js";
 import { resolveUserHeader } from "./connector-reply.js";
 // Compatibility facade: moved to ./connector-reply.js (AS-001 modularization).
 export { resolveUserHeader, deliverConnectorReply } from "./connector-reply.js";
 import { supersedeRunningTurn } from "./session-turn-state.js";
-import { runWebSession } from "./run-web-session.js";
 import { createPtyAccessToken } from "./auth.js";
 import { writeMergedBoard } from "./board-service.js";
+export type { ApiContext } from "./api/context.js";
+export { matchRoute } from "./api/match-route.js";
+export { resumePendingWebQueueItems } from "./api/session-dispatch.js";
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
 const SESSION_LIST_PER_GROUP = 50;
-const BACKGROUND_ACTIVITY_STALE_MS = 5 * 60 * 1000;
-
-export interface ApiContext {
-  config: JinnConfig;
-  sessionManager: SessionManager;
-  startTime: number;
-  getConfig: () => JinnConfig;
-  emit: (event: string, payload: unknown) => void;
-  connectors: Map<string, import("../shared/types.js").Connector>;
-  reloadConnectorInstances?: () => Promise<{ started: string[]; stopped: string[]; errors: string[] }>;
-  /** Re-read config.yaml into memory immediately (same as the file-watcher does,
-   *  but synchronous). Call after a handler writes config.yaml so getConfig()
-   *  reflects the change without waiting on the debounced watcher (~1s). */
-  reloadConfig?: () => void;
-  hookRegistry?: import("./hook-registry.js").HookRegistry;
-  hookSecret?: string;
-  /** Gateway API token generated into gateway.json. Used to mint short-lived PTY websocket tokens. */
-  apiToken?: string;
-  /** PTY-backed Claude engine used by CLI-mode message sends so the user sees the
-   *  prompt + response stream into the live xterm. Distinct from the headless
-   *  "claude" engine in sessionManager (which chat/cron/connectors use). */
-  interactiveClaudeEngine?: import("../engines/claude-interactive.js").InteractiveClaudeEngine;
-  /** PTY-capable engines keyed by engine name. Used by CLI-mode web sends. */
-  ptyViewEngines?: Record<string, Engine & import("../engines/pty-view-engine.js").PtyViewEngine>;
-  /** Synchronously re-scan org/ into the gateway's in-memory employee registry
-   *  (and drop warm PTYs). Called after an employee YAML write so the next session
-   *  spawn sees the new persona/model immediately, rather than waiting ~800ms for
-   *  the chokidar watcher. Wired in server.ts; same body as the watcher's onOrgChange. */
-  reloadOrg?: () => void;
-  /** In-memory (never persisted) post-settle background activity per session,
-   *  maintained in server.ts from the interactive engine's onBackgroundActivity
-   *  callback. lastActivityAt is epoch ms; serializeSession converts to ISO. */
-  backgroundActivity?: Map<string, { activeStreams: number; lastActivityAt: number }>;
-}
-
-function killSessionEngines(context: ApiContext, session: Session, reason: string): { interruptible: number; killed: number } {
-  const engines = new Set<Engine>();
-  const primary = context.sessionManager.getEngine(session.engine);
-  const pty = context.ptyViewEngines?.[session.engine];
-  if (primary) engines.add(primary);
-  if (pty) engines.add(pty);
-
-  let interruptible = 0;
-  let killed = 0;
-  for (const engine of engines) {
-    if (!isInterruptibleEngine(engine)) continue;
-    interruptible++;
-    engine.kill(session.id, reason);
-    killed++;
-  }
-  return { interruptible, killed };
-}
-
-const ARCHIVE_KINDS = new Set<ArchiveKind>(["room", "scheduled", "chat"]);
-
-function isArchiveKind(value: unknown): value is ArchiveKind {
-  return typeof value === "string" && ARCHIVE_KINDS.has(value as ArchiveKind);
-}
-
-function teardownAndDeleteSession(context: ApiContext, session: Session, reason: string): boolean {
-  killSessionEngines(context, session, reason);
-  context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
-  maybeEmitTalkGraph(session.id, "removed", { getSession, emit: context.emit });
-  const deleted = deleteSession(session.id);
-  if (deleted) context.emit("session:deleted", { sessionId: session.id });
-  return deleted;
-}
-
-export function resumePendingWebQueueItems(context: ApiContext): void {
-  const pending = listAllPendingQueueItems();
-  if (pending.length === 0) return;
-
-  let resumed = 0;
-  for (const item of pending) {
-    let session = getSession(item.sessionId);
-    if (!session) {
-      cancelQueueItem(item.id);
-      continue;
-    }
-    if (session.source !== "web") continue;
-    session = maybeRevertEngineOverride(session);
-
-    const config = context.getConfig();
-    const engine = context.sessionManager.getEngine(session.engine);
-    if (!engine) {
-      cancelQueueItem(item.id);
-      updateSession(session.id, { status: "error", lastActivity: new Date().toISOString(), lastError: `Engine "${session.engine}" not available` });
-      continue;
-    }
-
-    // Ensure the session is in a runnable state
-    updateSession(session.id, { status: "running", lastActivity: new Date().toISOString(), lastError: null });
-
-    dispatchWebSessionRun(session, item.prompt, engine, config, context, { queueItemId: item.id });
-    resumed++;
-  }
-
-  if (resumed > 0) {
-    logger.info(`Re-dispatched ${resumed} pending web queue item(s) after gateway restart`);
-  }
-}
-
-function maybeRevertEngineOverride(session: Session): Session {
-  const meta = (session.transportMeta || {}) as Record<string, unknown>;
-  const override = meta["engineOverride"] as Record<string, unknown> | undefined;
-  if (!override) return session;
-
-  const originalEngine = typeof override.originalEngine === "string" ? override.originalEngine : null;
-  const originalEngineSessionId = typeof override.originalEngineSessionId === "string"
-    ? override.originalEngineSessionId
-    : null;
-  const syncSince = typeof override.syncSince === "string" ? override.syncSince : null;
-  const untilIso = typeof override.until === "string" ? override.until : null;
-  if (!originalEngine || !untilIso) return session;
-
-  const until = new Date(untilIso);
-  if (Number.isNaN(until.getTime())) return session;
-  if (until.getTime() > Date.now()) return session;
-
-  const engineSessionsRaw = meta["engineSessions"];
-  const engineSessions = (engineSessionsRaw && typeof engineSessionsRaw === "object" && !Array.isArray(engineSessionsRaw))
-    ? { ...(engineSessionsRaw as Record<string, unknown>) }
-    : {};
-
-  // Preserve the current engine session ID under its engine key
-  if (session.engine && session.engineSessionId) {
-    engineSessions[String(session.engine)] = session.engineSessionId;
-  }
-
-  const restoredSessionId = originalEngineSessionId
-    ?? (typeof engineSessions[originalEngine] === "string" ? (engineSessions[originalEngine] as string) : null);
-
-  const nextMeta = { ...meta, engineSessions } as Record<string, unknown>;
-  if (originalEngine === "claude" && syncSince && session.engine !== "claude") {
-    nextMeta["claudeSyncSince"] = syncSince;
-  }
-  delete (nextMeta as Record<string, unknown>)["engineOverride"];
-  return updateSession(session.id, {
-    engine: originalEngine,
-    engineSessionId: restoredSessionId,
-    transportMeta: nextMeta as any,
-    lastError: null,
-  }) ?? session;
-}
-
-function dispatchWebSessionRun(
-  session: Session,
-  prompt: string,
-  engine: Engine,
-  config: JinnConfig,
-  context: ApiContext,
-  opts?: { delayMs?: number; queueItemId?: string; attachments?: string[] },
-): void {
-  const run = async () => {
-    const sessionKey = session.sessionKey || session.sourceRef;
-    try {
-      await context.sessionManager.getQueue().enqueue(sessionKey, async () => {
-        context.emit("session:started", { sessionId: session.id });
-        // Item moved pending → running: refresh the queue panel.
-        if (opts?.queueItemId) context.emit("queue:updated", { sessionId: session.id, sessionKey });
-        await runWebSession(session, prompt, engine, config, context, opts?.attachments);
-      }, opts?.queueItemId);
-    } finally {
-      // Item settled (completed/cancelled/errored): refresh so the "N queued"
-      // panel drains. Without this the panel only refreshes on enqueue and the
-      // badge sticks at its peak. (queue.ts marks the DB row done in its finally.)
-      if (opts?.queueItemId) context.emit("queue:updated", { sessionId: session.id, sessionKey });
-    }
-  };
-
-  const launch = () => {
-    run().catch((err) => {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      logger.error(`Web session ${session.id} dispatch error: ${errMsg}`);
-      const erroredOnDispatch = updateSession(session.id, {
-        status: "error",
-        lastActivity: new Date().toISOString(),
-        lastError: errMsg,
-      });
-      context.emit("session:completed", {
-        sessionId: session.id,
-        result: null,
-        error: errMsg,
-      });
-      // This outer dispatch-error path bypasses notifyParentSession (run() failed
-      // before its own completion handling), so wake any attached talk sessions
-      // here too — otherwise an attachment wake is silently lost on a hard failure.
-      if (erroredOnDispatch) notifyAttachedTalkSessions(erroredOnDispatch, { error: errMsg });
-      maybeEmitTalkGraph(session.id, "completed", { getSession, emit: context.emit });
-    });
-  };
-
-  if (opts?.delayMs && opts.delayMs > 0) {
-    setTimeout(launch, opts.delayMs);
-  } else {
-    launch();
-  }
-}
+type ResWithEncoding = ServerResponse & { __acceptEncoding?: string };
 
 /**
  * GET /api/skills description cache, keyed by skill dir name and invalidated
@@ -290,130 +104,6 @@ function parseSkillDescription(content: string): string {
   return description;
 }
 
-/** Resolve an array of file IDs to local filesystem paths for engine consumption. */
-function resolveAttachmentPaths(fileIds: unknown): string[] {
-  if (!Array.isArray(fileIds)) return [];
-  const paths: string[] = [];
-  for (const id of fileIds) {
-    if (typeof id !== "string" || !id.trim()) continue;
-    const meta = getFile(id);
-    if (!meta) {
-      logger.warn(`Attachment file not found: ${id}`);
-      continue;
-    }
-    const filePath = path.join(FILES_DIR, meta.id, meta.filename);
-    if (fs.existsSync(filePath)) {
-      paths.push(filePath);
-    } else if (meta.path && fs.existsSync(meta.path)) {
-      paths.push(meta.path);
-    } else {
-      logger.warn(`Attachment file missing on disk: ${id} (${meta.filename})`);
-    }
-  }
-  return paths;
-}
-
-/** Per-request Accept-Encoding, stashed by handleApiRequest so json() can compress. */
-type ResWithEncoding = ServerResponse & { __acceptEncoding?: string };
-
-function json(res: ServerResponse, data: unknown, status = 200): void {
-  const body = Buffer.from(JSON.stringify(data));
-  const enc =
-    body.length >= MIN_COMPRESS_BYTES
-      ? pickEncoding((res as ResWithEncoding).__acceptEncoding)
-      : null;
-  if (enc) {
-    res.writeHead(status, {
-      "Content-Type": "application/json",
-      "Content-Encoding": enc,
-      Vary: "Accept-Encoding",
-    });
-    res.end(compressBuffer(enc, body));
-    return;
-  }
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(body);
-}
-
-function notFound(res: ServerResponse): void {
-  json(res, { error: "Not found" }, 404);
-}
-
-function badRequest(res: ServerResponse, message: string): void {
-  json(res, { error: message }, 400);
-}
-
-function serverError(res: ServerResponse, message: string): void {
-  json(res, { error: message }, 500);
-}
-
-export function matchRoute(
-  pattern: string,
-  pathname: string,
-): Record<string, string> | null {
-  const patternParts = pattern.split("/");
-  const pathParts = pathname.split("/");
-  if (patternParts.length !== pathParts.length) return null;
-
-  const params: Record<string, string> = {};
-  for (let i = 0; i < patternParts.length; i++) {
-    if (patternParts[i].startsWith(":")) {
-      const raw = pathParts[i];
-      if (/%2f|%5c/i.test(raw)) return null;
-      let decoded: string;
-      try {
-        decoded = decodeURIComponent(raw);
-      } catch {
-        return null;
-      }
-      if (!decoded || decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\") || decoded.includes("\0")) {
-        return null;
-      }
-      params[patternParts[i].slice(1)] = decoded;
-    } else if (patternParts[i] !== pathParts[i]) {
-      return null;
-    }
-  }
-  return params;
-}
-
-function serializeSession(session: Session, context: ApiContext): Session {
-  const queue = context.sessionManager.getQueue();
-  const queueDepth = queue.getPendingCount(session.sessionKey || session.sourceRef);
-  const transportState = queue.getTransportState(session.sessionKey || session.sourceRef, session.status);
-  const bg = context.backgroundActivity?.get(session.id);
-  const bgIsStale = bg && Date.now() - bg.lastActivityAt > BACKGROUND_ACTIVITY_STALE_MS;
-  if (bgIsStale) context.backgroundActivity?.delete(session.id);
-  return {
-    ...session,
-    queueDepth,
-    transportState,
-    backgroundActivity: bg && !bgIsStale
-      ? { activeStreams: bg.activeStreams, lastActivityAt: new Date(bg.lastActivityAt).toISOString() }
-      : null,
-  };
-}
-
-function isSessionLiveRunning(session: Session, context: ApiContext): boolean {
-  if (session.status !== "running") return false;
-  const engine = context.sessionManager.getEngine(session.engine);
-  if (!engine || !isInterruptibleEngine(engine)) return true;
-  if ("isTurnRunning" in engine) return Boolean((engine as any).isTurnRunning(session.id));
-  return engine.isAlive(session.id);
-}
-
-function checkInstanceHealth(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const req = http.request({ hostname: "localhost", port, path: "/api/health", timeout: 2000 }, (res) => {
-      resolve(res.statusCode === 200);
-      res.resume();
-    });
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => { req.destroy(); resolve(false); });
-    req.end();
-  });
-}
-
 export async function handleApiRequest(
   req: HttpRequest,
   res: ServerResponse,
@@ -426,80 +116,7 @@ export async function handleApiRequest(
   (res as ResWithEncoding).__acceptEncoding = req.headers["accept-encoding"];
 
   try {
-    // GET /api/status
-    if (method === "GET" && pathname === "/api/status") {
-      const config = context.getConfig();
-      const checks: Array<{ name: string; status: "ok" | "degraded" | "error"; detail?: string }> = [];
-      let sessions: Session[] = [];
-      let running = 0;
-      try {
-        sessions = listSessions();
-        running = sessions.filter((s) => isSessionLiveRunning(s, context)).length;
-        checks.push({ name: "sessions_db", status: "ok" });
-      } catch (err) {
-        checks.push({ name: "sessions_db", status: "error", detail: err instanceof Error ? err.message : String(err) });
-      }
-      const connectors = Object.fromEntries(
-        Array.from(context.connectors.values()).map((connector) => [connector.name, connector.getHealth()]),
-      );
-      const connectorErrors = Object.values(connectors).filter((health) => health.status === "error");
-      checks.push({
-        name: "connectors",
-        status: connectorErrors.length > 0 ? "degraded" : "ok",
-        ...(connectorErrors.length > 0 ? { detail: `${connectorErrors.length} connector(s) reporting error` } : {}),
-      });
-      const registry = getModelRegistry(config);
-      const availableEngines = Object.values(registry).filter((entry) => entry.available);
-      const defaultEngine = registry[config.engines.default];
-      checks.push({
-        name: "engines",
-        status: availableEngines.length === 0 ? "error" : defaultEngine?.available === false ? "degraded" : "ok",
-        ...(availableEngines.length === 0
-          ? { detail: "No engines are available" }
-          : defaultEngine?.available === false
-            ? { detail: `Default engine ${config.engines.default} is unavailable` }
-            : {}),
-      });
-      const overall: "ok" | "degraded" | "error" = checks.some((check) => check.status === "error")
-        ? "error"
-        : checks.some((check) => check.status === "degraded")
-          ? "degraded"
-          : "ok";
-      return json(res, {
-        status: overall,
-        checks,
-        uptime: Math.floor((Date.now() - context.startTime) / 1000),
-        port: config.gateway.port || 7777,
-        // Derived from the model registry (single source of truth) so engine
-        // availability stays consistent with /api/engines instead of drifting.
-        engines: {
-          default: config.engines.default,
-          ...Object.fromEntries(
-            Object.entries(registry).map(([name, entry]) => [
-              name,
-              { model: entry.defaultModel, available: entry.available },
-            ]),
-          ),
-        },
-        sessions: { total: sessions.length, running, active: running },
-        connectors,
-      });
-    }
-
-    // GET /api/instances
-    if (method === "GET" && pathname === "/api/instances") {
-      const instances = loadInstances();
-      const currentPort = context.getConfig().gateway.port || 7777;
-      const results = await Promise.all(
-        instances.map(async (inst) => ({
-          name: inst.name,
-          port: inst.port,
-          running: inst.port === currentPort ? true : await checkInstanceHealth(inst.port),
-          current: inst.port === currentPort,
-        }))
-      );
-      return json(res, results);
-    }
+    if (await handleStatusRoutes(method, pathname, res, context)) return;
 
     // GET /api/archives — previous project summaries, newest first.
     if (method === "GET" && pathname === "/api/archives") {
@@ -568,79 +185,10 @@ export async function handleApiRequest(
       context.emit("archive:deleted", { archiveId: archiveParams.id });
       return json(res, { status: "deleted" });
     }
-
-    // GET /api/sessions
-    //   ?group=<employee|__direct__|__cron__>&offset=M&limit=N → one group's page (sidebar "load more")
-    //   ?limit=0                                              → every session (power-user escape hatch)
-    //   (default)                                             → top SESSION_LIST_PER_GROUP recent per group + counts
-    if (method === "GET" && pathname === "/api/sessions") {
-      const query = url.searchParams.get("q");
-      if (query && query.trim()) {
-        const matches = searchSessions(query.trim());
-        return json(res, matches.map((session) => serializeSession(session, context)));
-      }
-      const group = url.searchParams.get("group");
-      const rawLimit = url.searchParams.get("limit");
-      // Portal-slug-tagged rows fold into the direct group (defensive +
-      // retroactive backstop to the create-time coercion above).
-      const portalSlug = context.getConfig().portal?.portalName;
-      if (group) {
-        const limit = Math.max(1, parseInt(rawLimit || "50", 10) || 50);
-        const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0", 10) || 0);
-        const page = listSessionsForGroup(group, limit, offset, portalSlug);
-        return json(res, page.map((session) => serializeSession(session, context)));
-      }
-      if (rawLimit === "0") {
-        const all = listSessions();
-        return json(res, all.map((session) => serializeSession(session, context)));
-      }
-      const sessions = listRecentPerGroup(SESSION_LIST_PER_GROUP, portalSlug);
-      return json(res, {
-        sessions: sessions.map((session) => serializeSession(session, context)),
-        counts: getSessionGroupCounts(portalSlug),
-        perGroup: SESSION_LIST_PER_GROUP,
-      });
-    }
-
-    // GET /api/sessions/interrupted — list sessions that can be resumed after a restart
-    if (method === "GET" && pathname === "/api/sessions/interrupted") {
-      const { getInterruptedSessions } = await import("../sessions/registry.js");
-      const interrupted = getInterruptedSessions();
-      return json(res, interrupted.map((session) => serializeSession(session, context)));
-    }
-
-    // GET /api/sessions/:id
-    let params = matchRoute("/api/sessions/:id", pathname);
-    if (method === "GET" && params) {
-      const session = getSession(params.id);
-      if (!session) return notFound(res);
-      let messages = getMessages(params.id);
-
-      // Backfill from Claude Code's JSONL transcript if our DB has no messages.
-      // Run async + transactional so the GET doesn't block on multi-MB JSONL
-      // parsing + N individual INSERTs. Subsequent GETs will see the messages
-      // once the backfill finishes; this one returns whatever is in DB now.
-      if (messages.length === 0 && session.engineSessionId) {
-        scheduleTranscriptBackfill(params.id, session.engineSessionId, context);
-      } else if (session.engine === "claude") {
-        // On-load safety net for PTY-native (CLI-typed) turns whose unclaimed
-        // Stop was missed entirely: fire-and-forget a transcript tail sync.
-        // Cheap (one stat() in the common case) and never delays this GET —
-        // the frontend refetches on `session:external-turn`.
-        scheduleOnLoadTailSync(params.id, context.emit);
-      }
-
-      // Support ?last=N to return only the N most recent messages
-      const lastN = parseInt(url.searchParams.get("last") || "0", 10);
-      if (lastN > 0 && messages.length > lastN) {
-        messages = messages.slice(-lastN);
-      }
-
-      return json(res, { ...serializeSession(session, context), messages });
-    }
+    if (await handleSessionQueryRoutes(method, pathname, url, res, context, SESSION_LIST_PER_GROUP)) return;
 
     // PUT|PATCH /api/sessions/:id — update title and/or mid-chat model/effort
-    params = matchRoute("/api/sessions/:id", pathname);
+    let params = matchRoute("/api/sessions/:id", pathname);
     if ((method === "PUT" || method === "PATCH") && params) {
       const session = getSession(params.id);
       if (!session) return notFound(res);
@@ -810,15 +358,6 @@ export async function handleApiRequest(
       return json(res, { status: "cancelled", itemId: queueItemParams.itemId });
     }
 
-    // GET /api/sessions/:id/queue
-    params = matchRoute("/api/sessions/:id/queue", pathname);
-    if (method === "GET" && params) {
-      const session = getSession(params.id);
-      if (!session) return notFound(res);
-      const items = getQueueItems(session.sessionKey || session.sourceRef || session.id);
-      return json(res, items);
-    }
-
     // DELETE /api/sessions/:id/queue — clear all pending
     params = matchRoute("/api/sessions/:id/queue", pathname);
     if (method === "DELETE" && params) {
@@ -887,23 +426,6 @@ export async function handleApiRequest(
       return json(res, { status: "deleted", count });
     }
 
-    // GET /api/sessions/:id/children
-    params = matchRoute("/api/sessions/:id/children", pathname);
-    if (method === "GET" && params) {
-      const children = listChildSessions(params.id);
-      return json(res, children.map((child) => serializeSession(child, context)));
-    }
-
-    // GET /api/sessions/:id/transcript — return raw Claude Code session transcript
-    params = matchRoute("/api/sessions/:id/transcript", pathname);
-    if (method === "GET" && params) {
-      const session = getSession(params.id);
-      if (!session) return notFound(res);
-      if (!session.engineSessionId) return json(res, []);
-      const entries = loadRawTranscript(session.engineSessionId);
-      return json(res, entries);
-    }
-
     // POST /api/sessions
     // ── Working folder: directory browser for the new-chat picker ──────────
     // GET /api/fs/list?path=<abs>  → { path, parent, entries:[{name,isDir}] }
@@ -926,39 +448,6 @@ export async function handleApiRequest(
     }
 
     // ── Feature 2: Unified work visibility ─────────────────────────────────
-    // GET /api/work — normalize every session into one work-state + grouped counts.
-    if (method === "GET" && pathname === "/api/work") {
-      const queue = context.sessionManager.getQueue();
-      // Pending approvals are the authoritative "waiting on human" signal.
-      const pendingApprovalSessionIds = new Set(listApprovals({ state: "pending" }).map((a) => a.sessionId));
-      let deptByEmployee: Map<string, string | undefined> | null = null;
-      try {
-        const { scanOrg } = await import("./org.js");
-        const reg = scanOrg();
-        deptByEmployee = new Map(Array.from(reg.values()).map((e) => [e.name, e.department]));
-      } catch { /* org scan optional — dept stays null */ }
-
-      const counts = emptyWorkCounts();
-      const items = listSessions().map((s) => {
-        const transportState = queue.getTransportState(s.sessionKey || s.sourceRef, s.status);
-        const workState = deriveWorkState({
-          status: s.status,
-          transportState,
-          approvalRequired: pendingApprovalSessionIds.has(s.id),
-          cron: s.source === "cron",
-        });
-        counts[workState]++;
-        return {
-          sessionId: s.id,
-          employee: s.employee ?? null,
-          dept: (s.employee && deptByEmployee?.get(s.employee)) ?? null,
-          workState,
-          title: s.title ?? null,
-        };
-      });
-      return json(res, { counts, items });
-    }
-
     // ── Feature 1: Approval queue ──────────────────────────────────────────
     // GET /api/approvals?state=pending|approved|rejected|all  (default pending)
     if (method === "GET" && pathname === "/api/approvals") {
@@ -1171,9 +660,9 @@ export async function handleApiRequest(
     // POST /api/sessions/:id/message
     params = matchRoute("/api/sessions/:id/message", pathname);
     if (method === "POST" && params) {
-      let session = getSession(params.id);
-      if (!session) return notFound(res);
-      session = maybeRevertEngineOverride(session);
+      const existingSession = getSession(params.id);
+      if (!existingSession) return notFound(res);
+      const session = maybeRevertEngineOverride(existingSession);
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1872,27 +1361,6 @@ export async function handleApiRequest(
         ...connector.getHealth(),
       }));
       return json(res, connectors);
-    }
-
-    // GET /api/activity — recent activity derived from sessions
-    if (method === "GET" && pathname === "/api/activity") {
-      const sessions = listSessions();
-      const events: Array<{ event: string; payload: unknown; ts: number }> = [];
-      for (const s of sessions) {
-        const ts = new Date(s.lastActivity || s.createdAt).getTime();
-        const transportState = context.sessionManager.getQueue().getTransportState(s.sessionKey || s.sourceRef, s.status);
-        if (transportState === "running") {
-          events.push({ event: "session:started", payload: { sessionId: s.id, employee: s.employee, engine: s.engine, connector: s.connector }, ts });
-        } else if (transportState === "queued") {
-          events.push({ event: "session:queued", payload: { sessionId: s.id, employee: s.employee, engine: s.engine, connector: s.connector }, ts });
-        } else if (transportState === "idle") {
-          events.push({ event: "session:completed", payload: { sessionId: s.id, employee: s.employee, engine: s.engine, connector: s.connector }, ts });
-        } else if (transportState === "error") {
-          events.push({ event: "session:error", payload: { sessionId: s.id, employee: s.employee, error: s.lastError, connector: s.connector }, ts });
-        }
-      }
-      events.sort((a, b) => b.ts - a.ts);
-      return json(res, events.slice(0, 30));
     }
 
     // GET /api/onboarding — check if onboarding is needed
