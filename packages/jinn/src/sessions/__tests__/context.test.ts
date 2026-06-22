@@ -137,8 +137,8 @@ describe("buildContext — config awareness", () => {
   });
 });
 
-describe("buildContext — onboarding block is omitted when portal.setupComplete is true", () => {
-  // Gate is now portal.setupComplete === true (config flag), not user-profile.md size.
+describe("buildContext — onboarding block is omitted when portal setup is complete", () => {
+  // Gate is portal.setupComplete === true, with portal.onboarded === true accepted for legacy wizard completions.
   const minConfig = {
     gateway: { host: "127.0.0.1", port: 7799 },
     engines: { default: "claude" },
@@ -150,6 +150,16 @@ describe("buildContext — onboarding block is omitted when portal.setupComplete
     expect(out).not.toContain("## Onboarding mode");
   });
 
+  it("does not emit the onboarding block for legacy configs with portal.onboarded true", () => {
+    const config = {
+      gateway: { host: "127.0.0.1", port: 7799 },
+      engines: { default: "claude" },
+      portal: { onboarded: true },
+    } as unknown as JinnConfig;
+    const out = buildContext({ ...baseOpts, config });
+    expect(out).not.toContain("## Onboarding mode");
+  });
+
   it("never emits onboarding in employee mode", () => {
     const out = buildContext({ ...baseOpts, employee: minimalEmployee });
     expect(out).not.toContain("## Onboarding mode");
@@ -157,8 +167,7 @@ describe("buildContext — onboarding block is omitted when portal.setupComplete
 });
 
 describe("buildContext — onboarding block appears when portal.setupComplete is not set", () => {
-  // Gate is portal.setupComplete === true. When config is absent or setupComplete is falsy,
-  // the operator-aware onboarding directive is injected.
+  // When config is absent or both setupComplete/onboarded are falsy, the operator-aware onboarding directive is injected.
   it("emits onboarding block when portal.setupComplete is not set", () => {
     const out = buildContext({ ...baseOpts });
     expect(out).toContain("## Onboarding mode");
