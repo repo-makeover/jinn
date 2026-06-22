@@ -14,6 +14,16 @@
 ### 🪄 Docs
 - Refreshed the README showcase GIF and added a **showcase video-capture** skill playbook (mock/sandbox instance recording, Playwright capture, WebM→MP4/GIF conversion).
 
+## [0.21.3] - 2026-06-22
+
+### 🐛 Fixes
+- **Existing operators no longer get the onboarding prompt re-injected.** Configs that completed the setup wizard (`portal.onboarded`) are now treated as setup-complete, so the gateway stops emitting the onboarding directive and the setup-status API reports `setupComplete`/`conversationNeeded` correctly for legacy installs.
+
+## [0.21.2] - 2026-06-22
+
+### 🐛 Fixes
+- **Connector-backed replies no longer hang after Homebrew/npm installs.** The npm publish manifest now includes `assets/hook-relay.mjs`, so gateway boot can restore `~/.jinn/hook-relay.mjs` and Claude Stop hooks can report completed Slack/Discord/Telegram turns.
+
 ## [0.21.1] - 2026-06-17
 
 ### 🪄 Docs
