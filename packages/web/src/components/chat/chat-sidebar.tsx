@@ -25,18 +25,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
-import { mergeSidebarEmployees, bucketByDay, summarizeOlder, isFocusedSession } from "@/components/chat/chat-route-helpers"
 import { groupSessionsByDepartment, roomSelectionId } from "@/lib/rooms/grouping"
 import type { DepartmentRoom, RoomEmployee, RoomSession } from "@/lib/rooms/types"
-import type { Session, SidebarOrder, FlatItem, FlatRow, ViewMode } from "./sidebar-types"
+import type { Session, SidebarOrder, FlatItem, ViewMode } from "./sidebar-types"
 import {
   loadExpandedRooms, saveExpandedRooms, getReadSessions, markSessionRead, markAllReadForEmployee,
   getPinnedSessions, savePinnedSessions, loadCollapsedState, saveCollapsedState,
   loadExpandedState, saveExpandedState,
 } from "./sidebar-storage"
 import {
-  formatTime, resolveRowIdentity, isCronSession, isDirectSession, isVisibleSource,
-  getSessionActivity, sortSessionsByActivity, hasBackgroundActivity, isRecentError,
+  formatTime, isCronSession, hasBackgroundActivity, isRecentError,
 } from "./sidebar-session-helpers"
 import { ArchiveDialog, type ArchiveDialogTarget } from "./archive-dialog"
 import {
@@ -50,17 +48,24 @@ import {
   type SidebarDeleteTarget,
   type SidebarSharedRowProps,
 } from "./sidebar-row-components"
+import {
+  buildContactableEmployees,
+  buildManagerEmployees,
+  buildSidebarCollections,
+  buildSidebarOrder,
+  buildVirtualItems,
+  buildVisibleSessions,
+  CRON_GROUP,
+  formatOlderLineLabel,
+  type VirtualItem,
+  VIRTUALIZE_THRESHOLD,
+} from "./sidebar-view-model"
 
 // Compatibility facade: these moved to ./sidebar-types and ./sidebar-session-helpers
 // (AS-001 modularization) — re-exported so existing importers of this module
 // (chat/page.tsx, chat-sidebar-helpers.test.ts) keep working.
 export type { SidebarOrder }
-export { hasBackgroundActivity, isDirectSession, isRecentError, resolveRowIdentity }
-
-// Server-side group sentinels — must match CRON_GROUP/DIRECT_GROUP in the
-// backend registry (sessions are bounded per group; "load more" fetches the rest).
-const DIRECT_GROUP = "__direct__"
-const CRON_GROUP = "__cron__"
+export { hasBackgroundActivity, isDirectSession, isRecentError, resolveRowIdentity } from "./sidebar-session-helpers"
 
 const OLDER_EXPANDED_STORAGE_KEY = "jinn-sidebar-older-expanded"
 const FOCUS_MODE_STORAGE_KEY = "jinn-sidebar-focus-mode"
@@ -105,16 +110,10 @@ export function ChatSidebar({
   const bulkDeleteMutation = useBulkDeleteSessions()
   const duplicateSessionMutation = useDuplicateSession()
 
-  const sessions = useMemo(() => {
-    if (!rawSessions) return []
-    const filtered = (rawSessions as Session[]).filter(isVisibleSource)
-    filtered.sort((a, b) => {
-      const ta = a.lastActivity || a.createdAt || ""
-      const tb = b.lastActivity || b.createdAt || ""
-      return tb.localeCompare(ta)
-    })
-    return filtered
-  }, [rawSessions])
+  const sessions = useMemo(
+    () => buildVisibleSessions(rawSessions as Session[] | undefined),
+    [rawSessions],
+  )
 
   const [search, setSearch] = useState("")
   // Search spans ALL sessions server-side (the loaded page is only a subset).
@@ -368,186 +367,17 @@ export function ChatSidebar({
     sortedCron,
     cronSessions,
     cronTotal,
-  } = useMemo(() => {
-    // When searching, use server results (spans all sessions); "load more" is
-    // disabled in this mode since totals reflect the search, not each group.
-    const searching = search.trim().length > 0
-    const displayed = searching
-      ? ((searchResults as Session[] | undefined) ?? []).filter(isVisibleSource)
-      : sessions
-
-    // Resolve the avatar slug + human label for a flat row (see resolveRowIdentity).
-    const toRow = (s: Session): FlatRow => ({
-      session: s,
-      ...resolveRowIdentity(s, { portalSlug, portalName, employeeData }),
-    })
-
-    // ---- Search mode: one flat list spanning everything matched. ----
-    if (searching) {
-      const searchRows = sortSessionsByActivity(displayed).map(toRow)
-      return {
-        searching,
-        searchRows,
-        todayRows: [] as FlatRow[],
-        yesterdayRows: [] as FlatRow[],
-        olderSummary: { chats: 0, employees: 0 },
-        olderFocusedRows: [] as FlatRow[],
-        hiddenAutomated: 0,
-        olderPinned: [] as FlatItem[],
-        olderUnpinned: [] as FlatItem[],
-        pinnedFlat: [] as FlatItem[],
-        unpinnedFlat: [] as FlatItem[],
-        sortedCron: [] as Session[],
-        cronSessions: [] as Session[],
-        cronTotal: 0,
-      }
-    }
-
-    // ---- Default mode: recency buckets + per-employee Older drawer. ----
-    // In "focused" mode the Today/Yesterday/Older buckets only contain the
-    // operator's own top-level chats (isFocusedSession); delegated children and
-    // other automated sessions are hidden until "All" is selected. The
-    // per-employee groups (drawer in All mode + keyboard cycling + contactable
-    // roster) are always built from every non-cron session so they stay stable.
-    const focused = viewMode === "focused"
-    const now = new Date()
-    const cronSessions: Session[] = []
-    const directSessions: Session[] = []
-    const employeeSessionMap = new Map<string, Session[]>()
-    const todayRows: FlatRow[] = []
-    const yesterdayRows: FlatRow[] = []
-    // Focused-mode Older = older user-initiated chats, as flat rows (computed
-    // from loaded sessions; the deep tail beyond the per-group window is reachable
-    // via search). All-mode Older uses the authoritative `counts` instead.
-    const olderFocusedRows: FlatRow[] = []
-    let hiddenAutomated = 0
-    // today+yesterday sessions surfaced per group — drives the All-mode Older math.
-    const recentByGroup: Record<string, number> = {}
-
-    for (const s of displayed) {
-      if (isCronSession(s)) {
-        cronSessions.push(s)
-        continue
-      }
-      const isDirect = isDirectSession(s, portalSlug)
-      const groupKey = isDirect ? DIRECT_GROUP : s.employee!
-      if (isDirect) directSessions.push(s)
-      else {
-        if (!employeeSessionMap.has(groupKey)) employeeSessionMap.set(groupKey, [])
-        employeeSessionMap.get(groupKey)!.push(s)
-      }
-      // Focused filter gates only the recency buckets, not the employee groups.
-      if (focused && !isFocusedSession(s)) {
-        hiddenAutomated += 1
-        continue
-      }
-      const bucket = bucketByDay(getSessionActivity(s), now)
-      if (bucket === "today") {
-        todayRows.push(toRow(s))
-        recentByGroup[groupKey] = (recentByGroup[groupKey] ?? 0) + 1
-      } else if (bucket === "yesterday") {
-        yesterdayRows.push(toRow(s))
-        recentByGroup[groupKey] = (recentByGroup[groupKey] ?? 0) + 1
-      } else if (focused) {
-        olderFocusedRows.push(toRow(s))
-      }
-    }
-
-    todayRows.sort((a, b) => getSessionActivity(b.session).localeCompare(getSessionActivity(a.session)))
-    yesterdayRows.sort((a, b) => getSessionActivity(b.session).localeCompare(getSessionActivity(a.session)))
-    olderFocusedRows.sort((a, b) => getSessionActivity(b.session).localeCompare(getSessionActivity(a.session)))
-
-    // Per-employee groups (full history) — used by the Older drawer + keyboard nav.
-    const flatItems: FlatItem[] = []
-    for (const [empName, empSessions] of employeeSessionMap) {
-      const sorted = sortSessionsByActivity(empSessions)
-      flatItems.push({
-        type: "employee",
-        employeeName: empName,
-        employeeData: employeeData.get(empName),
-        sessions: sorted,
-        sortKey: getSessionActivity(sorted[0]),
-        pinKey: `emp:${empName}`,
-        groupKey: empName,
-        total: counts[empName] ?? sorted.length,
-      })
-    }
-    if (directSessions.length > 0) {
-      const sorted = sortSessionsByActivity(directSessions)
-      flatItems.push({
-        type: "employee",
-        employeeName: portalSlug,
-        employeeData: {
-          name: portalSlug,
-          displayName: portalName,
-          emoji: "\u{1F4AC}",
-          department: "direct",
-          role: "",
-          rank: "manager",
-          engine: "",
-          model: "",
-          persona: "",
-        } as Employee,
-        sessions: sorted,
-        sortKey: getSessionActivity(sorted[0]),
-        pinKey: `emp:${portalSlug}`,
-        groupKey: DIRECT_GROUP,
-        total: counts[DIRECT_GROUP] ?? sorted.length,
-      })
-    }
-
-    const pinnedFlat = flatItems
-      .filter((item) => pinnedSessions.has(item.pinKey))
-      .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
-    const unpinnedFlat = flatItems
-      .filter((item) => !pinnedSessions.has(item.pinKey))
-      .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
-
-    // Older drawer = only groups that actually have sessions beyond yesterday.
-    const hasOlder = (item: FlatItem) =>
-      (item.total ?? item.sessions!.length) - (recentByGroup[item.groupKey ?? item.employeeName!] ?? 0) > 0
-    const olderPinned = pinnedFlat.filter(hasOlder)
-    const olderUnpinned = unpinnedFlat.filter(hasOlder)
-
-    // Older summary. Focused: count the loaded older user-initiated chats +
-    // their distinct employees (direct/COO excluded from the employee tally).
-    // All: authoritative — every non-cron group total minus what's already shown
-    // in Today/Yesterday.
-    let olderSummary: { chats: number; employees: number }
-    if (focused) {
-      const emps = new Set<string>()
-      for (const r of olderFocusedRows) {
-        if (!isDirectSession(r.session, portalSlug) && r.session.employee) emps.add(r.session.employee)
-      }
-      olderSummary = { chats: olderFocusedRows.length, employees: emps.size }
-    } else {
-      const nonCronTotals: Record<string, number> = {}
-      for (const [k, v] of Object.entries(counts)) {
-        if (k !== CRON_GROUP) nonCronTotals[k] = v
-      }
-      olderSummary = summarizeOlder(nonCronTotals, recentByGroup, new Set([DIRECT_GROUP]))
-    }
-
-    const sortedCron = sortSessionsByActivity(cronSessions)
-    const cronTotal = counts[CRON_GROUP] ?? cronSessions.length
-
-    return {
-      searching,
-      searchRows: [] as FlatRow[],
-      todayRows,
-      yesterdayRows,
-      olderSummary,
-      olderFocusedRows,
-      hiddenAutomated,
-      olderPinned,
-      olderUnpinned,
-      pinnedFlat,
-      unpinnedFlat,
-      sortedCron,
-      cronSessions,
-      cronTotal,
-    }
-  }, [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, viewMode])
+  } = useMemo(() => buildSidebarCollections({
+    sessions,
+    search,
+    searchResults: searchResults as Session[] | undefined,
+    employeeData,
+    portalSlug,
+    portalName,
+    pinnedSessions,
+    counts,
+    viewMode,
+  }), [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, viewMode])
 
   // Rooms view-mode: group the loaded non-cron sessions into department
   // project-rooms (pure layer in lib/rooms). Derived independently of the flat
@@ -566,17 +396,14 @@ export function ChatSidebar({
   // Hidden while searching (search spans real sessions, not the roster) and the
   // COO/portal row is excluded (reachable via "New chat").
   const contactableEmployees = useMemo(() => {
-    if (search.trim()) return []
-    const sessionful = [...pinnedFlat, ...unpinnedFlat]
-      .map((item) => item.employeeName)
-      .filter((n): n is string => !!n)
-    const sessionfulSet = new Set(sessionful)
-    const rosterNames = (orgData?.employees ?? []).map((e) => e.name)
-    const merged = mergeSidebarEmployees(sessionful, rosterNames)
-    return merged
-      .filter((name) => !sessionfulSet.has(name) && name !== portalSlug)
-      .map((name) => employeeData.get(name))
-      .filter((e): e is Employee => !!e)
+    return buildContactableEmployees({
+      search,
+      pinnedFlat,
+      unpinnedFlat,
+      orgEmployees: orgData?.employees ?? [],
+      employeeData,
+      portalSlug,
+    })
   }, [search, pinnedFlat, unpinnedFlat, orgData, employeeData, portalSlug])
 
   // Managers + executives — a quick-access roster rendered ABOVE Team. Shown
@@ -584,74 +411,33 @@ export function ChatSidebar({
   // tap away); they may also appear in Team. Executives first, then by name.
   // Hidden during search (the flat results span everything already).
   const managerEmployees = useMemo(() => {
-    if (search.trim()) return []
-    return (orgData?.employees ?? [])
-      .filter((e) => (e.rank === "manager" || e.rank === "executive") && e.name !== portalSlug)
-      .sort((a, b) => {
-        const ra = a.rank === "executive" ? 0 : 1
-        const rb = b.rank === "executive" ? 0 : 1
-        return ra - rb || (a.displayName || a.name).localeCompare(b.displayName || b.name)
-      })
+    return buildManagerEmployees({
+      search,
+      orgEmployees: orgData?.employees ?? [],
+      portalSlug,
+    })
   }, [search, orgData, portalSlug])
 
   // Emit flat session order for keyboard navigation (J/K/E shortcuts).
   // Visual order: Today → Yesterday → (Older drawer, if open) → Scheduled.
   // De-duped — an employee's older sessions can overlap their Today/Yesterday rows.
   const orderRef = useRef<string>('')
-  const allFlatIds = useMemo(() => {
-    const ids: string[] = []
-    const seen = new Set<string>()
-    const push = (id: string) => { if (!seen.has(id)) { seen.add(id); ids.push(id) } }
-
-    if (searching) {
-      for (const r of searchRows) push(r.session.id)
-      return { sessionIds: ids, employeeNames: [] as string[], employeeSessionMap: {} as Record<string, string[]> }
-    }
-
-    // Rooms mode: keyboard j/k cycles every room's sessions (room order, then
-    // newest-first within), regardless of whether the room is expanded — so nav
-    // is never dead in the default all-collapsed view. Then cron.
-    if (viewMode === "rooms") {
-      const empNames: string[] = []
-      const empMap: Record<string, string[]> = {}
-      for (const room of rooms) {
-        for (const s of room.sessions) push(s.id)
-      }
-      for (const s of sortedCron) push(s.id)
-      for (const item of [...pinnedFlat, ...unpinnedFlat]) {
-        const name = item.employeeName!
-        empNames.push(name)
-        empMap[name] = item.sessions!.map((s) => s.id)
-      }
-      return { sessionIds: ids, employeeNames: empNames, employeeSessionMap: empMap }
-    }
-
-    for (const r of todayRows) push(r.session.id)
-    for (const r of yesterdayRows) push(r.session.id)
-    if (olderExpanded) {
-      if (viewMode === "focused") {
-        for (const r of olderFocusedRows) push(r.session.id)
-      } else {
-        for (const item of [...olderPinned, ...olderUnpinned]) {
-          const sessionIds = item.sessions!.map((s) => s.id)
-          // Collapsed employee row reaches only its latest session; expanded reaches all.
-          if (expanded[item.employeeName!]) sessionIds.forEach(push)
-          else if (sessionIds.length) push(sessionIds[0])
-        }
-      }
-    }
-    for (const s of sortedCron) push(s.id)
-
-    // E-shortcut cycles every employee with sessions, regardless of Older state.
-    const empNames: string[] = []
-    const empMap: Record<string, string[]> = {}
-    for (const item of [...pinnedFlat, ...unpinnedFlat]) {
-      const name = item.employeeName!
-      empNames.push(name)
-      empMap[name] = item.sessions!.map((s) => s.id)
-    }
-    return { sessionIds: ids, employeeNames: empNames, employeeSessionMap: empMap }
-  }, [searching, searchRows, todayRows, yesterdayRows, olderExpanded, viewMode, olderFocusedRows, olderPinned, olderUnpinned, expanded, sortedCron, pinnedFlat, unpinnedFlat, rooms])
+  const allFlatIds = useMemo(() => buildSidebarOrder({
+    searching,
+    searchRows,
+    viewMode,
+    rooms,
+    sortedCron,
+    pinnedFlat,
+    unpinnedFlat,
+    todayRows,
+    yesterdayRows,
+    olderExpanded,
+    olderFocusedRows,
+    olderPinned,
+    olderUnpinned,
+    expanded,
+  }), [searching, searchRows, viewMode, rooms, sortedCron, pinnedFlat, unpinnedFlat, todayRows, yesterdayRows, olderExpanded, olderFocusedRows, olderPinned, olderUnpinned, expanded])
 
   useEffect(() => {
     const key = allFlatIds.sessionIds.join(',')
@@ -734,81 +520,28 @@ export function ChatSidebar({
   // Build one flat list for the (optional) virtualizer. The focused layout is a
   // sequence of section labels, flat session rows (Today/Yesterday/search), the
   // collapsible Older summary + its per-employee drawer, and the cron section.
-  type VirtualItem =
-    | { kind: "section"; id: string; label: string; count?: number }
-    | { kind: "flat"; row: FlatRow }
-    | { kind: "older-line" }
-    | { kind: "older-header" }
-    | { kind: "employee"; item: FlatItem }
-    | { kind: "room-header"; room: DepartmentRoom }
-    | { kind: "cron-header" }
-    | { kind: "cron-session"; session: Session }
-    | { kind: "cron-more" }
+  const virtualItems = useMemo<VirtualItem[]>(() => buildVirtualItems({
+    searching,
+    searchRows,
+    viewMode,
+    rooms,
+    expandedRooms,
+    cronSessions,
+    cronCollapsed,
+    sortedCron,
+    cronTotal,
+    todayRows,
+    yesterdayRows,
+    olderSummary,
+    olderExpanded,
+    olderFocusedRows,
+    olderPinned,
+    olderUnpinned,
+    portalSlug,
+    portalName,
+    employeeData,
+  }), [searching, searchRows, viewMode, rooms, expandedRooms, cronSessions, cronCollapsed, sortedCron, cronTotal, todayRows, yesterdayRows, olderSummary, olderExpanded, olderFocusedRows, olderPinned, olderUnpinned, portalSlug, portalName, employeeData])
 
-  const virtualItems = useMemo<VirtualItem[]>(() => {
-    const list: VirtualItem[] = []
-    if (searching) {
-      for (const row of searchRows) list.push({ kind: "flat", row })
-      return list
-    }
-    // Rooms view-mode: a collapsible department header per room, with the room's
-    // sessions nested beneath as the SAME flat rows used elsewhere (so each agent
-    // session stays individually openable — provenance preserved). Cron keeps its
-    // own Scheduled section below, in every mode.
-    if (viewMode === "rooms") {
-      for (const room of rooms) {
-        list.push({ kind: "room-header", room })
-        if (expandedRooms.has(room.id)) {
-          for (const rs of room.sessions) {
-            // room.sessions are the same Session objects fed in (RoomSession is a
-            // structural subset); cast back at the render boundary.
-            const s = rs as unknown as Session
-            const { avatarName, displayName } = resolveRowIdentity(s, { portalSlug, portalName, employeeData })
-            list.push({ kind: "flat", row: { session: s, avatarName, displayName } })
-          }
-        }
-      }
-      if (cronSessions.length > 0) {
-        list.push({ kind: "cron-header" })
-        if (!cronCollapsed) {
-          for (const s of sortedCron) list.push({ kind: "cron-session", session: s })
-          if (cronSessions.length < cronTotal) list.push({ kind: "cron-more" })
-        }
-      }
-      return list
-    }
-    if (todayRows.length > 0) {
-      list.push({ kind: "section", id: "today", label: "Today", count: todayRows.length })
-      for (const row of todayRows) list.push({ kind: "flat", row })
-    }
-    if (yesterdayRows.length > 0) {
-      list.push({ kind: "section", id: "yesterday", label: "Yesterday", count: yesterdayRows.length })
-      for (const row of yesterdayRows) list.push({ kind: "flat", row })
-    }
-    if (olderSummary.chats > 0) {
-      if (!olderExpanded) {
-        list.push({ kind: "older-line" })
-      } else if (viewMode === "focused") {
-        // Focused Older = flat older user-initiated chats (no per-employee drawer).
-        list.push({ kind: "older-header" })
-        for (const row of olderFocusedRows) list.push({ kind: "flat", row })
-      } else {
-        list.push({ kind: "older-header" })
-        for (const item of olderPinned) list.push({ kind: "employee", item })
-        for (const item of olderUnpinned) list.push({ kind: "employee", item })
-      }
-    }
-    if (cronSessions.length > 0) {
-      list.push({ kind: "cron-header" })
-      if (!cronCollapsed) {
-        for (const s of sortedCron) list.push({ kind: "cron-session", session: s })
-        if (cronSessions.length < cronTotal) list.push({ kind: "cron-more" })
-      }
-    }
-    return list
-  }, [searching, searchRows, todayRows, yesterdayRows, olderSummary.chats, olderExpanded, viewMode, olderFocusedRows, olderPinned, olderUnpinned, cronSessions.length, cronCollapsed, sortedCron, cronTotal, rooms, expandedRooms, portalSlug, portalName, employeeData])
-
-  const VIRTUALIZE_THRESHOLD = 50
   const shouldVirtualize = virtualItems.length >= VIRTUALIZE_THRESHOLD
 
   const rowVirtualizer = useVirtualizer({
@@ -833,13 +566,7 @@ export function ChatSidebar({
     enabled: shouldVirtualize,
   })
 
-  const olderLineLabel = useMemo(() => {
-    const { chats, employees } = olderSummary
-    const chatWord = chats === 1 ? "chat" : "chats"
-    if (employees <= 0) return `Older · ${chats} ${chatWord}`
-    const empWord = employees === 1 ? "employee" : "employees"
-    return `Older · ${chats} ${chatWord} across ${employees} ${empWord}`
-  }, [olderSummary])
+  const olderLineLabel = useMemo(() => formatOlderLineLabel(olderSummary), [olderSummary])
 
   const cronHeader = (
     <div className="group/cron flex w-full items-center transition-colors hover:bg-[var(--fill-tertiary)]">
