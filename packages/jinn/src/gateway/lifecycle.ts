@@ -1,6 +1,7 @@
-import { execSync, spawn } from "node:child_process";
+import { execSync, spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { safeWriteFile } from "../shared/safe-write.js";
@@ -9,6 +10,94 @@ import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import { startGateway } from "./server.js";
 import { loadConfig } from "../shared/config.js";
+
+const MIN_NODE_MAJOR = 24;
+
+/**
+ * Return a Node.js executable that satisfies the minimum required major version.
+ * Falls back to process.execPath (and logs a warning) if none can be found.
+ *
+ * Search order: current execPath → PATH → hermit → nvm/fnm → ~/.local/bin
+ */
+function resolveNodeExecutable(): string {
+  const current = process.execPath;
+  if (nodeMajor(current) >= MIN_NODE_MAJOR) return current;
+
+  // Candidates from common version managers and install locations.
+  const home = os.homedir();
+  const candidates: string[] = [
+    // hermit (project-local or user-level)
+    path.join(home, ".cache", "hermit", "pkg", `node-${MIN_NODE_MAJOR}.x.x`, "bin", "node"),
+    // try any hermit node-24.* directory
+    ...hermitNodeCandidates(home),
+    // nvm
+    ...nvmCandidates(home),
+    // fnm
+    ...fnmCandidates(home),
+    // asdf
+    path.join(home, ".asdf", "shims", "node"),
+    // system / user local
+    "/usr/local/bin/node",
+    "/usr/bin/node",
+    path.join(home, ".local", "bin", "node"),
+  ];
+
+  for (const bin of candidates) {
+    if (fs.existsSync(bin) && nodeMajor(bin) >= MIN_NODE_MAJOR) {
+      logger.info(`Daemon will use Node.js at ${bin} (current execPath is Node ${nodeMajor(current)})`);
+      return bin;
+    }
+  }
+
+  logger.warn(
+    `Could not find Node.js >= ${MIN_NODE_MAJOR} — daemon may crash (current execPath is Node ${nodeMajor(current)}). ` +
+    `Install Node ${MIN_NODE_MAJOR}+ and add it to PATH.`,
+  );
+  return current;
+}
+
+function nodeMajor(bin: string): number {
+  try {
+    const v = execFileSync(bin, ["--version"], { encoding: "utf8", timeout: 3000 }).trim();
+    const m = v.match(/^v?(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function hermitNodeCandidates(home: string): string[] {
+  const dir = path.join(home, ".cache", "hermit", "pkg");
+  try {
+    return fs.readdirSync(dir)
+      .filter((n) => n.startsWith(`node-${MIN_NODE_MAJOR}.`))
+      .map((n) => path.join(dir, n, "bin", "node"));
+  } catch {
+    return [];
+  }
+}
+
+function nvmCandidates(home: string): string[] {
+  const base = process.env.NVM_DIR ?? path.join(home, ".nvm", "versions", "node");
+  try {
+    return fs.readdirSync(base)
+      .filter((n) => n.startsWith(`v${MIN_NODE_MAJOR}.`))
+      .map((n) => path.join(base, n, "bin", "node"));
+  } catch {
+    return [];
+  }
+}
+
+function fnmCandidates(home: string): string[] {
+  const base = path.join(home, ".local", "share", "fnm", "node-versions");
+  try {
+    return fs.readdirSync(base)
+      .filter((n) => n.startsWith(`v${MIN_NODE_MAJOR}.`) || n.startsWith(`${MIN_NODE_MAJOR}.`))
+      .map((n) => path.join(base, n, "installation", "bin", "node"));
+  } catch {
+    return [];
+  }
+}
 
 export async function startForeground(config: JinnConfig): Promise<void> {
   const cleanup = await startGateway(config);
@@ -47,7 +136,7 @@ export function startDaemon(config: JinnConfig): void {
   ];
   const entryScript = candidateEntryScripts.find((p) => fs.existsSync(p)) ?? candidateEntryScripts[0];
 
-  const child = spawn(process.execPath, [entryScript], {
+  const child = spawn(resolveNodeExecutable(), [entryScript], {
     detached: true,
     stdio: "ignore",
     env: { ...process.env, JINN_HOME },
@@ -81,7 +170,7 @@ export function restartDetached(): void {
   ];
   const entryScript = candidateEntryScripts.find((p) => fs.existsSync(p)) ?? candidateEntryScripts[0];
 
-  const child = spawn(process.execPath, [entryScript], {
+  const child = spawn(resolveNodeExecutable(), [entryScript], {
     detached: true,
     stdio: "ignore",
     env: { ...process.env, JINN_HOME },
