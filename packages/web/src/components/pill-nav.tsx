@@ -212,6 +212,10 @@ const RIBBON_LABEL_PILL =
   "motion-safe:-translate-x-1.5 group-hover/row:opacity-100 group-hover/row:translate-x-0 " +
   "group-focus-within/row:opacity-100 group-focus-within/row:translate-x-0 motion-reduce:transition-opacity"
 
+const RIBBON_FOOTER_HREFS = new Set(["/talk"])
+const RIBBON_MAIN_ITEMS = NAV_ITEMS.filter((item) => !RIBBON_FOOTER_HREFS.has(item.href))
+const RIBBON_FOOTER_ITEMS = NAV_ITEMS.filter((item) => RIBBON_FOOTER_HREFS.has(item.href))
+
 /** One ribbon entry — a fixed 44px icon square. It never resizes; the label is a
  *  floating pill that escapes to the right on hover/focus (the piano reveal), and
  *  the icon lifts/scales a touch like a pressed Dock key. */
@@ -367,8 +371,9 @@ export function NavRibbon({
           )}
         </div>
 
-        {/* Nav icons — per-icon piano reveal. */}
-        {NAV_ITEMS.map((item) => (
+        {/* Nav icons — per-icon piano reveal. Talk lives near the bottom so it
+            does not sit in the middle of the primary work-navigation stack. */}
+        {RIBBON_MAIN_ITEMS.map((item) => (
           <RibbonRow
             key={item.href}
             Icon={item.icon}
@@ -379,8 +384,17 @@ export function NavRibbon({
           />
         ))}
 
-        {/* Footer — theme toggle, pinned to the bottom. */}
-        <div className="mt-auto pt-1">
+        {/* Footer — secondary rail affordances, pinned to the bottom. */}
+        <div className="mt-auto flex flex-col items-center gap-0.5 pt-1">
+          {RIBBON_FOOTER_ITEMS.map((item) => (
+            <RibbonRow
+              key={item.href}
+              Icon={item.icon}
+              label={item.label}
+              href={item.href}
+              isActive={isNavItemActive(item.href, pathname)}
+            />
+          ))}
           <RibbonRow Icon={themeGlyph(theme)} label={`Theme: ${theme}`} onClick={cycleTheme} />
         </div>
       </nav>
