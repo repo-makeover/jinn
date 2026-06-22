@@ -49,6 +49,11 @@ export function detectRateLimit(result: EngineResult): RateLimitDetection {
     : undefined;
 
   if (result.rateLimit?.status === "rejected") {
+    // If Claude is actively using extra usage (overage billing), the request
+    // went through — don't treat the rate limit event as a blocking rejection.
+    if (result.rateLimit.isUsingOverage === true) {
+      return { limited: false };
+    }
     return { limited: true, resetsAt };
   }
 

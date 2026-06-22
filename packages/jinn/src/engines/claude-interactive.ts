@@ -169,7 +169,10 @@ function computeInteractiveCost(transcriptPath: string, model?: string): { cost:
 function rateLimitFromStopFailure(payload: HookPayload | undefined): EngineRateLimitInfo | null {
   if (!payload || payload.hook_event_name !== "StopFailure") return null;
   if (payload.error !== "rate_limit") return null;
-  return { status: "rejected", rateLimitType: "interactive_detected" };
+  const isUsingOverage = payload.is_using_overage === true ? true : undefined;
+  const overageStatus = typeof payload.overage_status === "string" ? payload.overage_status : undefined;
+  const overageDisabledReason = typeof payload.overage_disabled_reason === "string" ? payload.overage_disabled_reason : undefined;
+  return { status: "rejected", rateLimitType: "interactive_detected", isUsingOverage, overageStatus, overageDisabledReason };
 }
 
 export function buildInteractiveArgs(o: InteractiveArgsOpts): string[] {

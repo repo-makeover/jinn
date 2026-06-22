@@ -120,3 +120,26 @@ describe("isDeadSessionError", () => {
     expect(isDeadSessionError(rateLimited)).toBe(false);
   });
 });
+
+describe("detectRateLimit — extra usage / overage", () => {
+  it("is not limited when isUsingOverage is true (Claude extra usage is active)", () => {
+    const result = makeResult({
+      rateLimit: { status: "rejected", isUsingOverage: true },
+    });
+    expect(detectRateLimit(result).limited).toBe(false);
+  });
+
+  it("is still limited when isUsingOverage is false", () => {
+    const result = makeResult({
+      rateLimit: { status: "rejected", isUsingOverage: false },
+    });
+    expect(detectRateLimit(result).limited).toBe(true);
+  });
+
+  it("is still limited when isUsingOverage is absent", () => {
+    const result = makeResult({
+      rateLimit: { status: "rejected" },
+    });
+    expect(detectRateLimit(result).limited).toBe(true);
+  });
+});
