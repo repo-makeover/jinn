@@ -1,4 +1,5 @@
 import {
+  Archive,
   MessageSquare,
   AudioLines,
   Users,
@@ -24,6 +25,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/org", label: "Organization", icon: Users },
   { href: "/kanban", label: "Kanban", icon: LayoutGrid },
   { href: "/approvals", label: "Approvals", icon: ShieldCheck },
+  { href: "/archive", label: "Archive", icon: Archive },
   { href: "/cron", label: "Cron", icon: Clock },
   { href: "/limits", label: "Limits", icon: Gauge },
   { href: "/logs", label: "Activity", icon: Activity },

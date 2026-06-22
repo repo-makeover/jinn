@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import type { CronJob, Engine, IncomingMessage, JinnConfig, JsonObject, Session, Target } from "../shared/types.js";
+import type { ArchiveKind, CronJob, Engine, IncomingMessage, JinnConfig, JsonObject, Session, Target } from "../shared/types.js";
 import { isInterruptibleEngine } from "../shared/types.js";
 import { getModelRegistry, invalidateModelRegistry, refreshGrokModels, refreshPiModels } from "../shared/models.js";
 import { applyEmployeeSessionDefaults, validateNewSessionSelection, validateSessionPatch, validateCwd } from "../sessions/session-patch.js";
@@ -13,7 +13,7 @@ import { deriveWorkState, emptyWorkCounts } from "../shared/work-state.js";
 import { listDirectory, FsBrowseError } from "./fs-browse.js";
 import { safeWriteFile } from "../shared/safe-write.js";
 import type { SessionManager } from "../sessions/manager.js";
-import { listSessions, listRecentCwds, listRecentPerGroup, listSessionsForGroup, getSessionGroupCounts, coercePortalEmployee, searchSessions, listChildSessions, getSession, createSession, updateSession, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, getMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile } from "../sessions/registry.js";
+import { listSessions, listRecentCwds, listRecentPerGroup, listSessionsForGroup, getSessionGroupCounts, coercePortalEmployee, searchSessions, listChildSessions, getSession, createSession, updateSession, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, getMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
 import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR, FILES_DIR } from "../shared/paths.js";
 import { saveConfigAtomic } from "../shared/config.js";
@@ -95,6 +95,21 @@ function killSessionEngines(context: ApiContext, session: Session, reason: strin
   for (const engine of engines) {
     if (isInterruptibleEngine(engine)) engine.kill(session.id, reason);
   }
+}
+
+const ARCHIVE_KINDS = new Set<ArchiveKind>(["room", "scheduled", "chat"]);
+
+function isArchiveKind(value: unknown): value is ArchiveKind {
+  return typeof value === "string" && ARCHIVE_KINDS.has(value as ArchiveKind);
+}
+
+function teardownAndDeleteSession(context: ApiContext, session: Session, reason: string): boolean {
+  killSessionEngines(context, session, reason);
+  context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
+  maybeEmitTalkGraph(session.id, "removed", { getSession, emit: context.emit });
+  const deleted = deleteSession(session.id);
+  if (deleted) context.emit("session:deleted", { sessionId: session.id });
+  return deleted;
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -444,6 +459,74 @@ export async function handleApiRequest(
       return json(res, results);
     }
 
+    // GET /api/archives — previous project summaries, newest first.
+    if (method === "GET" && pathname === "/api/archives") {
+      return json(res, listArchives());
+    }
+
+    // POST /api/archives — snapshot sessions into a read-only project archive,
+    // then remove the live sessions through the same teardown path as DELETE.
+    if (method === "POST" && pathname === "/api/archives") {
+      const _parsed = await readJsonBody(req, res);
+      if (!_parsed.ok) return;
+      const body = _parsed.body as Record<string, unknown> | null;
+      if (!body || typeof body !== "object" || Array.isArray(body)) return badRequest(res, "object body is required");
+      if (!isArchiveKind(body.kind)) return badRequest(res, "kind must be one of: room, scheduled, chat");
+      if (!Array.isArray(body.sessionIds) || body.sessionIds.length === 0) {
+        return badRequest(res, "sessionIds array is required");
+      }
+      if (body.sessionIds.some((id) => typeof id !== "string" || !id.trim())) {
+        return badRequest(res, "sessionIds must be non-empty strings");
+      }
+      if (body.label !== undefined && body.label !== null && typeof body.label !== "string") {
+        return badRequest(res, "label must be a string");
+      }
+      if (body.note !== undefined && body.note !== null && typeof body.note !== "string") {
+        return badRequest(res, "note must be a string");
+      }
+      if (body.sourceRef !== undefined && body.sourceRef !== null && typeof body.sourceRef !== "string") {
+        return badRequest(res, "sourceRef must be a string");
+      }
+
+      const sessionIds = Array.from(new Set((body.sessionIds as string[]).map((id) => id.trim())));
+      const snapshots = snapshotSessions(sessionIds);
+      if (snapshots.length === 0) return badRequest(res, "no matching sessions to archive");
+
+      const archive = createArchive({
+        kind: body.kind,
+        label: typeof body.label === "string" ? body.label.slice(0, 200) : null,
+        note: typeof body.note === "string" ? body.note.slice(0, 5000) : null,
+        sourceRef: typeof body.sourceRef === "string" ? body.sourceRef.slice(0, 500) : null,
+        sessions: snapshots,
+      });
+
+      for (const snap of snapshots) {
+        const session = getSession(snap.id);
+        if (!session) continue;
+        const deleted = teardownAndDeleteSession(context, session, "Interrupted: session archived");
+        if (deleted) logger.info(`Archived and deleted session ${session.id} into archive ${archive.id}`);
+      }
+      context.emit("archive:created", { archive });
+      return json(res, archive);
+    }
+
+    // GET /api/archives/:id — read-only archived project detail.
+    let archiveParams = matchRoute("/api/archives/:id", pathname);
+    if (method === "GET" && archiveParams) {
+      const archive = getArchive(archiveParams.id);
+      if (!archive) return notFound(res);
+      return json(res, archive);
+    }
+
+    // DELETE /api/archives/:id — permanently remove an archive record only.
+    archiveParams = matchRoute("/api/archives/:id", pathname);
+    if (method === "DELETE" && archiveParams) {
+      const deleted = deleteArchive(archiveParams.id);
+      if (!deleted) return notFound(res);
+      context.emit("archive:deleted", { archiveId: archiveParams.id });
+      return json(res, { status: "deleted" });
+    }
+
     // GET /api/sessions
     //   ?group=<employee|__direct__|__cron__>&offset=M&limit=N → one group's page (sidebar "load more")
     //   ?limit=0                                              → every session (power-user escape hatch)
@@ -560,14 +643,9 @@ export async function handleApiRequest(
       // Tear down any live/warm engine processes for this session before deleting it.
       // kill() is safe to call unconditionally — it's a no-op when nothing is running.
       logger.info(`Killing engine process for deleted session ${params.id}`);
-      killSessionEngines(context, session, "Interrupted: session deleted");
-      context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
-
-      maybeEmitTalkGraph(params.id, "removed", { getSession, emit: context.emit });
-      const deleted = deleteSession(params.id);
+      const deleted = teardownAndDeleteSession(context, session, "Interrupted: session deleted");
       if (!deleted) return notFound(res);
       logger.info(`Session deleted: ${params.id}`);
-      context.emit("session:deleted", { sessionId: params.id });
       return json(res, { status: "deleted" });
     }
 
@@ -2024,4 +2102,3 @@ export async function handleApiRequest(
     return serverError(res, msg);
   }
 }
-

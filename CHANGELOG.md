@@ -5,6 +5,9 @@
 ### 💥 Breaking
 - **Node.js 24 is now required** (`engines.node` raised from `>=22` to `>=24`; `.nvmrc` pins `24.13.0`). The bundled native modules (`better-sqlite3`, `node-pty`) are built against the Node 24 ABI, so running on Node 22 fails. README and CONTRIBUTING prerequisites updated to match.
 
+### ✨ Features
+- **Previous Projects archive.** Chat rooms, individual chats, and past Scheduled run sessions can be snapshotted into read-only dated archives and removed from the active sidebar; cron job definitions keep running unchanged.
+
 ### ⚡ Performance / Reliability
 - **Engine lifecycle & queue hardening.** Another pass on interactive-engine teardown and per-session work queues to further reduce leaked process state and stuck turns.
 

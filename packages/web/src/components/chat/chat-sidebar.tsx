@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, startTransition } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, Clock3, Copy, EllipsisVertical, Layers, Pencil, Pin, Plus, Search, Trash2, X } from "lucide-react"
+import { Archive as ArchiveIcon, ChevronDown, Clock3, Copy, EllipsisVertical, Layers, Pencil, Pin, Plus, Search, Trash2, X } from "lucide-react"
 import { api, type BackgroundActivity, type Employee, type SessionsResponse } from "@/lib/api"
 import { useOrg } from "@/hooks/use-employees"
 import { EmployeeAvatar } from "@/components/ui/employee-avatar"
@@ -47,6 +47,7 @@ import {
   formatTime, titleCase, resolveRowIdentity, isCronSession, isDirectSession, isVisibleSource,
   getSessionActivity, sortSessionsByActivity, hasBackgroundActivity, isRecentError, getStatusDot,
 } from "./sidebar-session-helpers"
+import { ArchiveDialog, type ArchiveDialogTarget } from "./archive-dialog"
 
 // Compatibility facade: these moved to ./sidebar-types and ./sidebar-session-helpers
 // (AS-001 modularization) — re-exported so existing importers of this module
@@ -141,6 +142,7 @@ interface SessionRowProps {
   onEmployeeSessionsAvailable?: (sessions: Session[]) => void
   togglePin: (pinKey: string) => void
   handleDuplicate: (sessionId: string) => void
+  setArchiveTarget: (target: ArchiveDialogTarget | null) => void
   setDeleteTarget: (target: { type: "session" | "employee"; id: string; label: string; sessions?: Session[] } | null) => void
   setRenamingSessionId: (id: string | null) => void
   updateSessionTitle: (id: string, title: string) => void
@@ -159,6 +161,7 @@ const SessionRow = React.memo(function SessionRow({
   onEmployeeSessionsAvailable,
   togglePin,
   handleDuplicate,
+  setArchiveTarget,
   setDeleteTarget,
   setRenamingSessionId,
   updateSessionTitle,
@@ -263,6 +266,9 @@ const SessionRow = React.memo(function SessionRow({
               <DropdownMenuItem onClick={() => handleDuplicate(session.id)}>
                 Duplicate...
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setArchiveTarget({ kind: "chat", title: cleanPreview(sessionTitle) || "Untitled", sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}>
+                Archive...
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: cleanPreview(sessionTitle) || "Untitled" })}>
                 Delete session
@@ -280,6 +286,9 @@ const SessionRow = React.memo(function SessionRow({
         </ContextMenuItem>
         <ContextMenuItem onClick={() => handleDuplicate(session.id)}>
           Duplicate...
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => setArchiveTarget({ kind: "chat", title: cleanPreview(sessionTitle) || "Untitled", sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}>
+          Archive...
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: cleanPreview(sessionTitle) || "Untitled" })}>
@@ -307,6 +316,7 @@ interface FlatSessionRowProps {
   onEmployeeSessionsAvailable?: (sessions: Session[]) => void
   togglePin: (pinKey: string) => void
   handleDuplicate: (sessionId: string) => void
+  setArchiveTarget: (target: ArchiveDialogTarget | null) => void
   setDeleteTarget: (target: { type: "session" | "employee"; id: string; label: string; sessions?: Session[] } | null) => void
   setRenamingSessionId: (id: string | null) => void
   updateSessionTitle: (id: string, title: string) => void
@@ -329,6 +339,7 @@ const FlatSessionRow = React.memo(function FlatSessionRow({
   onEmployeeSessionsAvailable,
   togglePin,
   handleDuplicate,
+  setArchiveTarget,
   setDeleteTarget,
   setRenamingSessionId,
   updateSessionTitle,
@@ -353,6 +364,9 @@ const FlatSessionRow = React.memo(function FlatSessionRow({
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => handleDuplicate(session.id)}>
         Duplicate...
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => setArchiveTarget({ kind: "chat", title: displayTitle, sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}>
+        Archive...
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}>
@@ -455,6 +469,9 @@ const FlatSessionRow = React.memo(function FlatSessionRow({
         <ContextMenuItem onClick={() => handleDuplicate(session.id)}>
           Duplicate...
         </ContextMenuItem>
+        <ContextMenuItem onClick={() => setArchiveTarget({ kind: "chat", title: displayTitle, sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}>
+          Archive...
+        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}>
           <span className="flex-1">Delete session</span>
@@ -479,6 +496,7 @@ interface EmployeeRowProps {
   togglePin: (pinKey: string) => void
   handleMarkAllRead: (sessions: Session[]) => void
   handleEmployeeClick: (item: FlatItem) => void
+  setArchiveTarget: (target: ArchiveDialogTarget | null) => void
   setDeleteTarget: (target: { type: "session" | "employee"; id: string; label: string; sessions?: Session[] } | null) => void
   onLoadMore: (groupKey: string, offset: number) => void
   loadingMore: Set<string>
@@ -501,6 +519,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
   togglePin,
   handleMarkAllRead,
   handleEmployeeClick,
+  setArchiveTarget,
   setDeleteTarget,
   onLoadMore,
   loadingMore,
@@ -541,6 +560,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
     onEmployeeSessionsAvailable,
     togglePin,
     handleDuplicate,
+    setArchiveTarget,
     setDeleteTarget,
     setRenamingSessionId,
     updateSessionTitle,
@@ -741,6 +761,7 @@ export function ChatSidebar({
     label: string
     sessions?: Session[]
   } | null>(null)
+  const [archiveTarget, setArchiveTarget] = useState<ArchiveDialogTarget | null>(null)
   const deleteButtonRef = useRef<HTMLButtonElement>(null)
   const { data: orgData } = useOrg()
   const employeeData = useMemo(() => {
@@ -929,6 +950,30 @@ export function ChatSidebar({
       })
     } catch {}
   }
+
+  const handleArchiveComplete = useCallback((sessionIds: string[]) => {
+    setPinnedSessions((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      for (const id of sessionIds) {
+        if (next.delete(id)) changed = true
+      }
+      if (archiveTarget?.kind === "room" && archiveTarget.sourceRef) {
+        if (next.delete(`room:${archiveTarget.sourceRef}`)) changed = true
+      }
+      if (changed) savePinnedSessions(next)
+      return changed ? next : prev
+    })
+
+    startTransition(() => {
+      const archivedSelectedSession = !!selectedId && sessionIds.includes(selectedId)
+      const archivedSelectedRoom =
+        archiveTarget?.kind === "room" &&
+        !!archiveTarget.sourceRef &&
+        selectedId === roomSelectionId(archiveTarget.sourceRef)
+      if (archivedSelectedSession || archivedSelectedRoom) onNewChat()
+    })
+  }, [archiveTarget, selectedId, onNewChat])
 
   const {
     searching,
@@ -1293,6 +1338,7 @@ export function ChatSidebar({
     onEmployeeSessionsAvailable,
     togglePin,
     handleDuplicate: handleDuplicateCb,
+    setArchiveTarget,
     setDeleteTarget,
     setRenamingSessionId,
     updateSessionTitle,
@@ -1418,14 +1464,41 @@ export function ChatSidebar({
   }, [olderSummary])
 
   const cronHeader = (
-    <button
-      onClick={toggleCronCollapsed}
-      className="flex w-full items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-[var(--fill-tertiary)]"
-    >
-      <span className={SECTION_LABEL_CLASS}>Scheduled</span>
-      <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{cronTotal}</span>
-      <ChevronDown className={cn("size-3.5 shrink-0 text-[var(--text-quaternary)] transition-transform", cronCollapsed && "-rotate-90")} />
-    </button>
+    <div className="group/cron flex w-full items-center transition-colors hover:bg-[var(--fill-tertiary)]">
+      <button
+        onClick={toggleCronCollapsed}
+        className="flex min-w-0 flex-1 items-center gap-2 px-4 py-2 pr-1 text-left"
+      >
+        <span className={SECTION_LABEL_CLASS}>Scheduled</span>
+        <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{cronTotal}</span>
+        <ChevronDown className={cn("size-3.5 shrink-0 text-[var(--text-quaternary)] transition-transform", cronCollapsed && "-rotate-90")} />
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            onClick={(event) => event.stopPropagation()}
+            aria-label="Scheduled actions"
+            className="mr-1 flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/cron:lg:flex group-has-[[data-state=open]]/cron:lg:flex"
+          >
+            <EllipsisVertical className="size-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onClick={() => setArchiveTarget({
+              kind: "scheduled",
+              title: "Scheduled",
+              sessionIds: cronSessions.map((session) => session.id),
+              sourceRef: "scheduled",
+              sessions: cronSessions,
+            })}
+          >
+            <ArchiveIcon />
+            Archive past runs...
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   )
 
   // Single source of truth for rendering a VirtualItem — shared by the
@@ -1458,7 +1531,7 @@ export function ChatSidebar({
         return (
           <div
             className={cn(
-              "relative flex w-full items-center border-l-2 transition-colors",
+              "group/room relative flex w-full items-center border-l-2 transition-colors",
               isActive
                 ? "border-l-[var(--accent)] bg-[var(--fill-secondary)]"
                 : "border-l-transparent hover:bg-[var(--fill-tertiary)]",
@@ -1500,6 +1573,31 @@ export function ChatSidebar({
               </span>
               <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-quaternary)]">{room.sessionCount}</span>
             </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  onClick={(event) => event.stopPropagation()}
+                  aria-label={`${room.name} actions`}
+                  className="mr-1 flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/room:lg:flex group-has-[[data-state=open]]/room:lg:flex"
+                >
+                  <EllipsisVertical className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => setArchiveTarget({
+                    kind: "room",
+                    title: room.name,
+                    sessionIds: room.sessions.map((session) => session.id),
+                    sourceRef: room.id,
+                    sessions: room.sessions as unknown as Session[],
+                  })}
+                >
+                  <ArchiveIcon />
+                  Archive room...
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )
       }
@@ -1742,6 +1840,12 @@ export function ChatSidebar({
         ) : null}
         </div>
       </div>
+
+      <ArchiveDialog
+        target={archiveTarget}
+        onOpenChange={(open) => { if (!open) setArchiveTarget(null) }}
+        onArchived={handleArchiveComplete}
+      />
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <DialogContent showCloseButton={false} className="max-w-sm" onOpenAutoFocus={(e) => { e.preventDefault(); deleteButtonRef.current?.focus() }}>

@@ -26,6 +26,10 @@ export const queryKeys = {
   approvals: {
     all: ['approvals'] as const,
   },
+  archives: {
+    all: ['archives'] as const,
+    detail: (id: string) => ['archives', id] as const,
+  },
   work: {
     all: ['work'] as const,
   },

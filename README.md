@@ -91,6 +91,7 @@ When Claude Code gets better, Jinn gets better, automatically.
 - 📎 **File attachments**: drag & drop files and images into web chat (inbound and outbound), passed through to engines
 - 🖼️ **In-app file viewer**: click any file path in chat to open it in a built-in viewer tab
 - 🏬 **Department project-rooms**: the chat sidebar groups sessions into collapsible department rooms with a merged read-only multi-agent timeline and a Managers quick-access section
+- 🗄️ **Previous Projects archive**: snapshot rooms, individual chats, or past scheduled run sessions into dated read-only records and remove them from the active sidebar without disabling cron jobs
 - 📊 **Live context meter**: watch token usage per turn in real time
 - 📱 **Mobile-responsive**: collapsible sidebar and mobile-friendly dashboard
 - ⏰ **Cron scheduling**: hot-reloadable background jobs

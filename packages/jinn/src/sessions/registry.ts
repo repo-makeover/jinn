@@ -5,7 +5,15 @@ import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import { SESSIONS_DB } from '../shared/paths.js';
 import { logger } from '../shared/logger.js';
-import type { JsonObject, ReplyContext, Session } from '../shared/types.js';
+import type {
+  ArchiveKind,
+  ArchivedSessionSnapshot,
+  JsonObject,
+  ProjectArchive,
+  ProjectArchiveDetail,
+  ReplyContext,
+  Session,
+} from '../shared/types.js';
 
 let db: Database.Database;
 
@@ -69,6 +77,23 @@ CREATE TABLE IF NOT EXISTS files (
   path TEXT,
   created_at TEXT NOT NULL
 )
+`;
+
+const CREATE_ARCHIVES_TABLE = `
+CREATE TABLE IF NOT EXISTS archives (
+  id TEXT PRIMARY KEY,
+  label TEXT,
+  note TEXT,
+  kind TEXT NOT NULL,
+  source_ref TEXT,
+  created_at TEXT NOT NULL,
+  session_count INTEGER NOT NULL DEFAULT 0,
+  payload TEXT NOT NULL
+)
+`;
+
+const CREATE_ARCHIVES_CREATED_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_archives_created ON archives (created_at DESC)
 `;
 
 // Generic key/value store for one-off migration progress flags (e.g. the FTS
@@ -194,6 +219,8 @@ export function initDb(): Database.Database {
       ON queue_items (session_key, status, position);
   `);
   db.exec(CREATE_FILES_TABLE);
+  db.exec(CREATE_ARCHIVES_TABLE);
+  db.exec(CREATE_ARCHIVES_CREATED_INDEX);
 
   return db;
 }
@@ -1017,6 +1044,119 @@ export function deleteSessions(ids: string[]): number {
     return result.changes;
   });
   return txn();
+}
+
+function normalizeArchiveText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function rowToProjectArchive(row: Record<string, unknown>): ProjectArchive {
+  return {
+    id: row.id as string,
+    label: (row.label as string) ?? null,
+    note: (row.note as string) ?? null,
+    kind: row.kind as ArchiveKind,
+    sourceRef: (row.source_ref as string) ?? null,
+    createdAt: row.created_at as string,
+    sessionCount: (row.session_count as number) ?? 0,
+  };
+}
+
+function parseArchivePayload(value: unknown, archiveId: string): { sessions: ArchivedSessionSnapshot[] } {
+  if (typeof value !== 'string' || !value.trim()) return { sessions: [] };
+  try {
+    const parsed = JSON.parse(value) as { sessions?: ArchivedSessionSnapshot[] };
+    return { sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [] };
+  } catch {
+    logger.warn(`registry: dropped corrupt archive payload for ${archiveId}`);
+    return { sessions: [] };
+  }
+}
+
+export function snapshotSessions(ids: string[]): ArchivedSessionSnapshot[] {
+  const snapshots: ArchivedSessionSnapshot[] = [];
+  for (const id of ids) {
+    const session = getSession(id);
+    if (!session) continue;
+    snapshots.push({
+      id: session.id,
+      engine: session.engine,
+      employee: session.employee,
+      model: session.model,
+      title: session.title,
+      promptExcerpt: session.promptExcerpt ?? null,
+      source: session.source,
+      sourceRef: session.sourceRef,
+      status: session.status,
+      createdAt: session.createdAt,
+      lastActivity: session.lastActivity,
+      totalCost: session.totalCost,
+      totalTurns: session.totalTurns,
+      parentSessionId: session.parentSessionId,
+      messages: getMessages(id).map((message) => ({
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp,
+        ...(message.toolCall ? { toolCall: message.toolCall } : {}),
+        ...(message.media ? { media: message.media } : {}),
+      })),
+    });
+  }
+  return snapshots;
+}
+
+export function createArchive(opts: {
+  label?: string | null;
+  note?: string | null;
+  kind: ArchiveKind;
+  sourceRef?: string | null;
+  sessions: ArchivedSessionSnapshot[];
+}): ProjectArchive {
+  const db = initDb();
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  const label = normalizeArchiveText(opts.label);
+  const note = normalizeArchiveText(opts.note);
+  const sourceRef = normalizeArchiveText(opts.sourceRef);
+  const sessionCount = opts.sessions.length;
+  db.prepare(
+    `INSERT INTO archives (id, label, note, kind, source_ref, created_at, session_count, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    label,
+    note,
+    opts.kind,
+    sourceRef,
+    now,
+    sessionCount,
+    JSON.stringify({ sessions: opts.sessions }),
+  );
+  return { id, label, note, kind: opts.kind, sourceRef, createdAt: now, sessionCount };
+}
+
+export function listArchives(): ProjectArchive[] {
+  const db = initDb();
+  const rows = db
+    .prepare('SELECT id, label, note, kind, source_ref, created_at, session_count FROM archives ORDER BY created_at DESC')
+    .all() as Record<string, unknown>[];
+  return rows.map(rowToProjectArchive);
+}
+
+export function getArchive(id: string): ProjectArchiveDetail | undefined {
+  const db = initDb();
+  const row = db.prepare('SELECT * FROM archives WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  if (!row) return undefined;
+  const summary = rowToProjectArchive(row);
+  const payload = parseArchivePayload(row.payload, summary.id);
+  return { ...summary, sessions: payload.sessions };
+}
+
+export function deleteArchive(id: string): boolean {
+  const db = initDb();
+  const result = db.prepare('DELETE FROM archives WHERE id = ?').run(id);
+  return result.changes > 0;
 }
 
 /** Attachment descriptor stored alongside a message and rendered by the web UI. */
