@@ -34,7 +34,10 @@
    Tailwind v4 Theme Tokens
    ============================================ */
 
-@theme {
+/* `static` so every token is emitted to :root even when only referenced via
+   arbitrary values like p-[var(--space-3)] (Tailwind v4 tree-shakes unused
+   @theme tokens otherwise, which silently zeroes out spacing/typography). */
+@theme static {
   /* Theme-driven font stacks (overridden per [data-theme]; defaults below in :root) */
   --font-sans: var(--font-ui);
   --font-serif: var(--font-display);
