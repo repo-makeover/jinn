@@ -1,12 +1,12 @@
 # Provider-Neutral Matrix Orchestration
 
-Status: implemented as an inert foundation with durable scheduler-state and
-provider-adapter contract modules. This layer validates configs, runs
-fake-worker allocation, creates leases, exposes CLI dry-runs, includes a
-SQLite-backed store plus a persistent scheduler wrapper, and defines
-store-agnostic adapter contracts for later provider execution. It does not call
-real providers, create worktrees, update the dashboard, or change the current
-Jinn session execution path.
+Status: implemented as an inert foundation with durable scheduler-state,
+provider-adapter contract modules, and opt-in live-adapter plumbing. This layer
+validates configs, runs fake-worker allocation, creates leases, exposes CLI
+dry-runs, includes a SQLite-backed store plus a persistent scheduler wrapper,
+and defines store-agnostic adapters for later provider execution. It does not
+wire real providers into scheduler execution, create worktrees, update the
+dashboard, or change the current Jinn session execution path.
 
 ## Intent
 
@@ -106,20 +106,47 @@ not wired into gateway startup, live sessions, or the public CLI yet.
 
 ## Provider Adapters
 
-`packages/jinn/src/orchestration/adapter/` defines the M2 provider-neutral
-adapter contract. Adapters receive lease validation through an injected
-function, so the adapter layer can validate against either `MatrixScheduler` or
+`packages/jinn/src/orchestration/adapter/` defines the provider-neutral adapter
+contract. Adapters receive lease validation through an injected function, so the
+adapter layer can validate against either `MatrixScheduler` or
 `PersistentMatrixScheduler` without importing the store.
 
-M2 registers only inert adapter ids:
+The default adapter registry remains inert and registers only:
 
 - `local_echo` and `mock`: validate the lease, then run the deterministic
   `MockEngine`.
 - `manual`: validates the lease, then returns `manual_required`.
 - `stub`: validates the lease, then returns `unsupported_operation`.
 
-Unknown providers fail closed with `adapter_not_found`; real provider ids such
-as OpenAI, Anthropic, Claude, Kiro, Ollama, and Gemini are not registered yet.
+M3 adds `real-adapter.ts` plus an explicit `createLiveProviderAdapterRegistry`
+factory. Live adapters are opt-in and receive the gateway's existing engine
+`Map` as a dependency. They register only existing Jinn engine ids
+(`claude`, `codex`, `antigravity`, `grok`, `hermes`, `pi`, `kiro`) that are
+present in the injected map; unknown providers still fail closed with
+`adapter_not_found`.
+
+Live adapter behavior is intentionally narrow:
+
+- `startTask` validates the lease first, then requires `EngineRunOpts.sessionId`
+  and delegates to the injected engine.
+- `cancel` uses the captured session id and `InterruptibleEngine.kill` when the
+  engine supports interruption.
+- `streamOutput` registers a callback against the live run's stream tee.
+- Claude workers reject explicit headless bypass flags and rely on the gateway's
+  injected interactive PTY engine.
+
+This is not a live scheduler mode. No route, CLI command, dashboard control, or
+daemon startup path calls the live adapter factory yet.
+
+## Usage-Aware Routing
+
+`packages/jinn/src/orchestration/routing-headroom.ts` provides an opt-in
+`engineHasHeadroom(worker, config)` predicate and a worker filter helper. It
+reuses the existing `usage-status.ts` engine limit snapshots and the
+`boardWorker.usage.minRemainingPercent` default. Known live engines are filtered
+when unavailable, exhausted, or below the configured remaining-percent floor.
+Inert providers such as `local_echo` are allowed through so dry-runs and
+simulation remain deterministic.
 
 ## Failure Modes
 
@@ -131,9 +158,10 @@ as OpenAI, Anthropic, Claude, Kiro, Ollama, and Gemini are not registered yet.
 - Lease expiry releases worker capacity deterministically when `expireLeases`
   runs or when the persistent wrapper hydrates stale leases.
 - Adapter start rejects invalid leases before any inert engine can run.
-- Durable scheduler snapshots and adapter contracts are implemented, but
-  persistent telemetry aggregation, real worktrees, real provider adapters, and
-  live daemon routing are not implemented yet.
+- Durable scheduler snapshots, adapter contracts, opt-in live adapters, and
+  headroom predicates are implemented, but persistent telemetry aggregation,
+  real worktrees, live daemon routing, and dashboard controls are not
+  implemented yet.
 
 ## Later Milestones
 

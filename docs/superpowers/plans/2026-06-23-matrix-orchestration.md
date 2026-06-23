@@ -359,17 +359,32 @@ the source brief.
 - **M1 carry-forward:** injected lease validation works with `MatrixScheduler` or
   `PersistentMatrixScheduler`; adapters stay store-ignorant. **Implemented.**
 
-### M3 — Real adapter wiring + `engineHasHeadroom` routing (brief Phase 4 cont.)
+### M3 — Real adapter wiring + `engineHasHeadroom` routing (complete, 2026-06-23)
 
 - **Goal:** back real workers with the registered engines (claude/codex/grok/hermes/
   pi/kiro), preserving D7; add usage-aware routing (D4).
-- **Deliverables:** `real-adapter.ts` (worker.provider/model → existing engine via the
-  server's engine `Map`); `routing-headroom.ts` (reads `usage-status.ts`/
-  `engine-limits.ts`); claude path forced through interactive PTY.
-- **Exit gate:** claude worker proven to use `cc_entrypoint=cli` PTY path (contract
-  test asserts no headless bypass flag); rate-limited engine is filtered out of
-  candidates in live mode; simulation mode unaffected (headroom predicate is opt-in).
+- **Delivered:** `orchestration/adapter/real-adapter.ts` (worker.provider/model →
+  existing engine via an injected engine `Map`); `orchestration/routing-headroom.ts`
+  (usage-status based predicate/filter); explicit live registry factory; bounded
+  adapter run retention; push-stream subscription; live cancel mapped to
+  `InterruptibleEngine.kill(sessionId)`.
+- **Exit gate:** passed for injected-engine Claude contract (`server.ts` still maps
+  `claude` to `interactiveClaudeEngine`), headless-bypass rejection, scheduler import
+  boundary, adapter store/persistence boundary, real-adapter no-concrete-engine-import
+  boundary, usage-headroom filtering, and simulation staying untouched.
 - **Team:** implementer; **review:** department — focus on billing-path + usage glue.
+- **M2 carry-forward (resolve in M3):** (1) **`cancel(runId)` must map to the live engine
+  session** — capture `ProviderRun.engineSessionId` at `startTask` (from
+  `EngineRunOpts.sessionId`, known before the turn completes), not only on completion, so
+  `cancel` can call `InterruptibleEngine.kill(sessionId)` to interrupt a real in-flight
+  turn (without this, cancel can't stop a running engine — a real failsafe gap). (2)
+  **Reconcile push vs pull streaming** — M2's `streamOutput(runId)` is vestigial (echo
+  streams via the `onStream` in `EngineRunOpts`); for real engines + the M11 dashboard,
+  make `streamOutput` register a subscriber against the live stream/PTY tee rather than
+  return `unsupported`. (3) Bound the adapter's `runs` map (same retention note as M1).
+  **Implemented.**
+- **Remaining boundary:** M3 does not wire live matrix execution into sessions, daemon
+  boot, API routes, CLI commands, worktrees, or dashboard controls. Those remain M4/M5+.
 
 ### M4 — Coordinator templates → live allocation API (brief Phase 3+6 surface)
 

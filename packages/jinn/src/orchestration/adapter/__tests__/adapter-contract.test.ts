@@ -158,7 +158,7 @@ describe("orchestration import boundaries", () => {
     const source = fs.readFileSync(path.join(process.cwd(), "src/orchestration/scheduler.ts"), "utf-8");
     const imports = source.split("\n").filter((line) => line.startsWith("import")).join("\n");
 
-    expect(imports).not.toMatch(/adapter|engines|shared\/types|Engine/);
+    expect(imports).not.toMatch(/adapter|engines|shared\/types|usage-status|routing-headroom|Engine/);
   });
 
   it("keeps adapter code free of store and persistent scheduler imports", () => {
@@ -168,6 +168,12 @@ describe("orchestration import boundaries", () => {
       .join("\n");
 
     expect(source).not.toMatch(/store\.js|persistent-scheduler\.js|\.\.\/store|\.\.\/persistent-scheduler/);
+  });
+
+  it("keeps the real adapter free of concrete engine imports", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src/orchestration/adapter/real-adapter.ts"), "utf-8");
+    expect(source).not.toMatch(/engines\//);
+    expect(source).not.toMatch(/ClaudeEngine|InteractiveClaudeEngine|CodexEngine|GrokEngine|KiroEngine|PiEngine|Hermes/);
   });
 });
 

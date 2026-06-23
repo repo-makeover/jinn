@@ -10,6 +10,8 @@ import type { Lease, LeaseValidationResult, RoleDefinition, Worker } from "../ty
 export type ProviderAdapterErrorCode =
   | "lease_invalid"
   | "adapter_not_found"
+  | "engine_unavailable"
+  | "invalid_request"
   | "unsupported_operation"
   | "manual_required"
   | "engine_failed"
