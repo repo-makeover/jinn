@@ -119,6 +119,24 @@ describe('TicketDetailPanel live session', () => {
     expect(screen.getByTestId('chat-messages').textContent).toContain('Thinking through it')
   })
 
+  it('renders an open-live-session link that targets the chat route directly', async () => {
+    getTicketSession.mockResolvedValue({
+      found: true,
+      sessionId: 's-link',
+      status: 'running',
+      engine: 'claude',
+      model: 'opus',
+      lastActivityIso: '2026-06-22T10:00:00.000Z',
+      lastActivityAgoMs: 4000,
+      messages: [],
+    })
+
+    renderPanel()
+
+    const link = await screen.findByRole('link', { name: /open live session/i })
+    expect(link.getAttribute('href')).toBe('/?session=s-link')
+  })
+
   it('hides the live session section when the ticket is not in progress and no session is found', async () => {
     getTicketSession.mockResolvedValue({ found: false })
 

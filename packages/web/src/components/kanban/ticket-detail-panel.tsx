@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { ChatMessages } from '@/components/chat/chat-messages'
 import { useGateway } from '@/hooks/use-gateway'
 import { api, type Employee, type TicketSessionResponse } from '@/lib/api'
@@ -96,7 +95,6 @@ export function TicketDetailPanel({
   onDelete,
 }: TicketDetailPanelProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
-  const navigate = useNavigate()
   const { subscribe } = useGateway()
   const [liveSession, setLiveSession] = useState<TicketSessionResponse | null>(null)
   const [liveLoading, setLiveLoading] = useState(false)
@@ -330,12 +328,12 @@ export function TicketDetailPanel({
                   Live session
                 </div>
                 {liveSession?.found && liveSession.sessionId && (
-                  <button
-                    onClick={() => navigate(`/?session=${encodeURIComponent(liveSession.sessionId!)}`)}
-                    className="border-none bg-transparent text-[length:var(--text-caption2)] font-semibold text-[var(--system-blue)] cursor-pointer"
+                  <a
+                    href={`/?session=${encodeURIComponent(liveSession.sessionId)}`}
+                    className="text-[length:var(--text-caption2)] font-semibold text-[var(--system-blue)] cursor-pointer no-underline"
                   >
                     Open live session
-                  </button>
+                  </a>
                 )}
               </div>
 
