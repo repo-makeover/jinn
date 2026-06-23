@@ -354,6 +354,91 @@ describe("buildContext — audience scoping", () => {
   });
 });
 
+// Guards the payoff of audience scoping (engine-stability plan, spec 2b): the
+// injected context must stay well under its token budget, and an employee must
+// never carry MORE than the COO (the original bug — employees received the org
+// roster + cron list + full API table the COO had, on top of their persona).
+// Baseline before scoping was ~9K tokens (COO) / ~10K tokens (employee); the
+// targets are COO ≤ 4K tokens and employee ≤ 3.5K tokens. We assert in tokens
+// via a chars/4 estimate (a safe over-estimate for English+markdown), plus the
+// structural invariants and the absence of the dropped bloat as the real
+// tripwires — re-introducing any of it here will fail the suite.
+describe("buildContext — size regression (spec 2b)", () => {
+  // ~4 chars per token is a conservative ceiling for prose + markdown.
+  const estTokens = (s: string) => s.length / 4;
+
+  // A fixed, representative org so the COO roster has realistic weight and the
+  // thresholds stay deterministic across machines. Mirrors the live shape:
+  // a handful of managers at depth 1, the rest as their reports at depth 2.
+  function makeOrg(n: number): { hierarchy: any; manager: Employee; worker: Employee } {
+    const depts = ["software-delivery", "content", "ops", "research", "infra", "techpub"];
+    const nodes: Record<string, any> = {};
+    const sorted: string[] = [];
+    let manager!: Employee;
+    let worker!: Employee;
+    for (let i = 0; i < n; i++) {
+      const isMgr = i % 11 === 0;
+      const emp: Employee = {
+        name: `emp-${i}`,
+        displayName: `Employee ${i}`,
+        department: depts[i % depts.length],
+        rank: isMgr ? "manager" : i % 2 === 0 ? "senior" : "employee",
+        engine: "claude",
+        model: "opus",
+        persona: `You handle ${depts[i % depts.length]} task number ${i}. Be proactive and deliver results.`,
+      };
+      nodes[emp.name] = {
+        employee: emp,
+        parentName: isMgr ? null : `emp-${i - (i % 11)}`,
+        directReports: [],
+        depth: isMgr ? 1 : 2,
+        chain: [],
+      };
+      sorted.push(emp.name);
+      if (i === 11) manager = emp; // a manager (depth 1, has the mini-ref)
+      if (i === 7) worker = emp; // a plain employee with no reports
+    }
+    return { hierarchy: { nodes, sorted }, manager, worker };
+  }
+
+  const config = {
+    gateway: { host: "127.0.0.1", port: 7777 },
+    engines: { default: "claude", claude: { model: "opus" }, codex: { model: "gpt-5.5" } },
+    logging: { level: "info" },
+    portal: { portalName: "Jinn", setupComplete: true },
+  } as unknown as JinnConfig;
+
+  const { hierarchy, manager, worker } = makeOrg(50);
+  const ctx = (employee?: Employee) =>
+    buildContext({ ...baseOpts, source: "manual", config, connectors: ["slack"], employee, hierarchy });
+
+  it("COO injected context stays under the 4K-token target", () => {
+    expect(estTokens(ctx())).toBeLessThan(4000);
+  });
+
+  it("employee injected context stays under the 3.5K-token target", () => {
+    expect(estTokens(ctx(worker))).toBeLessThan(3500);
+    expect(estTokens(ctx(manager))).toBeLessThan(3500);
+  });
+
+  it("an employee never carries more context than the COO", () => {
+    const coo = ctx().length;
+    expect(ctx(worker).length).toBeLessThan(coo);
+    expect(ctx(manager).length).toBeLessThan(coo);
+  });
+
+  it("employee context omits the dropped bloat (org roster, cron list, API table)", () => {
+    const out = ctx(worker);
+    expect(out).not.toContain("## Organization ("); // roster heading
+    expect(out).not.toContain("## Scheduled cron");
+    expect(out).not.toContain("| `/api/cron` | GET |"); // full API table row
+  });
+
+  it("COO context omits the full API table (it lives in CLAUDE.md/AGENTS.md)", () => {
+    expect(ctx()).not.toContain("| `/api/cron` | GET |");
+  });
+});
+
 describe("buildContext — maxChars trimming", () => {
   it("stays within a configured maxChars cap by trimming optional/standard sections", () => {
     const cap = 1200;
