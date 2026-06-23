@@ -847,10 +847,14 @@ export class SessionManager {
         await connector.replyMessage(target, "Usage: /cron run <job-id-or-name>");
         return true;
       }
-      const job = await triggerCronJob(arg);
+      const result = await triggerCronJob(arg);
       await connector.replyMessage(
         target,
-        job ? `Triggered cron job "${job.name}".` : `Cron job "${arg}" not found.`,
+        !result.found
+          ? `Cron job "${arg}" not found.`
+          : !result.started
+            ? `Cron job "${result.job.name}" already running; skipped overlap.`
+            : `Triggered cron job "${result.job.name}".`,
       );
       return true;
     }

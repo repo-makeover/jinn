@@ -21,6 +21,11 @@ export type CronRunStart =
   | { started: true; runId: string; promise: Promise<CronRunEntry> }
   | { started: false; run: CronRunEntry };
 
+export type CronTriggerResult =
+  | { found: false }
+  | { found: true; job: CronJob; started: true; runId: string }
+  | { found: true; job: CronJob; started: false; run: CronRunEntry };
+
 export function startScheduler(
   jobs: CronJob[],
   sessionManager: SessionManager,
@@ -111,12 +116,13 @@ export function startCronJobRun(
   return { started: true, runId, promise };
 }
 
-export async function triggerCronJob(idOrName: string): Promise<CronJob | undefined> {
+export async function triggerCronJob(idOrName: string): Promise<CronTriggerResult> {
   const job = findJob(idOrName);
-  if (!job) return undefined;
+  if (!job) return { found: false };
   const started = startCronJobRun(job, currentSessionManager, currentConfig, currentConnectors, "manual");
-  if (started.started) await started.promise;
-  return job;
+  if (!started.started) return { found: true, job, started: false, run: started.run };
+  await started.promise;
+  return { found: true, job, started: true, runId: started.runId };
 }
 
 export function setCronJobEnabled(idOrName: string, enabled: boolean): CronJob | undefined {

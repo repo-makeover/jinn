@@ -72,4 +72,36 @@ describe("startCronJobRun", () => {
     resolveRun(makeRun("success"));
     if (first.started) await first.promise;
   });
+
+  it("triggerCronJob preserves the skipped overlap result instead of collapsing it to job existence", async () => {
+    const loadJobs = vi.fn(() => [makeJob()]);
+    vi.doMock("../jobs.js", () => ({
+      appendRunLog,
+      loadJobs,
+      saveJobs: vi.fn(),
+    }));
+
+    const { triggerCronJob } = await import("../scheduler.js");
+    let resolveRun!: (entry: CronRunEntry) => void;
+    const inFlight = new Promise<CronRunEntry>((resolve) => {
+      resolveRun = resolve;
+    });
+    runCronJob.mockReturnValueOnce(inFlight);
+
+    const first = triggerCronJob("job-1");
+    const second = await triggerCronJob("job-1");
+
+    expect(second).toMatchObject({
+      found: true,
+      started: false,
+      job: expect.objectContaining({ id: "job-1", name: "Overlap" }),
+      run: expect.objectContaining({
+        status: "skipped_overlap",
+        trigger: "manual",
+      }),
+    });
+
+    resolveRun(makeRun("success"));
+    await first;
+  });
 });
