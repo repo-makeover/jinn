@@ -152,6 +152,66 @@ describe("approvals endpoints", () => {
     expect(enqueue).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a fallback approval cleanly if the first attempt fails before resolution", async () => {
+    const s = reg.createSession({ engine: "claude", source: "web", sourceRef: "web:e4", prompt: "x" });
+    const a = store.createApproval({
+      sessionId: s.id,
+      type: "fallback",
+      payload: { to: { engine: "codex", model: "gpt-5.5" }, handoffPath: "nope.md" },
+    });
+    const enqueue = vi.fn(async () => { /* do not run the callback (no live engine) */ });
+    const resolveSpy = vi.spyOn(store, "resolveApproval");
+    resolveSpy.mockImplementationOnce(() => {
+      throw new Error("injected before resolve");
+    });
+
+    try {
+      const failCap = makeRes();
+      await api.handleApiRequest(makeReq("POST", `/api/approvals/${a.id}/approve`), failCap.res, makeCtx({
+        sessionManager: {
+          getEngine: () => ({ run: vi.fn() }),
+          getQueue: () => ({ enqueue, getPendingCount: () => 0, getTransportState: () => "running" }),
+        },
+      }));
+
+      expect(failCap.status).toBe(500);
+      expect(store.getApproval(a.id)?.state).toBe("pending");
+      const afterFail = reg.getSession(s.id);
+      expect(afterFail?.engine).toBe("claude");
+      expect(((afterFail?.transportMeta ?? {}) as Record<string, any>).modelFallback?.status).toBe("approval_resume_pending");
+      expect(enqueue).toHaveBeenCalledTimes(0);
+
+      const retryCap = makeRes();
+      await api.handleApiRequest(makeReq("POST", `/api/approvals/${a.id}/approve`), retryCap.res, makeCtx({
+        sessionManager: {
+          getEngine: () => ({ run: vi.fn() }),
+          getQueue: () => ({ enqueue, getPendingCount: () => 0, getTransportState: () => "running" }),
+        },
+      }));
+
+      expect(retryCap.status).toBe(200);
+      expect(store.getApproval(a.id)?.state).toBe("approved");
+      const rolled = reg.getSession(s.id);
+      expect(rolled?.engine).toBe("codex");
+      expect(rolled?.model).toBe("gpt-5.5");
+      expect(((rolled?.transportMeta ?? {}) as Record<string, any>).modelFallback?.status).toBe("running_on_fallback");
+      expect(enqueue).toHaveBeenCalledTimes(1);
+
+      const idempotentCap = makeRes();
+      await api.handleApiRequest(makeReq("POST", `/api/approvals/${a.id}/approve`), idempotentCap.res, makeCtx({
+        sessionManager: {
+          getEngine: () => ({ run: vi.fn() }),
+          getQueue: () => ({ enqueue, getPendingCount: () => 0, getTransportState: () => "running" }),
+        },
+      }));
+
+      expect(idempotentCap.status).toBe(200);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveSpy.mockRestore();
+    }
+  });
+
   it("reject marks the approval rejected and errors the session (surfaced, not stalled)", async () => {
     const s = reg.createSession({ engine: "claude", source: "web", sourceRef: "web:e3", prompt: "x" });
     const a = store.createApproval({ sessionId: s.id, type: "fallback", payload: { to: { engine: "codex" } } });

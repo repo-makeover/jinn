@@ -507,20 +507,25 @@ export async function handleApiRequest(
     if (method === "POST" && approvalParams) {
       const approval = getApproval(approvalParams.id);
       if (!approval) return notFound(res);
-      if (approval.state !== "pending") return json(res, { error: `approval already ${approval.state}` }, 409);
       const config = context.getConfig();
       const actor = resolveUserHeader(req.headers, config.gateway.userHeader) ?? null;
 
       // Only `fallback` approvals carry a resume side-effect today. Other types
       // are accepted by the store generically and simply marked approved.
       if (approval.type !== "fallback") {
+        if (approval.state !== "pending") return json(res, { error: `approval already ${approval.state}` }, 409);
         const resolved = resolveApproval(approval.id, "approved", actor);
         context.emit("approval:resolved", { approvalId: resolved.id, sessionId: resolved.sessionId, state: "approved" });
         return json(res, { approval: resolved });
       }
 
       const session = getSession(approval.sessionId);
-      if (!session) return notFound(res);
+      if (!session) {
+        if (approval.state !== "pending") {
+          return json(res, { error: `approval already ${approval.state}` }, 409);
+        }
+        return notFound(res);
+      }
       const to = (approval.payload.to ?? {}) as { engine?: string; model?: string; effortLevel?: string | null };
       if (!to.engine) return badRequest(res, "approval payload missing target engine");
       const nextEngine = context.sessionManager.getEngine(to.engine);
@@ -536,6 +541,40 @@ export async function handleApiRequest(
 
       const prevMeta = (session.transportMeta ?? {}) as Record<string, unknown>;
       const prevFallback = (prevMeta.modelFallback ?? {}) as Record<string, unknown>;
+      const fallbackStatus = typeof prevFallback.status === "string" ? prevFallback.status : null;
+      const fallbackApprovalId = typeof prevFallback.approvalId === "string" ? prevFallback.approvalId : null;
+      const approvedAt = typeof prevFallback.approvedAt === "string" ? prevFallback.approvedAt : new Date().toISOString();
+      const canResumeApprovedFallback = approval.state === "approved" &&
+        fallbackApprovalId === approval.id &&
+        (
+          fallbackStatus === "approval_resume_pending" ||
+          fallbackStatus === "running_on_fallback_pending_dispatch" ||
+          fallbackStatus === "running_on_fallback"
+        );
+      if (approval.state !== "pending" && !canResumeApprovedFallback) {
+        return json(res, { error: `approval already ${approval.state}` }, 409);
+      }
+
+      const nextFallbackMeta = {
+        ...prevFallback,
+        approvalId: approval.id,
+        approvedAt,
+      } as JsonObject;
+
+      if (approval.state === "pending" && fallbackStatus !== "approval_resume_pending") {
+        patchSessionTransportMeta(session.id, {
+          modelFallback: { ...nextFallbackMeta, status: "approval_resume_pending" } as JsonObject,
+        });
+      }
+
+      const resolved = approval.state === "approved"
+        ? approval
+        : resolveApproval(approval.id, "approved", actor);
+
+      if (canResumeApprovedFallback && fallbackStatus === "running_on_fallback") {
+        return json(res, { approval: resolved, session: serializeSession(session, context) });
+      }
+
       let rolled = updateSession(session.id, {
         engine: to.engine,
         model: to.model ?? session.model ?? undefined,
@@ -546,12 +585,13 @@ export async function handleApiRequest(
         lastError: null,
       }) ?? session;
       patchSessionTransportMeta(session.id, {
-        modelFallback: { ...prevFallback, status: "running_on_fallback", approvedAt: new Date().toISOString() } as JsonObject,
+        modelFallback: { ...nextFallbackMeta, status: "running_on_fallback_pending_dispatch" } as JsonObject,
       });
       rolled = getSession(session.id) ?? rolled;
       deletePartialMessages(session.id);
-      const resolved = resolveApproval(approval.id, "approved", actor);
-      insertMessage(session.id, "notification", `✅ Fallback approved → ${to.engine}/${to.model ?? "default"}. Resuming on fallback.`);
+      if (fallbackStatus !== "running_on_fallback_pending_dispatch" && fallbackStatus !== "running_on_fallback") {
+        insertMessage(session.id, "notification", `✅ Fallback approved → ${to.engine}/${to.model ?? "default"}. Resuming on fallback.`);
+      }
       context.emit("approval:resolved", { approvalId: resolved.id, sessionId: session.id, state: "approved" });
       context.emit("session:updated", { sessionId: session.id });
 
@@ -559,6 +599,10 @@ export async function handleApiRequest(
         ? "You are taking over this task after a model fallback. Read the handoff packet below, preserve prior decisions and technical truth, then continue the original task.\n\n" + handoffMd
         : "Continue this conversation and respond to the last USER message after an operator-approved model fallback.";
       dispatchWebSessionRun(rolled, fallbackPrompt, nextEngine, config, context);
+      patchSessionTransportMeta(session.id, {
+        modelFallback: { ...nextFallbackMeta, status: "running_on_fallback" } as JsonObject,
+      });
+      rolled = getSession(session.id) ?? rolled;
       return json(res, { approval: resolved, session: serializeSession(rolled, context) });
     }
     // POST /api/approvals/:id/reject — reject a pending approval; session surfaces as errored.
