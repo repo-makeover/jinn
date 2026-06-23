@@ -32,8 +32,9 @@
 - `jinn scheduler simulate <scenario-file> --config-dir <dir> [--json]` runs deterministic allocation/release/heartbeat/expiry scenario steps against in-memory scheduler state.
 - This foundation is inert: it does not call providers, create worktrees, change gateway session execution, update the dashboard, or write to live `~/.jinn`.
 - Fidelity gaps:
-  - Persistent telemetry, durable queues, real provider adapters, worktree execution, live orchestration modes, and GUI controls are later milestones.
-  - The scheduler state exists only for the command/test process in this first slice.
+  - A SQLite store and persistent scheduler wrapper now exist for leases, allocations, queue items, and telemetry events, but they are code-level foundations only.
+  - The public CLI dry-runs still use process-local scheduler state and do not write the durable store.
+  - Persistent telemetry aggregation, real provider adapters, worktree execution, live orchestration modes, and GUI controls are later milestones.
 
 ## API
 

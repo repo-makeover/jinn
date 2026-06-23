@@ -6,6 +6,7 @@ import type {
   OrchestrationConfig,
   QueueItem,
   RoleDefinition,
+  SchedulerSnapshot,
   SimulationStepResult,
   TelemetryEvent,
   Worker,
@@ -26,6 +27,7 @@ const PRIORITY_RANK: Record<string, number> = {
 
 export interface SchedulerOptions {
   now?: () => Date;
+  snapshot?: SchedulerSnapshot;
 }
 
 export interface LeaseValidationResult {
@@ -43,6 +45,7 @@ export class MatrixScheduler {
   private readonly workers: Worker[];
   private readonly roles: Map<string, RoleDefinition>;
   private readonly now: () => Date;
+  private readonly allocations = new Map<string, Allocation>();
   private readonly leases = new Map<string, Lease>();
   private readonly queue: QueueItem[] = [];
   private readonly telemetry: TelemetryEvent[] = [];
@@ -52,6 +55,7 @@ export class MatrixScheduler {
     this.workers = [...config.workers].sort((a, b) => a.id.localeCompare(b.id));
     this.roles = new Map(config.roles.map((role) => [role.id, role]));
     this.now = opts.now ?? (() => new Date());
+    if (opts.snapshot) this.hydrate(opts.snapshot);
   }
 
   requestAllocation(request: AllocationRequest): AllocationResult {
@@ -105,6 +109,7 @@ export class MatrixScheduler {
       optionalRolesSkipped,
       createdAt,
     };
+    this.allocations.set(allocation.allocationId, allocation);
     this.record("allocation_created", {
       taskId: request.taskId,
       timestamp: createdAt,
@@ -197,12 +202,42 @@ export class MatrixScheduler {
     return [...this.leases.values()].map((lease) => ({ ...lease }));
   }
 
+  listAllocations(): Allocation[] {
+    return [...this.allocations.values()].map((allocation) => ({
+      ...allocation,
+      leases: allocation.leases.map((lease) => ({ ...lease })),
+      optionalRolesSkipped: [...allocation.optionalRolesSkipped],
+    }));
+  }
+
   listQueue(): QueueItem[] {
-    return this.queue.map((item) => ({ ...item, request: { ...item.request } }));
+    return this.queue.map((item) => ({
+      ...item,
+      missingRoles: [...item.missingRoles],
+      resumeOn: [...item.resumeOn],
+      request: {
+        ...item.request,
+        requiredRoles: [...item.request.requiredRoles],
+        optionalRoles: [...item.request.optionalRoles],
+      },
+    }));
   }
 
   listTelemetry(): TelemetryEvent[] {
-    return this.telemetry.map((event) => ({ ...event }));
+    return this.telemetry.map((event) => ({
+      ...event,
+      detail: event.detail ? { ...event.detail } : undefined,
+    }));
+  }
+
+  createSnapshot(): SchedulerSnapshot {
+    return {
+      allocations: this.listAllocations(),
+      leases: this.listLeases(),
+      queue: this.listQueue(),
+      telemetry: this.listTelemetry(),
+      nextSeq: this.nextSeq,
+    };
   }
 
   resolveLease(selector: { leaseId?: string; taskId?: string; role?: string; workerId?: string }): Lease {
@@ -339,6 +374,35 @@ export class MatrixScheduler {
 
   private isoNow(): string {
     return this.now().toISOString();
+  }
+
+  private hydrate(snapshot: SchedulerSnapshot): void {
+    this.nextSeq = Math.max(1, snapshot.nextSeq);
+    for (const lease of snapshot.leases) {
+      this.leases.set(lease.leaseId, { ...lease });
+    }
+    const leasesById = new Map(this.leases);
+    for (const allocation of snapshot.allocations) {
+      this.allocations.set(allocation.allocationId, {
+        ...allocation,
+        leases: allocation.leases.map((lease) => leasesById.get(lease.leaseId) ?? { ...lease }),
+        optionalRolesSkipped: [...allocation.optionalRolesSkipped],
+      });
+    }
+    this.queue.push(...snapshot.queue.map((item) => ({
+      ...item,
+      missingRoles: [...item.missingRoles],
+      resumeOn: [...item.resumeOn],
+      request: {
+        ...item.request,
+        requiredRoles: [...item.request.requiredRoles],
+        optionalRoles: [...item.request.optionalRoles],
+      },
+    })));
+    this.telemetry.push(...snapshot.telemetry.map((event) => ({
+      ...event,
+      detail: event.detail ? { ...event.detail } : undefined,
+    })));
   }
 
   private record(type: TelemetryEvent["type"], event: Omit<TelemetryEvent, "eventId" | "type">): void {

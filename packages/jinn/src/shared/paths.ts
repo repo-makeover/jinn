@@ -15,6 +15,10 @@ function resolveHome(): string {
 export const JINN_HOME = resolveHome();
 export const CONFIG_PATH = path.join(JINN_HOME, "config.yaml");
 export const SESSIONS_DB = path.join(JINN_HOME, "sessions", "registry.db");
+/** Durable state for the inert provider-neutral matrix scheduler. */
+export const ORCH_DB = path.join(JINN_HOME, "orchestration.db");
+/** Default repo-local operator config directory for matrix orchestration YAML. */
+export const ORCH_CONFIG_DIR = path.join(JINN_HOME, "orchestration");
 export const CRON_JOBS = path.join(JINN_HOME, "cron", "jobs.json");
 /** Hash-chained, append-only integrity ledger for safe-write file mutations. */
 export const AUDIT_LOG = path.join(JINN_HOME, "audit.jsonl");

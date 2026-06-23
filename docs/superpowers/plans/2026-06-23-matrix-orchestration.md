@@ -1,9 +1,10 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 (inert foundation) is **complete** (Codex, 2026-06-23). This
-> document is the **full-capability roadmap** from the inert scaffold to a real,
-> daemon-integrated, provider-neutral matrix scheduler. It is a *planning artifact*,
-> not an execution order — no code is changed by reading it.
+> **Status:** Phase 1 (inert foundation) and M1 (durable scheduler state) are
+> **complete** (Codex, 2026-06-23). This document is the **full-capability
+> roadmap** from the inert scaffold to a real, daemon-integrated,
+> provider-neutral matrix scheduler. It is a *planning artifact*, not an
+> execution order — no code is changed by reading it.
 >
 > **Execution discipline:** Every implementation milestone below is built with the
 > `plan-prototype-build` skill at `~/vscode/agent-skills/30_plan/plan-prototype-build/`
@@ -326,23 +327,23 @@ the source brief.
 > Legend — **Exit gate** = the checklist that must be green to call the milestone done;
 > **Team** = who does it (single implementer unless noted) and who reviews.
 
-### M1 — Durable scheduler state (new) ✦ foundation for everything live
+### M1 — Durable scheduler state (complete, 2026-06-23) ✦ foundation for everything live
 
 - **Phase:** new (precedes brief Phase 4). **Goal:** persist leases/allocations/queue/
   telemetry so the scheduler survives daemon restarts, without changing the pure core.
-- **Deliverables:** `orchestration/store.ts` (better-sqlite3, WAL, migrations like
-  `sessions/registry.ts`); `orchestration/persistent-scheduler.ts` (wraps
-  `MatrixScheduler`: hydrate on construct, write-through on mutate); schema for the new
-  tables; config loader reads `~/.jinn/orchestration/*.yaml`.
+- **Delivered:** `orchestration/store.ts` (better-sqlite3, WAL, dedicated
+  `~/.jinn/orchestration.db`, corrupt DB recovery); `orchestration/persistent-scheduler.ts`
+  (hydrates `MatrixScheduler`, write-through snapshot persistence, deterministic
+  lease expiry on hydrate); schema for leases, allocations, allocation leases, queue
+  items, telemetry events, and metadata; default config loader for
+  `~/.jinn/orchestration/*.yaml`.
 - **Integration points:** mirror `sessions/registry.ts:176` init pattern; new
   `ORCH_DB = JINN_HOME/orchestration.db` in `shared/paths.ts`.
-- **Exit gate:** scheduler state round-trips across a simulated restart; corrupt/empty
-  DB recovers cleanly; pure `MatrixScheduler` tests still pass unchanged; no write to
-  live `~/.jinn` in tests (use temp dirs).
-- **Risks/tests:** crash mid-mutation → no partial allocation persisted (transaction per
-  allocation); concurrent write safety (single daemon process, WAL). Tests:
-  hydrate-empty, write-read lease, restart-resume queued task, atomic-allocation-not-
-  half-written, expired-lease-purge.
+- **Exit gate:** passed for simulated restart round-trip, corrupt/empty DB recovery,
+  unchanged pure `MatrixScheduler` behavior, temp-DB-only tests, transaction rollback,
+  restart-resume queued task, and expired-lease purge on hydrate.
+- **Remaining boundary:** M1 is still not wired into gateway startup, live session
+  execution, API routes, or CLI persistence. Those remain later milestones.
 - **Team:** implementer; **review:** department adversarial pass on persistence + crash
   semantics (this is the first place the department is genuinely useful).
 
@@ -360,6 +361,11 @@ the source brief.
   concrete engine; interface documented well enough for M3.
 - **Team:** **architecture-manager mode** (architect → implementer → independent
   reviewer → adversarial reviewer → QA) — bad abstraction here poisons everything.
+- **M1 carry-forward:** the adapter must validate leases through an **injected**
+  lease-validation function (so it works against either `MatrixScheduler` or the new
+  `PersistentMatrixScheduler` without importing persistence). The adapter stays
+  ignorant of the store. Do not bypass `PersistentMatrixScheduler.validateLeaseForWorker`
+  once a persistent scheduler is in play.
 
 ### M3 — Real adapter wiring + `engineHasHeadroom` routing (brief Phase 4 cont.)
 
@@ -399,6 +405,14 @@ the source brief.
   collision; no provider leakage into scheduler; no lost worktrees; no unbounded
   background runs** (every run has a lease TTL + watchdog).
 - **Team:** implementer; **review:** department real-task smoke + workflow critique.
+- **M1-derived preconditions (BLOCKING for going live):** (1) replace the current
+  full-snapshot write-through (`PersistentMatrixScheduler` deletes+reinserts all tables
+  on every mutation) with **incremental upserts/deletes** before heartbeats run live —
+  per-mutation O(total-state) writes do not scale once `onActivity` heartbeats fire on
+  every turn; (2) instantiate exactly **one** `PersistentMatrixScheduler` at daemon boot
+  (hydrate once, `close()` on shutdown), not per-request; (3) on corrupt-DB recovery
+  (which quarantines and starts empty = lease/queue loss), emit an audit/telemetry event
+  and re-queue or surface the loss — never silently drop in-flight work.
 
 ### M6 — Worktree execution (brief Phase 5) ✦ new infrastructure
 
@@ -769,4 +783,25 @@ Milestone-specific emphasis to append to the template:
 - This plan assumes the inert Phase-1 scaffold remains the decision core; if a later
   milestone needs to change `MatrixScheduler` semantics, re-run the §9.2 simulation
   suite as a non-regression gate.
+
+### M1 carry-forward residuals (verified 2026-06-23; track in the defect ledger)
+
+M1 passed its exit gate; these are *non-blocking-for-M1* items that **must** be resolved
+before the scheduler goes live (M5) or telemetry durably grows (M10):
+
+- **Snapshot write amplification.** `PersistentMatrixScheduler.commitMutation` does a
+  full delete-all + reinsert-all of every table after *every* mutation. Fine while inert;
+  O(total-state) per heartbeat once live. → incremental writes (M5 precondition).
+- **Telemetry coupled to the snapshot.** `this.telemetry` accumulates forever and is
+  re-serialized into the DB on every mutation. → move durable telemetry to the
+  append-only jsonl (M10) and keep the snapshot to operational state only
+  (leases/allocations/queue/`nextSeq`).
+- **Unbounded `allocations` map.** Released/expired allocations are never pruned (and
+  `listAllocations()` returns all). → add allocation state transitions + a retention/prune
+  policy (mirror `board-service` auto-ticket pruning).
+- **Corrupt-recovery = data loss.** Quarantine-and-start-empty drops all leases/queue;
+  acceptable while inert, unsafe once live. → emit audit/telemetry on recovery, consider
+  re-queue, document the trust boundary (M5).
+- **Not daemon-wired (expected).** M1 is code-level only; single-instance boot
+  hydrate/close is owned by M4/M5, not a defect.
 ```

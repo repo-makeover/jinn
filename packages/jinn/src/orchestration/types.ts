@@ -114,6 +114,14 @@ export interface OrchestrationConfig {
   quotas: QuotaPolicy;
 }
 
+export interface SchedulerSnapshot {
+  allocations: Allocation[];
+  leases: Lease[];
+  queue: QueueItem[];
+  telemetry: TelemetryEvent[];
+  nextSeq: number;
+}
+
 export type AllocationResult =
   | { ok: true; allocation: Allocation }
   | { ok: false; queueItem: QueueItem };
@@ -123,4 +131,3 @@ export interface SimulationStepResult {
   action: string;
   result: unknown;
 }
-

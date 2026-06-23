@@ -1,9 +1,11 @@
 # Provider-Neutral Matrix Orchestration
 
-Status: implemented as an inert foundation. This layer validates configs, runs
-fake-worker allocation, creates in-memory leases, and exposes CLI dry-runs. It
-does not call engines, create worktrees, update the dashboard, or change the
-current Jinn session execution path.
+Status: implemented as an inert foundation with a durable scheduler-state
+module. This layer validates configs, runs fake-worker allocation, creates
+leases, exposes CLI dry-runs, and now includes a SQLite-backed store plus a
+persistent scheduler wrapper for tests and later daemon integration. It does
+not call engines, create worktrees, update the dashboard, or change the current
+Jinn session execution path.
 
 ## Intent
 
@@ -12,9 +14,9 @@ scheduler. It models a central scheduler, persistent worker pool, ephemeral
 coordinators, exclusive leases, blocked-resource queueing, provider-aware
 routing, and deterministic QA gates.
 
-The first slice exists to make scheduler behavior testable before real provider
-execution is added. Tests and validation remain the authority; model confidence
-does not grant runtime authority.
+The first slices exist to make scheduler behavior and restart recovery testable
+before real provider execution is added. Tests and validation remain the
+authority; model confidence does not grant runtime authority.
 
 ## Terminology
 
@@ -34,7 +36,9 @@ module. The existing Jinn org system can map to workers later through an adapter
 
 ## Config Files
 
-The CLI dry-runs load an explicit config directory. See
+The CLI dry-runs load an explicit config directory. Code-level loaders also
+support the default operator directory at `~/.jinn/orchestration/`, but the
+current CLI commands still require `--config-dir`. See
 `docs/orchestration/examples/` for complete examples.
 
 Required files:
@@ -87,6 +91,18 @@ fails because real provider execution is out of scope for this slice.
 - Lease validation rejects missing, expired, released, foreign-worker,
   foreign-task, and foreign-coordinator leases.
 
+## Durable State
+
+`packages/jinn/src/orchestration/store.ts` creates a dedicated SQLite database
+at `~/.jinn/orchestration.db` by default, with WAL mode and tables for leases,
+allocations, queue items, telemetry events, and small metadata. Tests pass
+explicit temp database paths and do not write live `~/.jinn`.
+
+`packages/jinn/src/orchestration/persistent-scheduler.ts` hydrates a
+`MatrixScheduler` from a stored snapshot, persists scheduler mutations
+transactionally, and expires stale leases deterministically on hydrate. This is
+not wired into gateway startup, live sessions, or the public CLI yet.
+
 ## Failure Modes
 
 - Invalid config fails during schema validation with a clear path-specific
@@ -95,9 +111,10 @@ fails because real provider execution is out of scope for this slice.
 - Provider quota exhaustion blocks the whole required allocation instead of
   reserving a partial team.
 - Lease expiry releases worker capacity deterministically when `expireLeases`
-  runs.
-- Persistent telemetry, durable queues, real worktrees, and provider adapters are
-  not implemented yet.
+  runs or when the persistent wrapper hydrates stale leases.
+- Durable scheduler snapshots are implemented for the wrapper, but persistent
+  telemetry aggregation, real worktrees, provider adapters, and live daemon
+  routing are not implemented yet.
 
 ## Later Milestones
 
@@ -108,4 +125,3 @@ fails because real provider execution is out of scope for this slice.
 - Cross-family review policy for live runs.
 - Dual provider lanes and integration selection.
 - Durable telemetry and dashboard control surfaces.
-

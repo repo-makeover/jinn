@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import { ORCH_CONFIG_DIR } from "../shared/paths.js";
 import {
   buildAllocationRequest,
   emptyQuotaPolicy,
@@ -45,6 +46,10 @@ export function loadOrchestrationConfig(configDir: string): OrchestrationConfig 
   return { workers, roles, coordinatorTemplates, quotas };
 }
 
+export function loadDefaultOrchestrationConfig(): OrchestrationConfig {
+  return loadOrchestrationConfig(ORCH_CONFIG_DIR);
+}
+
 export function loadAllocationRequest(filePath: string, config: OrchestrationConfig): AllocationRequest {
   return buildAllocationRequest(readYamlFile(filePath), config);
 }
@@ -59,4 +64,3 @@ export function loadSimulationScenario(filePath: string, config: OrchestrationCo
     }),
   };
 }
-
