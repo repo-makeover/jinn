@@ -463,6 +463,7 @@ export async function startGateway(
       create: () =>
         new RemoteDiscordConnector({
           proxyVia: discordConfig.proxyVia!,
+          apiToken: discordConfig.proxyToken,
           channelId: discordConfig.channelId,
         }),
       employee: () => config.connectors.discord?.employee,

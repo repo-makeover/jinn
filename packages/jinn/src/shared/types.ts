@@ -492,9 +492,11 @@ export interface DiscordConnectorConfig {
   /** Only respond to messages in this channel */
   channelId?: string;
   /** Route messages from specific channels to remote Jinn instances */
-  channelRouting?: Record<string, string>;
+  channelRouting?: Record<string, string | { url: string; token?: string }>;
   /** URL of the primary Jinn instance to proxy Discord I/O through (secondary/remote mode) */
   proxyVia?: string;
+  /** API token for the primary Jinn instance when proxyVia targets an authenticated gateway. */
+  proxyToken?: string;
 }
 
 export interface TelegramConnectorConfig {
@@ -812,5 +814,5 @@ export interface JinnConfig {
       sidecarPort?: number;
     };
   };
-  remotes?: Record<string, { url: string; label?: string }>;
+  remotes?: Record<string, { url: string; label?: string; token?: string }>;
 }

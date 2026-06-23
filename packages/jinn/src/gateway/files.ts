@@ -11,6 +11,7 @@ import { logger } from "../shared/logger.js";
 import { checkPublicUrl } from "../shared/ssrf-guard.js";
 import { insertFile, getFile, listFiles, deleteFile, setFilePath, insertMessage, type FileMeta, type MessageMedia } from "../sessions/registry.js";
 import type { ApiContext } from "./api.js";
+import { jsonApiHeaders } from "./internal-auth.js";
 
 // Ensure managed files directory exists
 export function ensureFilesDir(): void {
@@ -546,7 +547,9 @@ function resolveFileSpec(spec: TransferSpec): { buffer: Buffer; filename: string
 }
 
 /** Resolve destination URL — accept raw URL or remote name from config. Whitelist is enforced after resolution. */
-function resolveDestination(destination: string, config: { remotes?: Record<string, { url: string }> }): string {
+type RemoteGatewayConfig = { url: string; label?: string; token?: string };
+
+function resolveDestination(destination: string, config: { remotes?: Record<string, RemoteGatewayConfig> }): string {
   // If it looks like a URL, use directly
   if (destination.startsWith("http://") || destination.startsWith("https://")) {
     return destination.replace(/\/+$/, "");
@@ -560,10 +563,19 @@ function resolveDestination(destination: string, config: { remotes?: Record<stri
 }
 
 /** Check if a destination URL is whitelisted in config remotes. */
-function isAllowedRemote(destUrl: string, config: { remotes?: Record<string, { url: string }> }): boolean {
+function isAllowedRemote(destUrl: string, config: { remotes?: Record<string, RemoteGatewayConfig> }): boolean {
   if (!config.remotes) return false;
   const normalized = destUrl.replace(/\/+$/, "");
   return Object.values(config.remotes).some(r => r.url.replace(/\/+$/, "") === normalized);
+}
+
+function remoteTokenForDestination(
+  destUrl: string,
+  config: { remotes?: Record<string, RemoteGatewayConfig> },
+): string | undefined {
+  if (!config.remotes) return undefined;
+  const normalized = destUrl.replace(/\/+$/, "");
+  return Object.values(config.remotes).find((r) => r.url.replace(/\/+$/, "") === normalized)?.token;
 }
 
 /** POST /api/files/transfer — send files to a remote gateway. */
@@ -621,7 +633,7 @@ async function handleTransfer(req: HttpRequest, res: ServerResponse, context: Ap
 
       const response = await fetch(`${destUrl}/api/files`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonApiHeaders(remoteTokenForDestination(destUrl, config), { fallbackToGatewayInfo: false }),
         body: JSON.stringify(uploadBody),
       });
 

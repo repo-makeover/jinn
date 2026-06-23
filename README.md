@@ -292,6 +292,11 @@ unavailable. Cron jobs are defined separately in `~/.jinn/cron/jobs.json`
 On gateway start, Jinn writes `~/.jinn/gateway.json` with an `apiToken`. Browser
 login uses `POST /api/auth/login` to set an HttpOnly cookie; CLI clients can send
 `Authorization: Bearer <apiToken>` or `X-Jinn-Token: <apiToken>` to `/api/**`.
+Server-owned local callbacks use that token for internal API re-entry. For calls
+to another authenticated Jinn gateway, configure the target gateway's token on
+the remote entry (`remotes.<name>.token`) or Discord proxy route
+(`connectors.discord.proxyToken`, or `channelRouting.<channel>.token` when using
+object-form channel routing).
 Static web assets remain public, and PTY websocket access uses a short-lived token
 minted by `POST /api/sessions/:id/pty-token`.
 

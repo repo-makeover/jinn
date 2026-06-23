@@ -19,9 +19,19 @@ vi.mock("../../shared/logger.js", () => ({
   },
 }));
 
+vi.mock("../../gateway/gateway-info.js", () => ({
+  readGatewayInfo: vi.fn(() => ({
+    port: 7777,
+    secret: "secret",
+    apiToken: "test-api-token",
+    pid: 123,
+  })),
+}));
+
 import { notifyParentSession, notifyRateLimitResumed } from "../callbacks.js";
 import { getSession, listSessionsBySource } from "../registry.js";
 import { attach, __resetAttachmentsForTest } from "../../talk/attachments.js";
+import { logger } from "../../shared/logger.js";
 import type { Session } from "../../shared/types.js";
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -94,6 +104,10 @@ describe("notifyParentSession", () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
     const [url, opts] = fetchSpy.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:7777/api/sessions/parent-001/message");
+    expect(opts.headers).toMatchObject({
+      "Content-Type": "application/json",
+      "X-Jinn-Token": "test-api-token",
+    });
 
     const body = JSON.parse(opts.body);
     expect(body.role).toBe("notification");
@@ -158,6 +172,23 @@ describe("notifyParentSession", () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     expect(body.role).toBe("notification");
+  });
+
+  it("logs non-OK parent notification responses instead of treating them as success", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      text: vi.fn(async () => "missing token"),
+    });
+    const child = makeSession();
+
+    notifyParentSession(child, { result: "done" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("401 Unauthorized"));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("missing token"));
   });
 });
 

@@ -16,6 +16,7 @@ import fs from "node:fs";
 import yaml from "js-yaml";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import type { ApiContext } from "../gateway/api.js";
+import { assertFetchOk, jsonApiHeaders } from "../gateway/internal-auth.js";
 import { readJsonBody } from "../gateway/http-helpers.js";
 import type { JinnConfig, JsonObject } from "../shared/types.js";
 import { CONFIG_PATH } from "../shared/paths.js";
@@ -476,19 +477,19 @@ export async function handleTalkApi(
         spawnChild: async ({ prompt, parentSessionId, promptExcerpt }) => {
           const r = await fetch(`${base}/api/sessions`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: jsonApiHeaders(context.apiToken),
             body: JSON.stringify({ prompt, parentSessionId, promptExcerpt }),
           });
-          if (!r.ok) throw new Error(`spawn failed (${r.status})`);
+          await assertFetchOk(r, "spawn");
           return (await r.json()) as { id: string };
         },
         continueThread: async (id, message) => {
           const r = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/message`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: jsonApiHeaders(context.apiToken),
             body: JSON.stringify({ message }),
           });
-          if (!r.ok) throw new Error(`continue failed (${r.status})`);
+          await assertFetchOk(r, "continue");
         },
       });
       if (result.ok) json(res, result);

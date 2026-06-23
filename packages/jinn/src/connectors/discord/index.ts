@@ -16,8 +16,11 @@ import type {
 } from "../../shared/types.js";
 import { logger } from "../../shared/logger.js";
 import { TMP_DIR } from "../../shared/paths.js";
+import { assertFetchOk, jsonApiHeaders } from "../../gateway/internal-auth.js";
 import { formatResponse, downloadAttachment } from "./format.js";
 import { deriveSessionKey, buildReplyContext, isOldMessage } from "./threads.js";
+
+type DiscordRemoteRoute = string | { url: string; token?: string };
 
 export interface DiscordConnectorConfig {
   /** Unique instance identifier (e.g. "discord-vox") */
@@ -31,7 +34,7 @@ export interface DiscordConnectorConfig {
   /** Only respond to messages in this channel (right-click channel → Copy Channel ID) */
   channelId?: string;
   /** Route messages from specific channels to remote Jinn instances */
-  channelRouting?: Record<string, string>;
+  channelRouting?: Record<string, DiscordRemoteRoute>;
   /** If set, this instance proxies all Discord operations through the primary instance at this URL */
   proxyVia?: string;
 }
@@ -256,9 +259,9 @@ export class DiscordConnector implements Connector {
     if (this.config.guildId && message.guild?.id !== this.config.guildId) return;
 
     // Channel routing — proxy messages to remote instances
-    const routeTarget = this.config.channelRouting?.[message.channel.id];
+    const routeTarget = normalizeRemoteRoute(this.config.channelRouting?.[message.channel.id]);
     if (routeTarget) {
-      logger.debug(`Routing Discord message from channel ${message.channel.id} to ${routeTarget}`);
+      logger.debug(`Routing Discord message from channel ${message.channel.id} to ${routeTarget.url}`);
       await this.proxyToRemote(routeTarget, message);
       return;
     }
@@ -317,7 +320,8 @@ export class DiscordConnector implements Connector {
   }
 
   /** Forward a message to a remote Jinn instance via HTTP */
-  private async proxyToRemote(remoteUrl: string, message: Message): Promise<void> {
+  private async proxyToRemote(routeTarget: { url: string; token?: string }, message: Message): Promise<void> {
+    const remoteUrl = routeTarget.url.replace(/\/+$/, "");
     try {
       const attachments = Array.from(message.attachments.values()).map((att) => ({
         name: att.name,
@@ -344,17 +348,23 @@ export class DiscordConnector implements Connector {
         },
       };
 
-      const res = await fetch(`${remoteUrl.replace(/\/+$/, "")}/api/connectors/discord/incoming`, {
+      const res = await fetch(`${remoteUrl}/api/connectors/discord/incoming`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonApiHeaders(routeTarget.token, { fallbackToGatewayInfo: false }),
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        logger.error(`Failed to proxy Discord message to ${remoteUrl}: ${res.status} ${res.statusText}`);
-      }
+      await assertFetchOk(res, `Discord proxy to ${remoteUrl}`);
     } catch (err) {
       logger.error(`Discord proxy error to ${remoteUrl}: ${err instanceof Error ? err.message : err}`);
     }
   }
+}
+
+function normalizeRemoteRoute(route: DiscordRemoteRoute | undefined): { url: string; token?: string } | null {
+  if (typeof route === "string") return { url: route };
+  if (route && typeof route.url === "string" && route.url.trim()) {
+    return { url: route.url, token: route.token };
+  }
+  return null;
 }

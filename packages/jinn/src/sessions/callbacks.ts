@@ -1,5 +1,6 @@
 import { getSession, listSessionsBySource } from "./registry.js";
 import { loadConfig } from "../shared/config.js";
+import { assertFetchOk, jsonApiHeaders } from "../gateway/internal-auth.js";
 import { logger } from "../shared/logger.js";
 import type { Session } from "../shared/types.js";
 import { hydrateAllAttachments, talkSessionsAttachedTo } from "../talk/attachments.js";
@@ -229,11 +230,12 @@ async function _sendDiscordNotification(message: string): Promise<void> {
     return;
   }
 
-  await fetch(`http://127.0.0.1:${port}/api/connectors/${connector}/send`, {
+  const response = await fetch(`http://127.0.0.1:${port}/api/connectors/${connector}/send`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: jsonApiHeaders(),
     body: JSON.stringify({ channel, text: message }),
   });
+  await assertFetchOk(response, `Discord notification via ${connector}`);
 }
 
 async function _sendRaw(
@@ -249,13 +251,14 @@ async function _sendRaw(
     // Use default port if config is unavailable
   }
 
-  await fetch(`http://127.0.0.1:${port}/api/sessions/${parentSessionId}/message`, {
+  const response = await fetch(`http://127.0.0.1:${port}/api/sessions/${parentSessionId}/message`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: jsonApiHeaders(),
     body: JSON.stringify({
       message,
       role: "notification",
       ...(displayMessage ? { displayMessage } : {}),
     }),
   });
+  await assertFetchOk(response, `parent notification to session ${parentSessionId}`);
 }

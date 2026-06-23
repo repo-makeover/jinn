@@ -5,11 +5,14 @@ import type {
   IncomingMessage,
   Target,
 } from "../../shared/types.js";
+import { assertFetchOk, jsonApiHeaders } from "../../gateway/internal-auth.js";
 import { logger } from "../../shared/logger.js";
 
 export interface RemoteDiscordConfig {
   /** URL of the primary Jinn instance that holds the Discord WebSocket connection */
   proxyVia: string;
+  /** API token for the primary Jinn instance, if its REST API auth is enabled. */
+  apiToken?: string;
   channelId?: string;
 }
 
@@ -22,9 +25,11 @@ export class RemoteDiscordConnector implements Connector {
   name = "discord";
   private handler: ((msg: IncomingMessage) => void) | null = null;
   private baseUrl: string;
+  private apiToken?: string;
 
   constructor(config: RemoteDiscordConfig) {
     this.baseUrl = config.proxyVia.replace(/\/+$/, "");
+    this.apiToken = config.apiToken;
   }
 
   onMessage(handler: (msg: IncomingMessage) => void): void {
@@ -99,13 +104,10 @@ export class RemoteDiscordConnector implements Connector {
     try {
       const res = await fetch(`${this.baseUrl}/api/connectors/discord/proxy`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonApiHeaders(this.apiToken, { fallbackToGatewayInfo: false }),
         body: JSON.stringify({ action, ...params }),
       });
-      if (!res.ok) {
-        logger.error(`Remote Discord proxy ${action} failed: ${res.status}`);
-        return undefined;
-      }
+      await assertFetchOk(res, `Remote Discord proxy ${action}`);
       const data = (await res.json()) as { messageId?: string };
       return data.messageId;
     } catch (err) {
