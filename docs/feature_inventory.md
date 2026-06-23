@@ -21,6 +21,20 @@
 - `0` means immediate purge.
 - Tickets remain restorable from the "Recently deleted" section until their retention window expires.
 
+## CLI
+
+### Provider-neutral matrix orchestration dry-runs
+- `packages/jinn/src/orchestration/*`
+- `packages/jinn/src/cli/orchestration.ts`
+- `packages/jinn/bin/jinn.ts`
+- `jinn workers list --config-dir <dir> [--json]` loads explicit matrix worker config and prints available workers.
+- `jinn scheduler allocate <task-file> --config-dir <dir> --dry-run [--json]` validates a task request and performs fake-worker allocation only.
+- `jinn scheduler simulate <scenario-file> --config-dir <dir> [--json]` runs deterministic allocation/release/heartbeat/expiry scenario steps against in-memory scheduler state.
+- This foundation is inert: it does not call providers, create worktrees, change gateway session execution, update the dashboard, or write to live `~/.jinn`.
+- Fidelity gaps:
+  - Persistent telemetry, durable queues, real provider adapters, worktree execution, live orchestration modes, and GUI controls are later milestones.
+  - The scheduler state exists only for the command/test process in this first slice.
+
 ## API
 
 ### Kiro headless engine and estimated credit gauge

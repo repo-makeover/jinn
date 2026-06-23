@@ -1,0 +1,17 @@
+coordinatorTemplates:
+  simpleImplementation:
+    purpose: localized code change
+    requiredRoles:
+      - seniorImplementer
+      - qaGate
+    optionalRoles:
+      - independentReviewer
+
+  standardImplementation:
+    purpose: meaningful feature or refactor
+    requiredRoles:
+      - seniorImplementer
+      - independentReviewer
+      - qaGate
+    optionalRoles: []
+

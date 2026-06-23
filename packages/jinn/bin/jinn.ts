@@ -104,6 +104,46 @@ program
     await runLimits(opts);
   });
 
+{
+  const workersCmd = program
+    .command("workers")
+    .description("Inspect inert matrix-orchestration worker configs");
+
+  workersCmd
+    .command("list")
+    .requiredOption("--config-dir <dir>", "Directory containing workers.yaml, roles.yaml, and coordinators.yaml")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { configDir: string; json?: boolean }) => {
+      const { runWorkersList } = await import("../src/cli/orchestration.js");
+      await runWorkersList(opts);
+    });
+}
+
+{
+  const schedulerCmd = program
+    .command("scheduler")
+    .description("Dry-run inert matrix scheduler allocation scenarios");
+
+  schedulerCmd
+    .command("allocate <task-file>")
+    .requiredOption("--config-dir <dir>", "Directory containing orchestration config YAML files")
+    .option("--dry-run", "Plan an allocation without running providers")
+    .option("--json", "Print raw JSON")
+    .action(async (taskFile: string, opts: { configDir: string; dryRun?: boolean; json?: boolean }) => {
+      const { runSchedulerAllocate } = await import("../src/cli/orchestration.js");
+      await runSchedulerAllocate(taskFile, opts);
+    });
+
+  schedulerCmd
+    .command("simulate <scenario-file>")
+    .requiredOption("--config-dir <dir>", "Directory containing orchestration config YAML files")
+    .option("--json", "Print raw JSON")
+    .action(async (scenarioFile: string, opts: { configDir: string; json?: boolean }) => {
+      const { runSchedulerSimulate } = await import("../src/cli/orchestration.js");
+      await runSchedulerSimulate(scenarioFile, opts);
+    });
+}
+
 program
   .command("create <name>")
   .description("Create a new Jinn instance")

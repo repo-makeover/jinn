@@ -1,0 +1,30 @@
+roles:
+  seniorImplementer:
+    requiredCapabilities:
+      - repo_edit
+      - coding
+    requiredTools:
+      - git
+      - filesystem
+    preferredTiers:
+      - frontier
+
+  independentReviewer:
+    requiredCapabilities:
+      - code_review
+    requiredTools:
+      - filesystem
+    familyConstraint: opposite_of_implementer
+    preferredCostClasses:
+      - low
+      - medium
+
+  qaGate:
+    requiredCapabilities:
+      - validation
+    requiredTools:
+      - shell
+    preferredCostClasses:
+      - near_zero
+      - low
+
