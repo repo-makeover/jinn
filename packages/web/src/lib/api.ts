@@ -110,13 +110,23 @@ export interface TicketSessionResponse {
   messages?: TicketSessionTailMessage[]
 }
 
+export type DepartmentBoardTicketStatus =
+  | 'backlog'
+  | 'todo'
+  | 'in_progress'
+  | 'review'
+  | 'done'
+  | 'blocked'
+export type DepartmentBoardTicketPriority = 'low' | 'medium' | 'high'
+export type DepartmentBoardTicketComplexity = 'low' | 'medium' | 'high'
+
 export interface DepartmentBoardTicket {
   id: string
   title: string
   description?: string
-  status: string
-  priority?: string
-  complexity?: string
+  status: DepartmentBoardTicketStatus
+  priority?: DepartmentBoardTicketPriority
+  complexity?: DepartmentBoardTicketComplexity
   assignee?: string
   createdAt?: string
   updatedAt?: string

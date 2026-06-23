@@ -76,6 +76,21 @@ pnpm build       # turbo build (also copies packages/web/out -> packages/jinn/di
   mode, or partial completion.
 - Do not bundle unrelated work.
 
+## Software Delivery Routing
+
+For coding work that edits source files in repos under `~/vscode/*` or
+`~/afrl-vscode/*`, route through Giles Watcher first.
+
+- No implementer should be spawned until Giles Watcher has produced a Job Plan.
+- The Job Plan must include: scope, files to inspect, files allowed to change,
+  files forbidden to touch, tests required, budget ceiling or stop condition,
+  escalation criteria, and expected final report fields.
+- This routing rule governs source-editing work only. It does not require Giles
+  Watcher for pure read-only inspection, docs-only edits, or changes to local
+  governance artifacts such as `.giles/**`.
+- The operator may waive this routing rule for a single session by stating so
+  explicitly in chat.
+
 ## Core Rules
 
 1. Inspect existing code, nearby files, tests, docs, and conventions before writing new code.

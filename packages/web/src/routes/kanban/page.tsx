@@ -98,6 +98,15 @@ function mapDeletedBoardTicket(item: DepartmentBoardTicket, department: string):
   }
 }
 
+const BOARD_STATUS_BY_KANBAN_STATUS: Record<KanbanTicket['status'], DepartmentBoardTicket['status']> = {
+  backlog: 'backlog',
+  todo: 'todo',
+  'in-progress': 'in_progress',
+  review: 'review',
+  done: 'done',
+  blocked: 'blocked',
+}
+
 /** Delete confirmation dialog */
 function DeleteConfirmDialog({
   ticket,
@@ -259,11 +268,11 @@ export default function KanbanPage() {
       // become the hidden source of truth.
       await Promise.all(
         Object.entries(byDept).map(([dept, deptTickets]) => {
-          const boardData = deptTickets.map((t) => ({
+          const boardData: DepartmentBoardTicket[] = deptTickets.map((t) => ({
             id: t.id,
             title: t.title,
             description: t.description,
-            status: t.status === 'in-progress' ? 'in_progress' : t.status,
+            status: BOARD_STATUS_BY_KANBAN_STATUS[t.status],
             priority: t.priority,
             complexity: t.complexity,
             assignee: t.assigneeId ?? undefined,

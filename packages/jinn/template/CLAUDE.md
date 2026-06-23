@@ -92,6 +92,9 @@ You manage a hierarchical organization of AI employees with infinite depth.
 - **Departments** are directories under `~/.jinn/org/<department-name>/`
 - Each department has a `department.yaml` (metadata) and a `board.json` (task board)
 - **Employees** are YAML persona files: `~/.jinn/org/<department>/<employee-name>.yaml`
+- Employee YAML `engine` values use the known engine ids for this build:
+  `claude`, `codex`, `antigravity`, `grok`, `pi`, and `kiro`. The resolved
+  model registry and `config.yaml` remain the source of truth for availability.
 
 ### Hierarchy
 
@@ -160,7 +163,9 @@ When delegating a task with multiple independent phases or sub-tasks to an emplo
 
 - Higher ranks can post tasks to lower ranks' boards.
 - As an executive, you can see and modify every board in the organization.
-- Boards are JSON arrays of task objects with `todo`, `in_progress`, and `done` statuses.
+- `board.json` may be either a plain array of active tickets or an object
+  `{ tickets, deletedTickets, retentionDays }`. Active tickets use the status
+  values `backlog`, `todo`, `in_progress`, `review`, `done`, and `blocked`.
 
 ### Board Task Schema
 
@@ -168,12 +173,13 @@ When delegating a task with multiple independent phases or sub-tasks to an emplo
 {
   "id": "unique-id",
   "title": "Task title",
-  "status": "todo | in_progress | done",
+  "status": "backlog | todo | in_progress | review | done | blocked",
   "assignee": "employee-name",
-  "priority": "low | medium | high | urgent",
-  "created": "ISO-8601",
-  "updated": "ISO-8601",
-  "notes": "Optional details"
+  "priority": "low | medium | high",
+  "complexity": "low | medium | high",
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601",
+  "description": "Optional details"
 }
 ```
 
@@ -267,6 +273,9 @@ Scheduled jobs are defined in `~/.jinn/cron/jobs.json`. The gateway watches this
 ```
 
 - `schedule` uses standard cron expressions (minute hour day month weekday).
+- `engine` uses the same known ids as employee YAML: `claude`, `codex`,
+  `antigravity`, `grok`, `pi`, and `kiro`. The registry/config remains the
+  source of truth for what is actually available on a given install.
 - `delivery` is optional. If set, the output is sent via the named connector.
 - Execution logs are saved in `~/.jinn/cron/runs/`.
 

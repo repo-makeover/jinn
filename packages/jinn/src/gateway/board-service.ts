@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { safeWriteFile } from "../shared/safe-write.js";
 
+export type BoardTicketStatus = "backlog" | "todo" | "in_progress" | "review" | "done" | "blocked";
+export type BoardTicketPriority = "low" | "medium" | "high";
 export type BoardTicketComplexity = "low" | "medium" | "high";
 export const DEFAULT_RECYCLE_BIN_RETENTION_DAYS = 3;
 export const MIN_RECYCLE_BIN_RETENTION_DAYS = 0;
@@ -14,8 +16,8 @@ export interface BoardTicket {
   id: string;
   title: string;
   description: string;
-  status: "todo" | "in_progress" | "done" | "blocked";
-  priority: string;
+  status: BoardTicketStatus;
+  priority: BoardTicketPriority;
   complexity?: BoardTicketComplexity;
   assignee: string;
   source?: string;

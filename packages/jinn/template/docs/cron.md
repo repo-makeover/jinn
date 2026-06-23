@@ -11,7 +11,7 @@ interface CronJob {
   enabled: boolean;      // Whether the job is active
   schedule: string;      // Cron expression (standard 5-field)
   timezone?: string;     // IANA timezone (default: system timezone)
-  engine: string;        // "claude" or "codex"
+  engine: string;        // Known engine id for this build; see note below
   model?: string;        // Override default model
   employee?: string;     // Employee persona to use
   prompt: string;        // The prompt to send to the engine
@@ -21,6 +21,10 @@ interface CronJob {
   };
 }
 ```
+
+Known engine ids in this build are `claude`, `codex`, `antigravity`, `grok`,
+`pi`, and `kiro`. The resolved model registry and `config.yaml` remain the
+source of truth for what is actually available on a given install.
 
 ## Schedule Format
 

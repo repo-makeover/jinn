@@ -27,8 +27,9 @@ persona: |
 | `displayName` | string | yes | Human-readable name |
 | `department` | string | yes | Department directory name |
 | `rank` | string | yes | One of: executive, manager, senior, employee |
-| `engine` | string | yes | Engine to use: "claude" or "codex" |
+| `engine` | string | yes | Engine id for this employee. Known engines in this build are `claude`, `codex`, `antigravity`, `grok`, `pi`, and `kiro`; the model registry / `config.yaml` is the source of truth. |
 | `model` | string | no | Model override (default from config) |
+| `reportsTo` | string or string[] | no | Explicit manager/parent override. If omitted, hierarchy is inferred from rank within the department. |
 | `persona` | string | yes | System prompt defining personality and behavior |
 
 ## Departments
@@ -53,7 +54,9 @@ description: Builds and maintains the product codebase.
 
 ### board.json
 
-A JSON array of task objects used for inter-agent communication:
+`board.json` may be a JSON array of active task objects or an object payload
+with `{ tickets, deletedTickets, retentionDays }` when the recycle bin is in
+use. Active tickets use this schema:
 
 ```json
 [
@@ -61,8 +64,9 @@ A JSON array of task objects used for inter-agent communication:
     "id": "task_001",
     "title": "Refactor auth module",
     "assignee": "alice",
-    "status": "in-progress",
+    "status": "review",
     "priority": "high",
+    "complexity": "medium",
     "description": "Move auth logic into a dedicated service class.",
     "createdAt": "2026-01-10T14:00:00.000Z",
     "updatedAt": "2026-01-11T09:30:00.000Z"
@@ -70,7 +74,7 @@ A JSON array of task objects used for inter-agent communication:
 ]
 ```
 
-Task fields: `id`, `title`, `assignee`, `status` (open, in-progress, done, blocked), `priority` (low, medium, high, critical), `description`, `createdAt`, `updatedAt`.
+Canonical task fields: `id`, `title`, `assignee`, `status` (`backlog`, `todo`, `in_progress`, `review`, `done`, `blocked`), `priority` (`low`, `medium`, `high`), `complexity` (`low`, `medium`, `high`), `description`, `createdAt`, `updatedAt`.
 
 ## Ranks
 
@@ -90,16 +94,12 @@ Task fields: `id`, `title`, `assignee`, `status` (open, in-progress, done, block
 
 ## Default Organization
 
-{{portalName}} ships with a single executive employee:
+`jinn setup` seeds a small default org under `~/.jinn/org/general/`:
 
-```yaml
-name: {{portalSlug}}
-displayName: {{portalName}}
-department: executive
-rank: executive
-engine: claude
-model: opus
-persona: |
-  You are {{portalName}}, the executive AI assistant and gateway administrator.
-  You manage the organization, delegate tasks, and handle direct requests.
-```
+- `parliamentarian.yaml` — a `manager` for governance, policy, and routing work
+- `assistant.yaml` — a `senior` generalist with `reportsTo: parliamentarian`
+
+That gives fresh installs a manager-first lane for cross-cutting guidance work
+without forcing delivery departments into existence up front. `{{portalName}}`
+still acts as the executive/COO above the org even though that role is not
+seeded as an employee YAML file under `org/`.
