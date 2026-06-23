@@ -30,6 +30,8 @@ export interface Employee {
   model: string;
   persona: string;
   emoji?: string;
+  /** Office avatar id, e.g. "office:pencil". Resolved to PNG by the frontend. */
+  avatar?: string;
   effortLevel?: string;
   cliFlags?: string[];
   alwaysNotify?: boolean;

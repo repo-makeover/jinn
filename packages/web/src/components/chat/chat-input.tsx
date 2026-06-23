@@ -31,6 +31,7 @@ interface Employee {
   department?: string
   rank?: string
   engine?: string
+  avatar?: string
 }
 
 interface SlashCommand {
@@ -227,6 +228,7 @@ export function ChatInput({
           department: emp.department,
           rank: emp.rank,
           engine: emp.engine,
+          avatar: emp.avatar,
         })))
       })
       .catch(() => {})
@@ -562,7 +564,7 @@ export function ChatInput({
                 onClick={() => handleMentionSelect(emp.name)}
                 className={`w-full text-left py-[var(--space-2)] px-[var(--space-3)] text-[length:var(--text-footnote)] ${isHighlighted ? 'bg-[var(--fill-secondary)]' : 'bg-transparent'} border-none cursor-pointer flex items-center gap-[var(--space-2)] text-[var(--text-primary)]`}
               >
-                <EmployeeAvatar name={emp.name} size={20} />
+                <EmployeeAvatar name={emp.name} avatar={emp.avatar} size={20} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-[var(--space-2)]">
                     <span className="font-[var(--weight-semibold)]">{emp.displayName || emp.name}</span>

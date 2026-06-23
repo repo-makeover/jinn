@@ -144,6 +144,7 @@ export function EmployeeDetail({
             <div className="relative">
               <EmployeeAvatar
                 name={employee.name}
+                avatar={employee.avatar}
                 size={36}
                 onClick={() => setShowAvatarPicker(!showAvatarPicker)}
               />

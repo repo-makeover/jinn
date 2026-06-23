@@ -363,6 +363,9 @@ export interface Employee {
   persona: string;
   /** Emoji icon for this employee (shown in sidebar, org chart, etc.) */
   emoji?: string;
+  /** Office avatar id for this employee, e.g. "office:pencil". Takes precedence
+   *  over `emoji` when the frontend resolves the display avatar. */
+  avatar?: string;
   /** Extra CLI flags passed to the engine (e.g. ["--chrome"]) */
   cliFlags?: string[];
   /** MCP servers this employee needs. true = all global, false = none, string[] = specific servers */
