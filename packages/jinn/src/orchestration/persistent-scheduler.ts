@@ -1,6 +1,6 @@
-import { MatrixScheduler, type LeaseValidationResult, type SchedulerOptions } from "./scheduler.js";
+import { MatrixScheduler, type SchedulerOptions } from "./scheduler.js";
 import { OrchestrationStore } from "./store.js";
-import type { Allocation, AllocationRequest, AllocationResult, Lease, OrchestrationConfig, QueueItem, TelemetryEvent } from "./types.js";
+import type { Allocation, AllocationRequest, AllocationResult, Lease, LeaseValidationResult, OrchestrationConfig, QueueItem, TelemetryEvent } from "./types.js";
 
 export interface PersistentSchedulerOptions extends Omit<SchedulerOptions, "snapshot"> {
   dbPath?: string;

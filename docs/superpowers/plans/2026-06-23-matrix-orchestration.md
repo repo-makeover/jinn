@@ -1,10 +1,8 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 (inert foundation) and M1 (durable scheduler state) are
-> **complete** (Codex, 2026-06-23). This document is the **full-capability
-> roadmap** from the inert scaffold to a real, daemon-integrated,
-> provider-neutral matrix scheduler. It is a *planning artifact*, not an
-> execution order — no code is changed by reading it.
+> **Status:** Phase 1, M1, and M2 are **complete** (Codex, 2026-06-23).
+> This is the **full-capability roadmap** from inert scaffold to real,
+> daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
 > **Execution discipline:** Every implementation milestone below is built with the
 > `plan-prototype-build` skill at `~/vscode/agent-skills/30_plan/plan-prototype-build/`
@@ -347,25 +345,19 @@ the source brief.
 - **Team:** implementer; **review:** department adversarial pass on persistence + crash
   semantics (this is the first place the department is genuinely useful).
 
-### M2 — Provider adapter contract (brief Phase 4) ✦ highest blast radius
+### M2 — Provider adapter contract (complete, 2026-06-23) ✦ highest blast radius
 
-- **Goal:** define the provider-neutral `ProviderAdapter` interface (D2) and the
-  stub/echo/manual adapters; the scheduler core remains ignorant of engine APIs.
-- **Deliverables:** `orchestration/adapter/types.ts` (interface), `stub-adapter.ts`,
-  `local-echo-adapter.ts` (delegates to `engines/mock.ts`), `manual-adapter.ts`;
-  `adapter-registry.ts` (worker.provider → adapter). **No real engines wired yet.**
-- **Integration points:** consumes `Engine`/`EngineRunOpts`/`EngineResult`
-  (`shared/types.ts:14`); references `validateLeaseForWorker`.
-- **Exit gate:** adapter rejects `start_task` without a valid owned lease (contract
-  test); structured error type for all failures; scheduler has zero imports of any
-  concrete engine; interface documented well enough for M3.
+- **Goal:** define the provider-neutral `ProviderAdapter` interface (D2) and
+  stub/echo/manual adapters; scheduler core stays ignorant of engine APIs.
+- **Delivered:** `orchestration/adapter/{types,stub-adapter,local-echo-adapter,
+  manual-adapter,registry}.ts`; injected lease validation; structured errors;
+  fail-closed registry; `local_echo`/`mock` delegate only to `engines/mock.ts`.
+- **Exit gate:** passed for valid-owned-lease rejection, structured errors, fail-closed
+  lookup, scheduler import boundary, and adapter store/persistence boundary.
 - **Team:** **architecture-manager mode** (architect → implementer → independent
   reviewer → adversarial reviewer → QA) — bad abstraction here poisons everything.
-- **M1 carry-forward:** the adapter must validate leases through an **injected**
-  lease-validation function (so it works against either `MatrixScheduler` or the new
-  `PersistentMatrixScheduler` without importing persistence). The adapter stays
-  ignorant of the store. Do not bypass `PersistentMatrixScheduler.validateLeaseForWorker`
-  once a persistent scheduler is in play.
+- **M1 carry-forward:** injected lease validation works with `MatrixScheduler` or
+  `PersistentMatrixScheduler`; adapters stay store-ignorant. **Implemented.**
 
 ### M3 — Real adapter wiring + `engineHasHeadroom` routing (brief Phase 4 cont.)
 
@@ -511,6 +503,8 @@ Risk-based assembly prevents **review theater** (R6): small tasks do not get ful
 
 All new code files target **< 800 lines** (skill blocker; current `scheduler.ts` = 415).
 Split before a file approaches the limit. New runtime state under `JINN_HOME` only.
+**The 800-line limit applies to human-authored *source* files only** — markdown/docs
+(this plan, READMEs, specs, session logs) are **exempt** and never a gate blocker.
 
 | File (new unless noted) | Milestone | Purpose | Budget |
 |---|---|---|---|
@@ -743,7 +737,7 @@ path is sacrosanct (D7)**, determinism preserved.
 
 Non-goals: no real provider calls outside the opt-in smoke script; no DAWES specifics;
 no Employee/Manager/Department terms in orchestration/**; no out-of-milestone work; no
-file over 800 lines (split first).
+source file over 800 lines (split first; markdown/docs are exempt).
 
 Acceptance: the milestone Exit gate (§5), the relevant tests (§9), pnpm typecheck +
 targeted vitest green, line-count check clean, docs/feature_inventory + session log

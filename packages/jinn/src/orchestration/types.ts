@@ -69,6 +69,11 @@ export interface Lease {
   heartbeatAt: string;
 }
 
+export interface LeaseValidationResult {
+  ok: boolean;
+  reason?: string;
+}
+
 export interface Allocation {
   allocationId: string;
   taskId: string;

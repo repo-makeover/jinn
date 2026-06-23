@@ -33,6 +33,7 @@
 - This foundation is inert: it does not call providers, create worktrees, change gateway session execution, update the dashboard, or write to live `~/.jinn`.
 - Fidelity gaps:
   - A SQLite store and persistent scheduler wrapper now exist for leases, allocations, queue items, and telemetry events, but they are code-level foundations only.
+  - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, and `mock`; only local echo delegates to deterministic `MockEngine`, and no real provider ids are registered.
   - The public CLI dry-runs still use process-local scheduler state and do not write the durable store.
   - Persistent telemetry aggregation, real provider adapters, worktree execution, live orchestration modes, and GUI controls are later milestones.
 

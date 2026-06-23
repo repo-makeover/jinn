@@ -1,10 +1,11 @@
 # Provider-Neutral Matrix Orchestration
 
-Status: implemented as an inert foundation with a durable scheduler-state
-module. This layer validates configs, runs fake-worker allocation, creates
-leases, exposes CLI dry-runs, and now includes a SQLite-backed store plus a
-persistent scheduler wrapper for tests and later daemon integration. It does
-not call engines, create worktrees, update the dashboard, or change the current
+Status: implemented as an inert foundation with durable scheduler-state and
+provider-adapter contract modules. This layer validates configs, runs
+fake-worker allocation, creates leases, exposes CLI dry-runs, includes a
+SQLite-backed store plus a persistent scheduler wrapper, and defines
+store-agnostic adapter contracts for later provider execution. It does not call
+real providers, create worktrees, update the dashboard, or change the current
 Jinn session execution path.
 
 ## Intent
@@ -103,6 +104,23 @@ explicit temp database paths and do not write live `~/.jinn`.
 transactionally, and expires stale leases deterministically on hydrate. This is
 not wired into gateway startup, live sessions, or the public CLI yet.
 
+## Provider Adapters
+
+`packages/jinn/src/orchestration/adapter/` defines the M2 provider-neutral
+adapter contract. Adapters receive lease validation through an injected
+function, so the adapter layer can validate against either `MatrixScheduler` or
+`PersistentMatrixScheduler` without importing the store.
+
+M2 registers only inert adapter ids:
+
+- `local_echo` and `mock`: validate the lease, then run the deterministic
+  `MockEngine`.
+- `manual`: validates the lease, then returns `manual_required`.
+- `stub`: validates the lease, then returns `unsupported_operation`.
+
+Unknown providers fail closed with `adapter_not_found`; real provider ids such
+as OpenAI, Anthropic, Claude, Kiro, Ollama, and Gemini are not registered yet.
+
 ## Failure Modes
 
 - Invalid config fails during schema validation with a clear path-specific
@@ -112,13 +130,13 @@ not wired into gateway startup, live sessions, or the public CLI yet.
   reserving a partial team.
 - Lease expiry releases worker capacity deterministically when `expireLeases`
   runs or when the persistent wrapper hydrates stale leases.
-- Durable scheduler snapshots are implemented for the wrapper, but persistent
-  telemetry aggregation, real worktrees, provider adapters, and live daemon
-  routing are not implemented yet.
+- Adapter start rejects invalid leases before any inert engine can run.
+- Durable scheduler snapshots and adapter contracts are implemented, but
+  persistent telemetry aggregation, real worktrees, real provider adapters, and
+  live daemon routing are not implemented yet.
 
 ## Later Milestones
 
-- Provider adapter contracts below the scheduler.
 - Isolated implementation/review/integration worktrees.
 - First real `single_worker` and `single_worker_with_review` modes for low-risk
   tasks.

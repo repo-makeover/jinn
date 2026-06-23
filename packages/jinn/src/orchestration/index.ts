@@ -4,3 +4,4 @@ export * from "./config.js";
 export * from "./scheduler.js";
 export * from "./store.js";
 export * from "./persistent-scheduler.js";
+export * from "./adapter/index.js";

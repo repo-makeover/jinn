@@ -3,6 +3,7 @@ import type {
   AllocationRequest,
   AllocationResult,
   Lease,
+  LeaseValidationResult,
   OrchestrationConfig,
   QueueItem,
   RoleDefinition,
@@ -28,11 +29,6 @@ const PRIORITY_RANK: Record<string, number> = {
 export interface SchedulerOptions {
   now?: () => Date;
   snapshot?: SchedulerSnapshot;
-}
-
-export interface LeaseValidationResult {
-  ok: boolean;
-  reason?: string;
 }
 
 interface CandidateState {
