@@ -191,14 +191,84 @@ export function writeMergedBoard(
     deletedTickets: mergedDeletedTickets,
     retentionDays: nextRetentionDays,
   }));
+  verifyBoardWrite(file, mergedTickets);
   return mergedTickets;
 }
 
 export function writeBoardTickets(orgDir: string, department: string, tickets: BoardTicket[]): void {
   const current = readBoardState(orgDir, department) ?? defaultBoardState();
-  safeWriteFile(boardPath(orgDir, department), serializeBoardState({
+  const file = boardPath(orgDir, department);
+  safeWriteFile(file, serializeBoardState({
     tickets,
     deletedTickets: pruneDeletedTickets(current.deletedTickets, current.retentionDays),
     retentionDays: current.retentionDays,
   }));
+  verifyBoardWrite(file, tickets);
+}
+
+/**
+ * Read the board back immediately after a write and throw if any expected
+ * ticket id is missing. Catches silent truncation, wrong-path writes, and
+ * any post-write filesystem anomaly before the caller returns success.
+ */
+function verifyBoardWrite(file: string, expected: BoardTicket[]): void {
+  let onDisk: BoardTicket[];
+  try {
+    const raw = fs.readFileSync(file, "utf-8");
+    const parsed = parseBoardState(JSON.parse(raw));
+    onDisk = parsed?.tickets ?? [];
+  } catch (err) {
+    throw new Error(
+      `board write-verify: could not re-read ${file} after write — ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const onDiskIds = new Set(onDisk.map((t) => t.id));
+  const missing = expected.map((t) => t.id).filter((id) => id && !onDiskIds.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `board write-verify: ${missing.length} ticket(s) missing from ${file} after write: ${missing.join(", ")}`
+    );
+  }
+}
+
+/** Counts tickets in a board by status — used for startup/reload summaries. */
+function countByStatus(tickets: BoardTicket[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const t of tickets) {
+    const s = t.status ?? "unknown";
+    counts[s] = (counts[s] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * Log a one-line summary per department board to `log`.
+ * Call on startup and after config reload so board state is always visible in
+ * the daemon log — makes "tickets added but not showing" detectable immediately.
+ */
+export function logBoardSummary(orgDir: string, log: (msg: string) => void): void {
+  if (!fs.existsSync(orgDir)) return;
+  let totalDepts = 0;
+  let totalTickets = 0;
+  for (const dept of fs.readdirSync(orgDir)) {
+    const file = boardPath(orgDir, dept);
+    if (!fs.existsSync(file)) continue;
+    try {
+      const state = readBoardState(orgDir, dept);
+      if (!state) continue;
+      const counts = countByStatus(state.tickets);
+      const summary = Object.entries(counts)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([s, n]) => `${n} ${s}`)
+        .join(", ");
+      log(`[board] ${dept}: ${state.tickets.length} ticket(s) — ${summary || "empty"}`);
+      totalDepts++;
+      totalTickets += state.tickets.length;
+    } catch (err) {
+      log(`[board] ${dept}: ERROR reading board.json — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (totalDepts > 0) {
+    log(`[board] summary: ${totalDepts} dept(s), ${totalTickets} total ticket(s)`);
+  }
 }

@@ -52,6 +52,7 @@ import { loadJobs } from "../cron/jobs.js";
 import { startScheduler, reloadScheduler, stopScheduler } from "../cron/scheduler.js";
 import { scanOrg } from "./org.js";
 import { syncBoardForEvent } from "./board-sync.js";
+import { logBoardSummary } from "./board-service.js";
 import { startBoardWorker } from "./board-worker.js";
 import { reconcileOrphanedTickets } from "./orphaned-ticket-reconciler.js";
 
@@ -877,6 +878,7 @@ export async function startGateway(
       refreshDynamicModels(currentConfig); // re-discover dynamic models (engine bins/auth may have changed)
       reloadScheduler(loadJobs(), currentConfig, connectorMap);
       logger.info("Config reloaded successfully");
+      logBoardSummary(ORG_DIR, (msg) => logger.info(msg));
       emit("config:reloaded", {});
     } catch (err) {
       logger.error(`Failed to reload config: ${err instanceof Error ? err.message : err}`);
@@ -895,6 +897,7 @@ export async function startGateway(
     emit,
     cause: "startup",
   });
+  logBoardSummary(ORG_DIR, (msg) => logger.info(msg));
 
   // Unstick sessions whose completion event was lost (status:"running" with no
   // live turn). 15s sweep; logs one line per fix.
