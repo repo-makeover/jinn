@@ -169,6 +169,33 @@ describe('TicketDetailPanel', () => {
     expect(screen.getByTestId('chat-messages').textContent).toContain('Thinking through it')
   })
 
+  it('renders stalled and fallback header badges from live session metadata', async () => {
+    getTicketSession.mockResolvedValue({
+      found: true,
+      sessionId: 's-badges',
+      status: 'running',
+      engine: 'codex',
+      model: 'gpt-5.5',
+      lastActivityIso: '2026-06-22T10:00:00.000Z',
+      lastActivityAgoMs: 120000,
+      stalled: true,
+      stalledForMs: 120000,
+      failureReason: 'timeout',
+      fallback: {
+        active: true,
+        fromEngine: 'claude',
+        toEngine: 'codex',
+        toModel: 'gpt-5.5',
+      },
+      messages: [],
+    })
+
+    renderPanel()
+
+    expect(await screen.findByText('stalled')).toBeDefined()
+    expect(screen.getByText('fallback')).toBeDefined()
+  })
+
   it('renders an open-live-session link that targets the chat route directly', async () => {
     getTicketSession.mockResolvedValue({
       found: true,
@@ -210,7 +237,7 @@ describe('TicketDetailPanel', () => {
       lastActivityAgoMs: 2000,
       messages: [],
     })
-    const setSpy = vi.spyOn(window, 'setInterval').mockReturnValue(123 as unknown as number)
+    const setSpy = vi.spyOn(window, 'setInterval').mockReturnValue(123 as unknown as ReturnType<typeof setInterval>)
     const clearSpy = vi.spyOn(window, 'clearInterval')
 
     const view = renderPanel()

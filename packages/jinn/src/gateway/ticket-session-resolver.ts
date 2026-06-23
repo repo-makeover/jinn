@@ -2,6 +2,7 @@ import type { Session } from "../shared/types.js";
 import type { BoardTicket } from "./board-service.js";
 
 const TICKET_CHANNEL_KEYS = ["channel", "thread", "ticketId"] as const;
+const STALLED_ERROR_PREFIX = "Stalled:";
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -15,6 +16,48 @@ function boardMeta(session: Session): Record<string, unknown> | null {
 
 function replyMeta(session: Session): Record<string, unknown> | null {
   return asObject(session.replyContext);
+}
+
+export interface ResolvedTicketSessionFallbackState {
+  active: boolean;
+  fromEngine: string | null;
+  toEngine: string | null;
+  toModel: string | null;
+}
+
+function modelFallbackMeta(session: Pick<Session, "transportMeta">): Record<string, unknown> | null {
+  return asObject(asObject(session.transportMeta)?.modelFallback);
+}
+
+function fallbackEndpoint(value: unknown): Record<string, unknown> | null {
+  return asObject(value);
+}
+
+export function resolveTicketSessionFailureReason(session: Pick<Session, "transportMeta" | "lastError">): string | null {
+  const fallback = modelFallbackMeta(session);
+  if (typeof fallback?.reason === "string" && fallback.reason.trim()) return fallback.reason;
+  if (typeof session.lastError === "string" && session.lastError.startsWith(STALLED_ERROR_PREFIX)) return "timeout";
+  return null;
+}
+
+export function resolveTicketSessionStalled(session: Pick<Session, "lastError">): boolean {
+  return typeof session.lastError === "string" && session.lastError.startsWith(STALLED_ERROR_PREFIX);
+}
+
+export function resolveTicketSessionFallbackState(
+  session: Pick<Session, "transportMeta">,
+): ResolvedTicketSessionFallbackState | null {
+  const fallback = modelFallbackMeta(session);
+  if (!fallback) return null;
+  const from = fallbackEndpoint(fallback.from);
+  const to = fallbackEndpoint(fallback.to);
+  const status = typeof fallback.status === "string" ? fallback.status : null;
+  return {
+    active: status === "running_on_fallback",
+    fromEngine: typeof from?.engine === "string" ? from.engine : null,
+    toEngine: typeof to?.engine === "string" ? to.engine : null,
+    toModel: typeof to?.model === "string" ? to.model : null,
+  };
 }
 
 function sessionChannelCandidates(session: Session): string[] {

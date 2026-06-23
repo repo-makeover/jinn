@@ -58,10 +58,14 @@ import { resolveUserHeader } from "./connector-reply.js";
 export { resolveUserHeader, deliverConnectorReply } from "./connector-reply.js";
 import { supersedeRunningTurn } from "./session-turn-state.js";
 import { createPtyAccessToken } from "./auth.js";
-import { writeMergedBoard } from "./board-service.js";
+import { defaultBoardState, readBoardArray, readBoardState, writeMergedBoard } from "./board-service.js";
 import { dispatchTicket } from "./ticket-dispatch.js";
-import { readBoardArray } from "./board-service.js";
-import { resolveBestSessionForTicket } from "./ticket-session-resolver.js";
+import {
+  resolveBestSessionForTicket,
+  resolveTicketSessionFailureReason,
+  resolveTicketSessionFallbackState,
+  resolveTicketSessionStalled,
+} from "./ticket-session-resolver.js";
 export type { ApiContext } from "./api/context.js";
 export { matchRoute } from "./api/match-route.js";
 export { resumePendingWebQueueItems } from "./api/session-dispatch.js";
@@ -1008,15 +1012,17 @@ export async function handleApiRequest(
     // GET /api/org/departments/:name/board
     params = matchRoute("/api/org/departments/:name/board", pathname);
     if (method === "GET" && params) {
-      const boardPath = path.join(ORG_DIR, params.name, "board.json");
+      const deptDir = path.join(ORG_DIR, params.name);
+      if (!fs.existsSync(deptDir)) return notFound(res);
+      const boardPath = path.join(deptDir, "board.json");
       if (!fs.existsSync(boardPath)) return notFound(res);
-      let board: unknown;
-      try { board = JSON.parse(fs.readFileSync(boardPath, "utf-8")); }
-      catch (err) {
+      try {
+        const board = readBoardState(ORG_DIR, params.name) ?? defaultBoardState();
+        return json(res, board);
+      } catch (err) {
         logger.warn(`GET /api/org/departments/${params.name}/board: corrupt board.json — ${err instanceof Error ? err.message : String(err)}`);
         return serverError(res, "board.json is corrupt");
       }
-      return json(res, board);
     }
 
     // GET /api/org/departments/:name/tickets/:id/session
@@ -1041,6 +1047,8 @@ export async function handleApiRequest(
 
       const lastActivityMs = Date.parse(detail.session.lastActivity || "");
       const lastActivityAgoMs = Number.isFinite(lastActivityMs) ? Math.max(0, Date.now() - lastActivityMs) : null;
+      const stalled = resolveTicketSessionStalled(detail.session);
+      const fallback = resolveTicketSessionFallbackState(detail.session);
       return json(res, {
         found: true,
         sessionId: detail.session.id,
@@ -1051,6 +1059,10 @@ export async function handleApiRequest(
         totalCost: detail.session.totalCost,
         lastActivityIso: detail.session.lastActivity,
         lastActivityAgoMs,
+        stalled,
+        stalledForMs: stalled ? lastActivityAgoMs : null,
+        failureReason: resolveTicketSessionFailureReason(detail.session),
+        fallback,
         lastError: detail.session.lastError,
         messages: detail.messages.map((message) => ({
           role: message.role,

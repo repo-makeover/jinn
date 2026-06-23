@@ -43,6 +43,29 @@ const LIVE_REFRESH_MS = 4000
 const LIVE_STALE_HINT_MS = 15000
 const LIVE_TRANSCRIPT_LIMIT = 8
 
+function LiveBadge({
+  children,
+  title,
+  tone,
+}: {
+  children: string
+  title?: string
+  tone: 'amber' | 'red'
+}) {
+  const toneClass =
+    tone === 'red'
+      ? 'text-[var(--system-red)] border-[color:color-mix(in_srgb,var(--system-red)_34%,transparent)] bg-[color:color-mix(in_srgb,var(--system-red)_12%,transparent)]'
+      : 'text-[var(--system-orange)] border-[color:color-mix(in_srgb,var(--system-orange)_34%,transparent)] bg-[color:color-mix(in_srgb,var(--system-orange)_12%,transparent)]'
+  return (
+    <span
+      title={title}
+      className={`inline-flex items-center rounded-[var(--radius-sm)] border px-[var(--space-2)] py-[2px] font-semibold uppercase tracking-[0.3px] ${toneClass}`}
+    >
+      {children}
+    </span>
+  )
+}
+
 function isTerminalLiveStatus(status: TicketSessionResponse['status'] | undefined) {
   return status === 'idle' || status === 'error' || status === 'interrupted'
 }
@@ -56,6 +79,16 @@ function formatRelativeMs(ms: number | null | undefined): string {
   if (minutes < 60) return `active ${minutes}m ago`
   const hours = Math.round(minutes / 60)
   return `active ${hours}h ago`
+}
+
+function formatInactivityMs(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return 'no activity'
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  if (seconds < 60) return `no activity ${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `no activity ${minutes}m`
+  const hours = Math.round(minutes / 60)
+  return `no activity ${hours}h`
 }
 
 function formatCost(cost: number | undefined) {
@@ -207,6 +240,12 @@ export function TicketDetailPanel({
   const showLiveSection = ticket.status === 'in-progress' || liveSession?.found === true
   const showTranscript = transcriptMessages.length > 0 || liveSession?.status === 'running'
   const staleHint = liveSession?.status === 'running' && (liveSession.lastActivityAgoMs ?? 0) >= LIVE_STALE_HINT_MS
+  const stalledLabel = liveSession?.stalled
+    ? formatInactivityMs(liveSession.stalledForMs ?? liveSession.lastActivityAgoMs)
+    : null
+  const fallbackLabel = liveSession?.fallback?.active
+    ? `running on fallback (${liveSession.fallback.toEngine || 'unknown'})`
+    : null
   const liveStatusLabel = liveSession?.status ?? 'idle'
   const liveStatusColor = liveSession?.status === 'error'
     ? 'var(--system-red)'
@@ -442,6 +481,16 @@ export function TicketDetailPanel({
                         <span className="w-2 h-2 rounded-full" style={{ background: liveStatusColor }} />
                         {liveStatusLabel}
                       </span>
+                      {liveSession.stalled && (
+                        <LiveBadge tone="red" title={stalledLabel ?? undefined}>
+                          stalled
+                        </LiveBadge>
+                      )}
+                      {liveSession.fallback?.active && (
+                        <LiveBadge tone="amber" title={fallbackLabel ?? undefined}>
+                          fallback
+                        </LiveBadge>
+                      )}
                       <span>{liveSession.engine || 'unknown engine'} · {liveSession.model || 'default model'}</span>
                       <span>{formatCost(liveSession.totalCost)}</span>
                       <span>{formatRelativeMs(liveSession.lastActivityAgoMs)}</span>

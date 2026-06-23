@@ -163,17 +163,30 @@ describe("GET /api/org/departments/:name/board — corrupt board.json", () => {
     expect(cap.body).toMatchObject({ error: expect.stringContaining("corrupt") });
   });
 
-  it("returns 200 with the parsed board when board.json is valid", async () => {
+  it("returns 200 with the normalized board state when board.json is valid", async () => {
     const deptDir = path.join(orgDir, "platform");
     fs.mkdirSync(deptDir, { recursive: true });
-    const board = { todo: ["a"], in_progress: [], done: ["b"] };
+    const board = [{
+      id: "ticket-1",
+      title: "One",
+      description: "",
+      status: "todo",
+      priority: "medium",
+      assignee: "a",
+      createdAt: "2026-06-22T00:00:00.000Z",
+      updatedAt: "2026-06-22T00:00:00.000Z",
+    }];
     fs.writeFileSync(path.join(deptDir, "board.json"), JSON.stringify(board));
 
     const cap = makeRes();
     await handleApiRequest(makeReq("GET", "/api/org/departments/platform/board"), cap.res, ctx);
 
     expect(cap.status).toBe(200);
-    expect(cap.body).toEqual(board);
+    expect(cap.body).toEqual({
+      tickets: board,
+      deletedTickets: [],
+      retentionDays: 3,
+    });
   });
 });
 

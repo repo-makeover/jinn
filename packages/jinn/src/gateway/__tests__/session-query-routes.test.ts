@@ -382,6 +382,10 @@ describe("session query routes", () => {
       model: "opus",
       employee: "worker",
       totalCost: 0,
+      stalled: false,
+      stalledForMs: null,
+      failureReason: null,
+      fallback: null,
     });
     expect((cap.body as { messages: Array<{ text: string }> }).messages).toHaveLength(8);
     expect((cap.body as { messages: Array<{ text: string }> }).messages.map((message) => message.text)).toEqual([
@@ -395,5 +399,101 @@ describe("session query routes", () => {
       "a8",
     ]);
     expect(scheduleOnLoadTailSync).toHaveBeenCalledWith(newer.id, ctx.emit);
+  });
+
+  it("surfaces truthful stalled and fallback metadata from persisted session state", async () => {
+    const { api, reg } = await setup();
+    const ctx = makeCtx(api);
+    const deptDir = path.join(tmpHome, "org", "software-delivery");
+    fs.mkdirSync(deptDir, { recursive: true });
+    fs.writeFileSync(path.join(deptDir, "board.json"), JSON.stringify([
+      {
+        id: "ticket-stalled",
+        title: "Stalled worker",
+        description: "",
+        status: "in_progress",
+        priority: "medium",
+        complexity: "medium",
+        assignee: "worker",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+      },
+      {
+        id: "ticket-fallback",
+        title: "Fallback worker",
+        description: "",
+        status: "in_progress",
+        priority: "medium",
+        complexity: "medium",
+        assignee: "worker",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+      },
+    ]));
+
+    const stalled = reg.createSession({
+      engine: "claude",
+      source: "manual",
+      sourceRef: "manual:software-delivery:ticket-stalled",
+      employee: "worker",
+      prompt: "stalled",
+      transportMeta: { boardTicketId: "ticket-stalled" } as any,
+    });
+    reg.updateSession(stalled.id, {
+      status: "idle",
+      lastActivity: "2026-06-22T10:00:00.000Z",
+      lastError: "Stalled: session was stuck at status=running with no live turn (heartbeat stale 45s) — auto-reset by the reconciler.",
+    });
+
+    const fallback = reg.createSession({
+      engine: "codex",
+      source: "manual",
+      sourceRef: "manual:software-delivery:ticket-fallback",
+      employee: "worker",
+      prompt: "fallback",
+      transportMeta: {
+        boardTicketId: "ticket-fallback",
+        modelFallback: {
+          status: "running_on_fallback",
+          reason: "timeout",
+          from: { engine: "claude", model: "opus" },
+          to: { engine: "codex", model: "gpt-5.5" },
+        },
+      } as any,
+    });
+    reg.updateSession(fallback.id, {
+      status: "running",
+      model: "gpt-5.5",
+      lastActivity: "2026-06-22T10:00:09.000Z",
+      lastError: "Fallback (stall): claude/opus → codex/gpt-5.5",
+    });
+
+    const stalledCap = makeRes();
+    await api.handleApiRequest(makeReq("GET", "/api/org/departments/software-delivery/tickets/ticket-stalled/session"), stalledCap.res, ctx);
+    expect(stalledCap.status).toBe(200);
+    expect(stalledCap.body).toMatchObject({
+      found: true,
+      sessionId: stalled.id,
+      stalled: true,
+      failureReason: "timeout",
+      fallback: null,
+    });
+    expect((stalledCap.body as { stalledForMs: number }).stalledForMs).toBeGreaterThanOrEqual(0);
+
+    const fallbackCap = makeRes();
+    await api.handleApiRequest(makeReq("GET", "/api/org/departments/software-delivery/tickets/ticket-fallback/session"), fallbackCap.res, ctx);
+    expect(fallbackCap.status).toBe(200);
+    expect(fallbackCap.body).toMatchObject({
+      found: true,
+      sessionId: fallback.id,
+      stalled: false,
+      failureReason: "timeout",
+      fallback: {
+        active: true,
+        fromEngine: "claude",
+        toEngine: "codex",
+        toModel: "gpt-5.5",
+      },
+    });
   });
 });

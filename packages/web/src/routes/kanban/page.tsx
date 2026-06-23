@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import { api } from '@/lib/api'
-import type { Employee, OrgData } from '@/lib/api'
+import type { DepartmentBoardResponse, DepartmentBoardTicket, Employee, OrgData } from '@/lib/api'
 import { useGateway } from '@/hooks/use-gateway'
 import type { KanbanTicket, TicketStatus, TicketPriority, TicketComplexity } from '@/lib/kanban/types'
 import {
@@ -27,6 +27,76 @@ import {
 import { KanbanBoard } from '@/components/kanban/kanban-board'
 import { CreateTicketModal } from '@/components/kanban/create-ticket-modal'
 import { TicketDetailPanel } from '@/components/kanban/ticket-detail-panel'
+
+const DEFAULT_RECYCLE_BIN_RETENTION_DAYS = 3
+const MIN_RECYCLE_BIN_RETENTION_DAYS = 0
+const MAX_RECYCLE_BIN_RETENTION_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+
+type DeletedKanbanTicket = KanbanTicket & { deletedAt: number }
+
+function clampRecycleBinRetentionDays(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return DEFAULT_RECYCLE_BIN_RETENTION_DAYS
+  return Math.max(MIN_RECYCLE_BIN_RETENTION_DAYS, Math.min(MAX_RECYCLE_BIN_RETENTION_DAYS, Math.round(n)))
+}
+
+function formatRecycleBinDays(days: number): string {
+  if (days === 0) return 'Immediate purge'
+  return `${days} day${days === 1 ? '' : 's'}`
+}
+
+function formatDeletedAt(ts: number): string {
+  return new Date(ts).toLocaleString()
+}
+
+function formatDeletionExpiry(ts: number, retentionDays: number): string {
+  if (retentionDays <= 0) return 'immediately'
+  return new Date(ts + (retentionDays * DAY_MS)).toLocaleString()
+}
+
+function mapBoardTicket(item: DepartmentBoardTicket, department: string): KanbanTicket {
+  const statusMap: Record<string, TicketStatus> = {
+    todo: 'todo',
+    in_progress: 'in-progress',
+    'in-progress': 'in-progress',
+    done: 'done',
+    blocked: 'blocked',
+    backlog: 'backlog',
+    review: 'review',
+  }
+  const priorityMap: Record<string, TicketPriority> = {
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+  }
+  const complexityMap: Record<string, TicketComplexity> = {
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+  }
+  return {
+    id: item.id,
+    title: item.title,
+    description: item.description || '',
+    status: statusMap[item.status] || 'todo',
+    priority: priorityMap[item.priority || 'medium'] || 'medium',
+    complexity: complexityMap[item.complexity || 'medium'] || 'medium',
+    assigneeId: item.assignee || null,
+    department,
+    workState: 'idle',
+    createdAt: item.createdAt ? new Date(item.createdAt).getTime() : Date.now(),
+    updatedAt: item.updatedAt ? new Date(item.updatedAt).getTime() : Date.now(),
+    departmentId: department,
+  }
+}
+
+function mapDeletedBoardTicket(item: DepartmentBoardTicket, department: string): DeletedKanbanTicket {
+  return {
+    ...mapBoardTicket(item, department),
+    deletedAt: item.deletedAt ? new Date(item.deletedAt).getTime() : Date.now(),
+  }
+}
 
 /** Delete confirmation dialog */
 function DeleteConfirmDialog({
@@ -53,7 +123,7 @@ function DeleteConfirmDialog({
           <DialogDescription
             className="text-[length:var(--text-footnote)] text-[var(--text-secondary)] leading-[1.5]"
           >
-            Are you sure you want to delete &ldquo;{ticket.title}&rdquo;? This cannot be undone.
+            Move &ldquo;{ticket.title}&rdquo; to the recycle bin? It can be restored until the retention window expires.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -89,6 +159,8 @@ export default function KanbanPage() {
   const [selectedTicket, setSelectedTicket] = useState<KanbanTicket | null>(null)
   const [filterEmployeeId, setFilterEmployeeId] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<KanbanTicket | null>(null)
+  const [deletedTickets, setDeletedTickets] = useState<DeletedKanbanTicket[]>([])
+  const [recycleBinRetentionDays, setRecycleBinRetentionDays] = useState(DEFAULT_RECYCLE_BIN_RETENTION_DAYS)
 
   const loadData = useCallback(() => {
     setLoading(true)
@@ -103,59 +175,18 @@ export default function KanbanPage() {
 
         // Load board tickets from all departments
         const boardTickets: KanbanStore = {}
+        const nextDeletedTickets: DeletedKanbanTicket[] = []
+        let nextRetentionDays: number | null = null
         for (const dept of data.departments) {
           try {
-            const board = await api.getDepartmentBoard(dept) as unknown as Array<{
-              id: string
-              title: string
-              description?: string
-              status: string
-              priority?: string
-              complexity?: string
-              assignee?: string
-              createdAt?: string
-              updatedAt?: string
-            }>
-            if (Array.isArray(board)) {
-              for (const item of board) {
-                // Map board.json status to kanban statuses
-                const statusMap: Record<string, TicketStatus> = {
-                  todo: 'todo',
-                  'in_progress': 'in-progress',
-                  'in-progress': 'in-progress',
-                  done: 'done',
-                  blocked: 'blocked',
-                  backlog: 'backlog',
-                  review: 'review',
-                }
-                const status = statusMap[item.status] || 'todo'
-                const priorityMap: Record<string, TicketPriority> = {
-                  low: 'low',
-                  medium: 'medium',
-                  high: 'high',
-                }
-                const priority = priorityMap[item.priority || 'medium'] || 'medium'
-                const complexityMap: Record<string, TicketComplexity> = {
-                  low: 'low',
-                  medium: 'medium',
-                  high: 'high',
-                }
-                const complexity = complexityMap[item.complexity || 'medium'] || 'medium'
-                boardTickets[item.id] = {
-                  id: item.id,
-                  title: item.title,
-                  description: item.description || '',
-                  status,
-                  priority,
-                  complexity,
-                  assigneeId: item.assignee || null,
-                  department: dept,
-                  workState: 'idle',
-                  createdAt: item.createdAt ? new Date(item.createdAt).getTime() : Date.now(),
-                  updatedAt: item.updatedAt ? new Date(item.updatedAt).getTime() : Date.now(),
-                  departmentId: dept,
-                }
-              }
+            const board: DepartmentBoardResponse = await api.getDepartmentBoard(dept)
+            const retentionDays = clampRecycleBinRetentionDays(board.retentionDays)
+            nextRetentionDays = nextRetentionDays == null ? retentionDays : Math.max(nextRetentionDays, retentionDays)
+            for (const item of board.tickets) {
+              boardTickets[item.id] = mapBoardTicket(item, dept)
+            }
+            for (const item of board.deletedTickets) {
+              nextDeletedTickets.push(mapDeletedBoardTicket(item, dept))
             }
           } catch {
             // Department may not have a board.json, that's fine
@@ -166,6 +197,8 @@ export default function KanbanPage() {
         // agent-made changes (moves, deletes) are only reflected in the API,
         // and stale localStorage entries would cause ghost / wrong-state tickets.
         setTickets(boardTickets)
+        setDeletedTickets(nextDeletedTickets.sort((a, b) => b.deletedAt - a.deletedAt))
+        setRecycleBinRetentionDays(nextRetentionDays ?? DEFAULT_RECYCLE_BIN_RETENTION_DAYS)
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
@@ -202,7 +235,11 @@ export default function KanbanPage() {
    * remain in localStorage only until a department can be assigned).
    */
   const persistToApi = useCallback(
-    async (store: KanbanStore, deletedIds: string[] = []) => {
+    async (
+      store: KanbanStore,
+      deletedIds: string[] = [],
+      retentionDays = recycleBinRetentionDays,
+    ) => {
       // Group tickets by their department
       const byDept: Record<string, KanbanTicket[]> = {}
       for (const ticket of Object.values(store)) {
@@ -236,22 +273,27 @@ export default function KanbanPage() {
           return api.updateDepartmentBoard(dept, {
             tickets: boardData,
             deletedIds,
+            retentionDays,
           })
         }),
       )
     },
-    [departments],
+    [departments, recycleBinRetentionDays],
   )
 
   const persistBoardChange = useCallback(
-    (store: KanbanStore, deletedIds: string[] = []) => {
+    (
+      store: KanbanStore,
+      deletedIds: string[] = [],
+      retentionDays = recycleBinRetentionDays,
+    ) => {
       setSaveError(null)
-      void persistToApi(store, deletedIds).catch((err) => {
+      void persistToApi(store, deletedIds, retentionDays).catch((err) => {
         setSaveError(err instanceof Error ? err.message : 'Failed to save board changes.')
         loadData()
       })
     },
-    [persistToApi, loadData],
+    [persistToApi, loadData, recycleBinRetentionDays],
   )
 
   // Keep selectedTicket in sync with store
@@ -296,13 +338,53 @@ export default function KanbanPage() {
   }
 
   function handleDeleteTicket(ticketId: string) {
+    const deletedTicket = tickets[ticketId]
     setTickets((prev) => {
       const next = deleteTicket(prev, ticketId)
       persistBoardChange(next, [ticketId])
       return next
     })
+    if (deletedTicket && recycleBinRetentionDays > 0) {
+      setDeletedTickets((prev) => [
+        { ...deletedTicket, deletedAt: Date.now() },
+        ...prev.filter((ticket) => ticket.id !== ticketId),
+      ])
+    } else {
+      setDeletedTickets((prev) => prev.filter((ticket) => ticket.id !== ticketId))
+    }
     setSelectedTicket(null)
     setDeleteConfirm(null)
+  }
+
+  function handleRestoreTicket(ticketId: string) {
+    const deletedTicket = deletedTickets.find((ticket) => ticket.id === ticketId)
+    if (!deletedTicket) return
+    setTickets((prev) => {
+      const { deletedAt: _deletedAt, ...restored } = deletedTicket
+      const restoredTicket: KanbanTicket = {
+        ...restored,
+        workState: 'idle',
+        updatedAt: Date.now(),
+      }
+      const next = {
+        ...prev,
+        [ticketId]: restoredTicket,
+      }
+      persistBoardChange(next)
+      return next
+    })
+    setDeletedTickets((prev) => prev.filter((ticket) => ticket.id !== ticketId))
+  }
+
+  function handleRecycleBinRetentionChange(days: number) {
+    const nextRetentionDays = clampRecycleBinRetentionDays(days)
+    setRecycleBinRetentionDays(nextRetentionDays)
+    setDeletedTickets((prev) => {
+      if (nextRetentionDays <= 0) return []
+      const cutoff = Date.now() - (nextRetentionDays * DAY_MS)
+      return prev.filter((ticket) => ticket.deletedAt >= cutoff)
+    })
+    persistBoardChange(tickets, [], nextRetentionDays)
   }
 
   function handleAssigneeChange(ticketId: string, assigneeId: string | null) {
@@ -422,6 +504,22 @@ export default function KanbanPage() {
             </div>
 
             <ToolbarActions>
+              <label className="flex items-center gap-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--text-secondary)]">
+                <span>Recycle bin</span>
+                <select
+                  aria-label="Recycle bin retention"
+                  value={recycleBinRetentionDays}
+                  onChange={(event) => handleRecycleBinRetentionChange(Number(event.target.value))}
+                  className="rounded-[var(--radius-md)] border border-[var(--separator)] bg-[var(--bg)] px-2 py-1 text-[length:var(--text-caption1)] text-[var(--text-primary)]"
+                >
+                  {Array.from(
+                    { length: MAX_RECYCLE_BIN_RETENTION_DAYS - MIN_RECYCLE_BIN_RETENTION_DAYS + 1 },
+                    (_, index) => index + MIN_RECYCLE_BIN_RETENTION_DAYS,
+                  ).map((days) => (
+                    <option key={days} value={days}>{formatRecycleBinDays(days)}</option>
+                  ))}
+                </select>
+              </label>
               <button
                 onClick={() => setCreateOpen(true)}
                 className="rounded-[var(--radius-md)] px-4 py-2 text-[length:var(--text-footnote)] font-[var(--weight-semibold)] border-none flex items-center gap-[var(--space-2)] bg-[var(--accent)] text-white cursor-pointer"
@@ -498,6 +596,57 @@ export default function KanbanPage() {
                 onDeleteTicket={(ticket) => setDeleteConfirm(ticket)}
                 filterEmployeeId={filterEmployeeId}
               />
+            )}
+          </div>
+
+          <div className="shrink-0 border-t border-[var(--separator)] bg-[var(--fill-secondary)] px-[var(--space-5)] py-[var(--space-4)]">
+            <div className="mb-[var(--space-2)] flex items-center justify-between gap-[var(--space-3)]">
+              <div>
+                <h2 className="m-0 text-[length:var(--text-footnote)] font-semibold text-[var(--text-primary)]">
+                  Recently deleted
+                </h2>
+                <p className="m-0 mt-[2px] text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">
+                  Restorable for {formatRecycleBinDays(recycleBinRetentionDays).toLowerCase()}.
+                </p>
+              </div>
+              <span className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">
+                {deletedTickets.length} item{deletedTickets.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            {deletedTickets.length === 0 ? (
+              <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                No deleted tickets waiting for purge.
+              </div>
+            ) : (
+              <div className="max-h-[220px] space-y-[var(--space-2)] overflow-y-auto pr-[var(--space-1)]">
+                {deletedTickets.map((ticket) => (
+                  <div
+                    key={ticket.id}
+                    className="flex items-start justify-between gap-[var(--space-3)] rounded-[var(--radius-md)] border border-[var(--separator)] bg-[var(--bg)] px-[var(--space-3)] py-[var(--space-3)]"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-[length:var(--text-footnote)] font-semibold text-[var(--text-primary)]">
+                        {ticket.title}
+                      </div>
+                      <div className="mt-[2px] text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">
+                        Deleted {formatDeletedAt(ticket.deletedAt)}
+                      </div>
+                      <div className="mt-[2px] text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">
+                        Purges {formatDeletionExpiry(ticket.deletedAt, recycleBinRetentionDays)}
+                      </div>
+                      <div className="mt-[2px] text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">
+                        {(ticket.departmentId ?? ticket.department ?? 'No department')} · {ticket.status}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleRestoreTicket(ticket.id)}
+                      className="shrink-0 rounded-[var(--radius-md)] border border-[var(--separator)] bg-transparent px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-caption1)] font-semibold text-[var(--text-primary)] cursor-pointer"
+                    >
+                      Restore
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>

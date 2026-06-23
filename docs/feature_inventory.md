@@ -13,6 +13,14 @@
   - link to open the full live chat view
 - This is session-level liveness only. It reflects the gateway session state and transcript, not process-level CPU/PID health.
 
+### Kanban recycle bin
+- `packages/jinn/src/gateway/board-service.ts`
+- `packages/web/src/routes/kanban/page.tsx`
+- Deleted kanban tickets move into a recycle bin instead of being purged immediately.
+- The retention window defaults to 3 days and is configurable from 0 to 7 days in the kanban UI.
+- `0` means immediate purge.
+- Tickets remain restorable from the "Recently deleted" section until their retention window expires.
+
 ## API
 
 ### Kiro headless engine and estimated credit gauge

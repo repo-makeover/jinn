@@ -97,8 +97,42 @@ export interface TicketSessionResponse {
   totalCost?: number
   lastActivityIso?: string | null
   lastActivityAgoMs?: number | null
+  stalled?: boolean
+  stalledForMs?: number | null
+  failureReason?: string | null
+  fallback?: {
+    active: boolean
+    fromEngine: string | null
+    toEngine: string | null
+    toModel: string | null
+  } | null
   lastError?: string | null
   messages?: TicketSessionTailMessage[]
+}
+
+export interface DepartmentBoardTicket {
+  id: string
+  title: string
+  description?: string
+  status: string
+  priority?: string
+  complexity?: string
+  assignee?: string
+  createdAt?: string
+  updatedAt?: string
+  deletedAt?: string
+}
+
+export interface DepartmentBoardResponse {
+  tickets: DepartmentBoardTicket[]
+  deletedTickets: DepartmentBoardTicket[]
+  retentionDays: number
+}
+
+export interface UpdateDepartmentBoardPayload {
+  tickets: DepartmentBoardTicket[]
+  deletedIds?: string[]
+  retentionDays?: number
 }
 
 const BASE =
@@ -476,7 +510,7 @@ export const api = {
       data,
     ),
   getDepartmentBoard: (name: string) =>
-    get<Record<string, unknown>>(`/api/org/departments/${name}/board`),
+    get<DepartmentBoardResponse>(`/api/org/departments/${name}/board`),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),
   getSkill: (name: string) => get<Record<string, unknown>>(`/api/skills/${name}`),
   getConfig: () => get<Record<string, unknown>>("/api/config"),
@@ -492,7 +526,7 @@ export const api = {
     post<{ status: string; portal: { portalName?: string; operatorName?: string; language?: string } }>("/api/onboarding", data),
   getActivity: () =>
     get<Array<{ event: string; payload: unknown; ts: number }>>("/api/activity"),
-  updateDepartmentBoard: (name: string, data: unknown) =>
+  updateDepartmentBoard: (name: string, data: UpdateDepartmentBoardPayload) =>
     put<Record<string, unknown>>(`/api/org/departments/${name}/board`, data),
   dispatchTicket: (department: string, ticketId: string) =>
     post<DispatchTicketResponse>(`/api/org/departments/${department}/tickets/${ticketId}/dispatch`, {}),
