@@ -239,7 +239,7 @@ the registry / `GET /api/engines`.
 8. **Adversarial review.** Spawn the `code-reviewer` employee (Codex GPT-5.5 xhigh) on the
    diff; loop until crit/high (+ chosen medium) fixed.
 9. **Docs/README** per §4; final typecheck + full test run.
-10. **Report** to Hristo with the :7788 evidence (GIF + notes); merge decision is his.
+10. **Report** to the maintainer with the :7788 evidence (GIF + notes); merge decision is theirs.
 
 ## 6. Risks & mitigations
 

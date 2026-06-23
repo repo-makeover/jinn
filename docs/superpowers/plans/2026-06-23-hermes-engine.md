@@ -1219,12 +1219,12 @@ Expected: all green. Fix any failures before review.
 
 - [ ] **Step 3: Re-run the gate + the :7788 Chrome check** for anything the review touched.
 
-- [ ] **Step 4: Final commit + report to Hristo**
+- [ ] **Step 4: Final commit + report to the maintainer**
 
 ```bash
 git add -A && git commit -m "fix(hermes): address adversarial review findings"
 ```
-Report PASS/FAIL with the :7788 evidence (GIF + notes). Merge decision is Hristo's.
+Report PASS/FAIL with the :7788 evidence (GIF + notes). Merge decision is the maintainer's.
 
 ---
 
