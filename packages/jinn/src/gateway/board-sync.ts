@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Session } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { readBoardArray, writeBoardTickets, type BoardTicket } from "./board-service.js";
+import { findBoardTicketForSession } from "./ticket-session-resolver.js";
 
 /**
  * Auto-reflect running jobs on the department Kanban.
@@ -95,11 +96,6 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
 
   const ticketId = `${TICKET_PREFIX}${sessionId}`;
   const iso = new Date(now).toISOString();
-  const boardMeta = session?.transportMeta && typeof session.transportMeta === "object"
-    ? session.transportMeta as Record<string, unknown>
-    : null;
-  const boardTicketId = typeof boardMeta?.boardTicketId === "string" ? boardMeta.boardTicketId : null;
-
   // Error detail never lands on the board, but failed/stalled work is visible.
   // Feature 2: reflect the approval lifecycle so a session stalled on a human
   // decision shows as "blocked" (not invisibly idle), and clears when resolved.
@@ -125,14 +121,7 @@ export function syncBoardForEvent(event: string, payload: unknown, deps: BoardSy
     note = failed ? "failed - see session" : "completed";
   }
 
-  const existing = tickets.find((t) =>
-    t &&
-    (
-      (boardTicketId !== null && t.id === boardTicketId) ||
-      t.sessionId === sessionId ||
-      t.id === ticketId
-    ),
-  );
+  const existing = session ? findBoardTicketForSession(tickets, session, ticketId) : tickets.find((t) => t?.id === ticketId);
   if (existing) {
     existing.status = status;
     existing.assignee = employee;

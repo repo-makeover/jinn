@@ -1,6 +1,9 @@
-
-import { useEffect, useRef } from 'react'
-import type { Employee } from '@/lib/api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ChatMessages } from '@/components/chat/chat-messages'
+import { useGateway } from '@/hooks/use-gateway'
+import { api, type Employee, type TicketSessionResponse } from '@/lib/api'
+import type { Message } from '@/lib/conversations'
 import type { KanbanTicket, TicketStatus, TicketPriority, TicketComplexity } from '@/lib/kanban/types'
 import { PRIORITY_COLORS, COLUMNS } from '@/lib/kanban/types'
 import { EmployeePicker } from './employee-picker'
@@ -37,6 +40,38 @@ const COMPLEXITY_LABELS: Record<TicketComplexity, string> = {
   medium: 'Medium complexity',
   high: 'High complexity',
 }
+const LIVE_REFRESH_MS = 4000
+const LIVE_STALE_HINT_MS = 15000
+const LIVE_TRANSCRIPT_LIMIT = 8
+
+function isTerminalLiveStatus(status: TicketSessionResponse['status'] | undefined) {
+  return status === 'idle' || status === 'error' || status === 'interrupted'
+}
+
+function formatRelativeMs(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return 'activity unknown'
+  if (ms < 1000) return 'active just now'
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `active ${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `active ${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  return `active ${hours}h ago`
+}
+
+function formatCost(cost: number | undefined) {
+  return `cost $${(cost ?? 0).toFixed(2)}`
+}
+
+function mapTailMessages(liveSession: TicketSessionResponse | null): Message[] {
+  return (liveSession?.messages ?? []).map((message, index) => ({
+    id: `${message.ts}-${index}`,
+    role: message.role,
+    content: message.text,
+    timestamp: message.ts,
+    toolCall: message.toolCall,
+  }))
+}
 
 /* Main component */
 interface TicketDetailPanelProps {
@@ -61,6 +96,10 @@ export function TicketDetailPanel({
   onDelete,
 }: TicketDetailPanelProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
+  const navigate = useNavigate()
+  const { subscribe } = useGateway()
+  const [liveSession, setLiveSession] = useState<TicketSessionResponse | null>(null)
+  const [liveLoading, setLiveLoading] = useState(false)
 
   // Escape key to close
   useEffect(() => {
@@ -80,12 +119,75 @@ export function TicketDetailPanel({
     onDelete()
   }
 
+  const loadLiveSession = useCallback(async () => {
+    if (!ticket.departmentId) {
+      setLiveSession({ found: false })
+      setLiveLoading(false)
+      return
+    }
+    setLiveLoading(true)
+    try {
+      const next = await api.getTicketSession(ticket.departmentId, ticket.id)
+      setLiveSession(next)
+    } catch {
+      setLiveSession({ found: false })
+    } finally {
+      setLiveLoading(false)
+    }
+  }, [ticket.departmentId, ticket.id])
+
+  useEffect(() => {
+    void loadLiveSession()
+  }, [loadLiveSession])
+
+  useEffect(() => {
+    const shouldPoll =
+      ticket.status === 'in-progress' &&
+      (!liveSession?.found || !isTerminalLiveStatus(liveSession.status))
+    if (!shouldPoll) return
+
+    const unsubscribe = subscribe((event, payload) => {
+      if (!liveSession?.sessionId) return
+      const sessionId =
+        payload && typeof payload === 'object' && 'sessionId' in payload
+          ? String((payload as { sessionId?: unknown }).sessionId ?? '')
+          : ''
+      if (!sessionId || sessionId !== liveSession.sessionId) return
+      if (event === 'session:delta' || event === 'session:completed' || event === 'session:started') {
+        void loadLiveSession()
+      }
+    })
+
+    const timer = window.setInterval(() => {
+      void loadLiveSession()
+    }, LIVE_REFRESH_MS)
+
+    return () => {
+      unsubscribe()
+      window.clearInterval(timer)
+    }
+  }, [subscribe, ticket.status, liveSession?.found, liveSession?.sessionId, liveSession?.status, loadLiveSession])
+
   const assignee = employees.find(e => e.name === ticket.assigneeId) ?? null
   const accentColor = 'var(--accent)'
   const runDisabled = !ticket.assigneeId || ticket.workState === 'starting'
   const runHelperText = !ticket.assigneeId
     ? 'Assign someone first.'
     : (ticket.workState === 'starting' ? 'Starting worker session…' : 'Run immediately, bypassing idle and schedule gates.')
+  const transcriptMessages = useMemo(() => mapTailMessages(liveSession), [liveSession])
+  const showLiveSection = ticket.status === 'in-progress' || liveSession?.found === true
+  const showTranscript = transcriptMessages.length > 0 || liveSession?.status === 'running'
+  const staleHint = liveSession?.status === 'running' && (liveSession.lastActivityAgoMs ?? 0) >= LIVE_STALE_HINT_MS
+  const liveStatusLabel = liveSession?.status ?? 'idle'
+  const liveStatusColor = liveSession?.status === 'error'
+    ? 'var(--system-red)'
+    : liveSession?.status === 'waiting'
+      ? 'var(--system-orange)'
+      : liveSession?.status === 'interrupted'
+        ? 'var(--text-tertiary)'
+        : liveSession?.status === 'idle'
+          ? 'var(--system-green)'
+          : 'var(--system-blue)'
 
   return (
     <div
@@ -217,6 +319,74 @@ export function TicketDetailPanel({
               <div className="text-[length:var(--text-footnote)] text-[var(--text-secondary)] leading-[1.5] whitespace-pre-wrap">
                 {ticket.description}
               </div>
+            </div>
+          )}
+
+          {showLiveSection && (
+            <div className="px-[var(--space-5)] pb-[var(--space-4)]">
+              <div className="h-px bg-[var(--separator)] mb-[var(--space-3)]" />
+              <div className="flex items-center justify-between gap-[var(--space-3)] mb-[var(--space-2)]">
+                <div className="text-[length:var(--text-caption1)] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.5px]">
+                  Live session
+                </div>
+                {liveSession?.found && liveSession.sessionId && (
+                  <button
+                    onClick={() => navigate(`/?session=${encodeURIComponent(liveSession.sessionId!)}`)}
+                    className="border-none bg-transparent text-[length:var(--text-caption2)] font-semibold text-[var(--system-blue)] cursor-pointer"
+                  >
+                    Open live session
+                  </button>
+                )}
+              </div>
+
+              {!liveSession?.found && !liveLoading ? (
+                <div className="text-[length:var(--text-footnote)] text-[var(--text-tertiary)]">
+                  No active session for this ticket.
+                </div>
+              ) : liveSession?.found ? (
+                <>
+                  <div className="rounded-[var(--radius-md)] bg-[var(--fill-secondary)] px-[var(--space-3)] py-[var(--space-3)]">
+                    <div className="flex items-center flex-wrap gap-[var(--space-2)] text-[length:var(--text-caption2)] text-[var(--text-secondary)]">
+                      <span className="inline-flex items-center gap-[6px] font-semibold uppercase tracking-[0.3px]">
+                        <span className="w-2 h-2 rounded-full" style={{ background: liveStatusColor }} />
+                        {liveStatusLabel}
+                      </span>
+                      <span>{liveSession.engine || 'unknown engine'} · {liveSession.model || 'default model'}</span>
+                      <span>{formatCost(liveSession.totalCost)}</span>
+                      <span>{formatRelativeMs(liveSession.lastActivityAgoMs)}</span>
+                      {staleHint && <span className="text-[var(--system-orange)]">stale?</span>}
+                    </div>
+                    {liveSession.lastError && (
+                      <div className="mt-[var(--space-2)] text-[length:var(--text-caption2)] text-[var(--system-red)] whitespace-pre-wrap">
+                        {liveSession.lastError}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-[var(--space-3)]">
+                    <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
+                      Showing latest {LIVE_TRANSCRIPT_LIMIT} messages. Open live session for full history.
+                    </div>
+                    {showTranscript ? (
+                      <div className="rounded-[var(--radius-md)] border border-[var(--separator)] overflow-hidden h-[280px] bg-[var(--bg)]">
+                        <ChatMessages
+                          messages={transcriptMessages}
+                          loading={liveSession.status === 'running'}
+                          streamingText=""
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-[length:var(--text-footnote)] text-[var(--text-tertiary)]">
+                        No transcript yet.
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="text-[length:var(--text-footnote)] text-[var(--text-tertiary)]">
+                  Loading live session…
+                </div>
+              )}
             </div>
           )}
         </div>

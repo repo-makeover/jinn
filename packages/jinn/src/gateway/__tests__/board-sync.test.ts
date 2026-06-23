@@ -3,6 +3,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { syncBoardForEvent, type BoardSyncDeps } from "../board-sync.js";
+import { resolveBestSessionForTicket } from "../ticket-session-resolver.js";
 import type { Session } from "../../shared/types.js";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-boardsync-"));
@@ -181,5 +182,53 @@ describe("syncBoardForEvent", () => {
     expect(b.find((t: any) => t.id === "keep-me")).toBeTruthy(); // manual ticket preserved
     expect(b.find((t: any) => t.id === "session-old0")).toBeUndefined(); // oldest dropped
     expect(b.find((t: any) => t.id === "session-s1")).toBeTruthy();       // newest kept
+  });
+});
+
+describe("resolveBestSessionForTicket", () => {
+  it("resolves via transportMeta.boardTicketId", () => {
+    const ticket = { id: "ticket-1", sessionId: undefined } as any;
+    const session = makeSession({
+      id: "s-board",
+      lastActivity: "2026-06-21T12:00:10.000Z",
+      transportMeta: { boardTicketId: "ticket-1" } as any,
+    });
+    expect(resolveBestSessionForTicket(ticket, [session])?.id).toBe("s-board");
+  });
+
+  it("resolves via the persisted ticket.sessionId", () => {
+    const ticket = { id: "ticket-2", sessionId: "s-direct" } as any;
+    const session = makeSession({ id: "s-direct", lastActivity: "2026-06-21T12:00:10.000Z" });
+    expect(resolveBestSessionForTicket(ticket, [session])?.id).toBe("s-direct");
+  });
+
+  it("resolves via a channel/source key containing the ticket id", () => {
+    const ticket = { id: "ticket-chan", sessionId: undefined } as any;
+    const session = makeSession({
+      id: "s-chan",
+      lastActivity: "2026-06-21T12:00:10.000Z",
+      replyContext: { channel: "kanban:software-delivery:ticket-chan" } as any,
+    });
+    expect(resolveBestSessionForTicket(ticket, [session])?.id).toBe("s-chan");
+  });
+
+  it("picks the most recently active match when several sessions qualify", () => {
+    const ticket = { id: "ticket-3", sessionId: undefined } as any;
+    const older = makeSession({
+      id: "s-old",
+      lastActivity: "2026-06-21T12:00:05.000Z",
+      transportMeta: { boardTicketId: "ticket-3" } as any,
+    });
+    const newer = makeSession({
+      id: "s-new",
+      lastActivity: "2026-06-21T12:00:09.000Z",
+      replyContext: { channel: "manual:ticket-3" } as any,
+    });
+    expect(resolveBestSessionForTicket(ticket, [older, newer])?.id).toBe("s-new");
+  });
+
+  it("returns undefined when nothing matches", () => {
+    const ticket = { id: "ticket-miss", sessionId: undefined } as any;
+    expect(resolveBestSessionForTicket(ticket, [makeSession({ id: "s-other" })])).toBeUndefined();
   });
 });

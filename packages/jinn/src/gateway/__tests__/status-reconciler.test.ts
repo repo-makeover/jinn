@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from "vitest";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,6 +36,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   db.prepare("DELETE FROM sessions").run();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("status reconciler sweepOnce", () => {
@@ -144,5 +148,22 @@ describe("status reconciler sweepOnce", () => {
     expect(events[0].event).toBe("session:completed");
     expect(events[0].payload).toMatchObject({ sessionId: "stuck-evt", stalled: true });
     expect(events[0].payload.error).toMatch(/^Stalled:/);
+  });
+
+  it("runs the periodic backstop on the same reconciler tick", () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const stop = rec.startStatusReconciler({
+      engines: new Map(),
+      emit: () => {},
+      intervalMs: 1_000,
+      onAfterSweep: () => calls.push("tick"),
+    });
+    try {
+      vi.advanceTimersByTime(1_000);
+      expect(calls).toEqual(["tick"]);
+    } finally {
+      stop();
+    }
   });
 });

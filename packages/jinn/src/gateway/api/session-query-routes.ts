@@ -26,6 +26,26 @@ export function sliceLastMessages<T>(messages: T[], lastParam: string | null): T
   return messages;
 }
 
+export function loadSessionMessagesForApi(
+  sessionId: string,
+  context: ApiContext,
+  lastParam: string | null = null,
+): { session: ReturnType<typeof serializeSession>; messages: ReturnType<typeof getMessages> } | null {
+  const session = getSession(sessionId);
+  if (!session) return null;
+
+  let messages = getMessages(sessionId);
+
+  if (messages.length === 0 && session.engineSessionId) {
+    scheduleTranscriptBackfill(sessionId, session.engineSessionId, context);
+  } else if (session.engine === "claude") {
+    scheduleOnLoadTailSync(sessionId, context.emit);
+  }
+
+  messages = sliceLastMessages(messages, lastParam);
+  return { session: serializeSession(session, context), messages };
+}
+
 export async function handleSessionQueryRoutes(
   method: string,
   pathname: string,
@@ -109,21 +129,12 @@ export async function handleSessionQueryRoutes(
   }
 
   if (method === "GET" && sessionParams) {
-    const session = getSession(sessionParams.id);
-    if (!session) {
+    const detail = loadSessionMessagesForApi(sessionParams.id, context, url.searchParams.get("last"));
+    if (!detail) {
       notFound(res);
       return true;
     }
-    let messages = getMessages(sessionParams.id);
-
-    if (messages.length === 0 && session.engineSessionId) {
-      scheduleTranscriptBackfill(sessionParams.id, session.engineSessionId, context);
-    } else if (session.engine === "claude") {
-      scheduleOnLoadTailSync(sessionParams.id, context.emit);
-    }
-
-    messages = sliceLastMessages(messages, url.searchParams.get("last"));
-    json(res, { ...serializeSession(session, context), messages });
+    json(res, { ...detail.session, messages: detail.messages });
     return true;
   }
 

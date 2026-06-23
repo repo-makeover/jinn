@@ -13,13 +13,14 @@ const DEFAULT_INTERVAL_MS = 15_000;
  *  re-sets both when the queued turn actually starts (and the 5s heartbeat
  *  takes over). Worst case a long-delayed queue item gets its spinner cleared
  *  here and re-armed by session:started when the turn begins. */
-const DEFAULT_STALE_MS = 45_000;
+export const DEFAULT_STALE_MS = 45_000;
 
 export interface StatusReconcilerDeps {
   engines: Map<string, Engine>;
   emit: (event: string, payload: unknown) => void;
   intervalMs?: number;
   staleMs?: number;
+  onAfterSweep?: () => void;
   /** Test override. */
   now?: () => number;
   /** Carry-over between sweeps: sessions seen stuck once. A session is only
@@ -28,6 +29,20 @@ export interface StatusReconcilerDeps {
    *  and the gateway persisting its final status. Created by
    *  startStatusReconciler; tests may pass their own. */
   pendingStuck?: Set<string>;
+}
+
+export function sessionHasLiveTurn(
+  session: Pick<import("../shared/types.js").Session, "id" | "engine">,
+  engines: Map<string, Engine>,
+): boolean {
+  const engine = engines.get(session.engine);
+  return !!engine && (
+    "isTurnRunning" in engine
+      ? (engine as unknown as { isTurnRunning(id: string): boolean }).isTurnRunning(session.id)
+      : (typeof (engine as { isAlive?: (id: string) => boolean }).isAlive === "function"
+        ? (engine as unknown as { isAlive(id: string): boolean }).isAlive(session.id)
+        : false)
+  );
 }
 
 /** One sweep: unstick sessions stuck at status:"running" with no live turn.
@@ -43,17 +58,10 @@ export function sweepOnce(deps: StatusReconcilerDeps): number {
       deps.pendingStuck?.delete(session.id); // fresh heartbeat — recovered, clear any mark
       continue; // heartbeat is live — a turn is in flight
     }
-    const engine = deps.engines.get(session.engine);
     // Same live-turn probe as the API status path: interactive engines expose
     // isTurnRunning (warm-but-idle PTYs must not count); headless engines
     // approximate with isAlive; an unknown engine cannot have a live turn.
-    const turnRunning = !!engine && (
-      "isTurnRunning" in engine
-        ? (engine as unknown as { isTurnRunning(id: string): boolean }).isTurnRunning(session.id)
-        : (typeof (engine as { isAlive?: (id: string) => boolean }).isAlive === "function"
-          ? (engine as unknown as { isAlive(id: string): boolean }).isAlive(session.id)
-          : false)
-    );
+    const turnRunning = sessionHasLiveTurn(session, deps.engines);
     if (turnRunning) {
       deps.pendingStuck?.delete(session.id); // live turn — clear any mark
       continue;
@@ -109,6 +117,11 @@ export function startStatusReconciler(deps: StatusReconcilerDeps): () => void {
       sweepOnce({ ...deps, pendingStuck });
     } catch (err) {
       logger.warn(`[reconciler] sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      deps.onAfterSweep?.();
+    } catch (err) {
+      logger.warn(`[reconciler] post-sweep callback failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, deps.intervalMs ?? DEFAULT_INTERVAL_MS);
   timer.unref?.();

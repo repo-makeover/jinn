@@ -50,6 +50,7 @@ import { startScheduler, reloadScheduler, stopScheduler } from "../cron/schedule
 import { scanOrg } from "./org.js";
 import { syncBoardForEvent } from "./board-sync.js";
 import { startBoardWorker } from "./board-worker.js";
+import { reconcileOrphanedTickets } from "./orphaned-ticket-reconciler.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -866,12 +867,33 @@ export async function startGateway(
   };
   apiContext.reloadConfig = reloadConfig;
 
+  reconcileOrphanedTickets({
+    engines,
+    orgDir: ORG_DIR,
+    getSession,
+    listSessions,
+    emit,
+    cause: "startup",
+  });
+
   // Replay any pending web queue items (e.g. gateway restart mid-run)
   resumePendingWebQueueItems(apiContext);
 
   // Unstick sessions whose completion event was lost (status:"running" with no
   // live turn). 15s sweep; logs one line per fix.
-  const stopStatusReconciler = startStatusReconciler({ engines, emit });
+  const stopStatusReconciler = startStatusReconciler({
+    engines,
+    emit,
+    onAfterSweep: () => {
+      reconcileOrphanedTickets({
+        engines,
+        orgDir: ORG_DIR,
+        getSession,
+        listSessions,
+        emit,
+      });
+    },
+  });
   const stopBoardWorker = startBoardWorker({ context: apiContext, orgDir: ORG_DIR });
 
   // Resolve web UI directory — bundled into dist/web/ by postbuild script

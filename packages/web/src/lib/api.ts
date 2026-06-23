@@ -79,6 +79,28 @@ export interface DispatchTicketResponse {
   sessionId: string
 }
 
+export interface TicketSessionTailMessage {
+  role: 'user' | 'assistant' | 'notification'
+  text: string
+  ts: number
+  kind: 'message' | 'notification' | 'tool_call' | 'partial'
+  toolCall?: string
+}
+
+export interface TicketSessionResponse {
+  found: boolean
+  sessionId?: string
+  status?: 'idle' | 'running' | 'error' | 'waiting' | 'interrupted'
+  engine?: string | null
+  model?: string | null
+  employee?: string | null
+  totalCost?: number
+  lastActivityIso?: string | null
+  lastActivityAgoMs?: number | null
+  lastError?: string | null
+  messages?: TicketSessionTailMessage[]
+}
+
 const BASE =
   typeof window !== "undefined"
     ? window.location.origin
@@ -473,6 +495,8 @@ export const api = {
     put<Record<string, unknown>>(`/api/org/departments/${name}/board`, data),
   dispatchTicket: (department: string, ticketId: string) =>
     post<DispatchTicketResponse>(`/api/org/departments/${department}/tickets/${ticketId}/dispatch`, {}),
+  getTicketSession: (department: string, ticketId: string) =>
+    get<TicketSessionResponse>(`/api/org/departments/${department}/tickets/${ticketId}/session`),
   sttStatus: () =>
     get<{ available: boolean; model: string | null; downloading: boolean; progress: number; languages: string[] }>("/api/stt/status"),
   sttDownload: () =>

@@ -36,7 +36,7 @@ import { maybeEmitTalkGraph } from "../talk/graph.js";
 import { onboardingNeeded, applyEngineChoice } from "./onboarding-policy.js";
 import { sanitizeConfigForApi, deepMerge } from "./config-sanitize.js";
 import type { ApiContext } from "./api/context.js";
-import { handleSessionQueryRoutes } from "./api/session-query-routes.js";
+import { handleSessionQueryRoutes, loadSessionMessagesForApi } from "./api/session-query-routes.js";
 import { handleStatusRoutes } from "./api/routes/status.js";
 import { json, notFound, badRequest, serverError } from "./api/responses.js";
 import { matchRoute } from "./api/match-route.js";
@@ -60,9 +60,13 @@ import { supersedeRunningTurn } from "./session-turn-state.js";
 import { createPtyAccessToken } from "./auth.js";
 import { writeMergedBoard } from "./board-service.js";
 import { dispatchTicket } from "./ticket-dispatch.js";
+import { readBoardArray } from "./board-service.js";
+import { resolveBestSessionForTicket } from "./ticket-session-resolver.js";
 export type { ApiContext } from "./api/context.js";
 export { matchRoute } from "./api/match-route.js";
 export { resumePendingWebQueueItems } from "./api/session-dispatch.js";
+
+const TICKET_SESSION_TAIL_LIMIT = 8;
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
 const SESSION_LIST_PER_GROUP = 50;
@@ -1013,6 +1017,49 @@ export async function handleApiRequest(
         return serverError(res, "board.json is corrupt");
       }
       return json(res, board);
+    }
+
+    // GET /api/org/departments/:name/tickets/:id/session
+    params = matchRoute("/api/org/departments/:name/tickets/:id/session", pathname);
+    if (method === "GET" && params) {
+      const ticketParams = params;
+      let board: import("./board-service.js").BoardTicket[] | null;
+      try {
+        board = readBoardArray(ORG_DIR, ticketParams.name);
+      } catch (err) {
+        logger.warn(`GET /api/org/departments/${ticketParams.name}/tickets/${ticketParams.id}/session: corrupt board.json — ${err instanceof Error ? err.message : String(err)}`);
+        return serverError(res, "board.json is corrupt");
+      }
+      const ticket = board?.find((entry) => entry?.id === ticketParams.id);
+      if (!ticket) return json(res, { found: false });
+
+      const session = resolveBestSessionForTicket(ticket, listSessions());
+      if (!session) return json(res, { found: false });
+
+      const detail = loadSessionMessagesForApi(session.id, context, String(TICKET_SESSION_TAIL_LIMIT));
+      if (!detail) return json(res, { found: false });
+
+      const lastActivityMs = Date.parse(detail.session.lastActivity || "");
+      const lastActivityAgoMs = Number.isFinite(lastActivityMs) ? Math.max(0, Date.now() - lastActivityMs) : null;
+      return json(res, {
+        found: true,
+        sessionId: detail.session.id,
+        status: detail.session.status,
+        engine: detail.session.engine,
+        model: detail.session.model,
+        employee: detail.session.employee,
+        totalCost: detail.session.totalCost,
+        lastActivityIso: detail.session.lastActivity,
+        lastActivityAgoMs,
+        lastError: detail.session.lastError,
+        messages: detail.messages.map((message) => ({
+          role: message.role,
+          text: message.content,
+          ts: message.timestamp,
+          kind: message.toolCall ? "tool_call" : message.partial ? "partial" : message.role === "notification" ? "notification" : "message",
+          toolCall: message.toolCall,
+        })),
+      });
     }
 
     // POST /api/org/departments/:name/tickets/:id/dispatch

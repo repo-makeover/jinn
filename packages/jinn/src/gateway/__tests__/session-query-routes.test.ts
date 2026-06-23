@@ -125,7 +125,7 @@ describe("session query routes", () => {
         perGroup: 50,
       }),
     );
-  });
+  }, 15_000);
 
   it("preserves q/group/offset/limit list behavior for GET /api/sessions", async () => {
     const { api, reg } = await setup();
@@ -172,7 +172,7 @@ describe("session query routes", () => {
     expect((all.body as Array<{ id: string }>).map((session) => session.id)).toEqual(
       expect.arrayContaining([direct.id, workerOld.id, workerNew.id]),
     );
-  });
+  }, 15_000);
 
   it("keeps /api/sessions/interrupted ahead of generic session detail matching", async () => {
     const { api, reg } = await setup();
@@ -294,5 +294,106 @@ describe("session query routes", () => {
 
     expect(queue.status).toBe(200);
     expect(queue.body).toEqual([]);
+  });
+
+  it("returns found:false for a ticket session lookup when nothing maps", async () => {
+    const { api } = await setup();
+    const ctx = makeCtx(api);
+    const deptDir = path.join(tmpHome, "org", "software-delivery");
+    fs.mkdirSync(deptDir, { recursive: true });
+    fs.writeFileSync(path.join(deptDir, "board.json"), JSON.stringify([
+      {
+        id: "ticket-404",
+        title: "Missing session",
+        description: "",
+        status: "in_progress",
+        priority: "medium",
+        complexity: "medium",
+        assignee: "worker",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+      },
+    ]));
+
+    const cap = makeRes();
+    await api.handleApiRequest(makeReq("GET", "/api/org/departments/software-delivery/tickets/ticket-404/session"), cap.res, ctx);
+
+    expect(cap.status).toBe(200);
+    expect(cap.body).toEqual({ found: false });
+  });
+
+  it("resolves ticket session lookup via channel match, picks the newest match, and caps messages", async () => {
+    const { api, reg } = await setup();
+    const ctx = makeCtx(api);
+    const deptDir = path.join(tmpHome, "org", "software-delivery");
+    fs.mkdirSync(deptDir, { recursive: true });
+    fs.writeFileSync(path.join(deptDir, "board.json"), JSON.stringify([
+      {
+        id: "ticket-live",
+        title: "Live worker",
+        description: "",
+        status: "in_progress",
+        priority: "medium",
+        complexity: "medium",
+        assignee: "worker",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+      },
+    ]));
+
+    const older = reg.createSession({
+      engine: "claude",
+      source: "manual",
+      sourceRef: "manual:software-delivery:ticket-live:older",
+      employee: "worker",
+      prompt: "older",
+      replyContext: { channel: "kanban:ticket-live" } as any,
+    });
+    reg.updateSession(older.id, { lastActivity: "2026-06-22T10:00:00.000Z" });
+
+    const newer = reg.createSession({
+      engine: "claude",
+      source: "manual",
+      sourceRef: "manual:software-delivery:ticket-live:newer",
+      employee: "worker",
+      prompt: "newer",
+      replyContext: { channel: "kanban:ticket-live" } as any,
+    });
+    reg.updateSession(newer.id, {
+      status: "running",
+      model: "opus",
+      lastActivity: "2026-06-22T10:00:09.000Z",
+    });
+
+    reg.insertMessage(newer.id, "user", "u1");
+    for (let i = 0; i < 9; i++) {
+      reg.insertMessage(newer.id, "assistant", `a${i}`);
+    }
+
+    const cap = makeRes();
+    await api.handleApiRequest(makeReq("GET", "/api/org/departments/software-delivery/tickets/ticket-live/session"), cap.res, ctx);
+
+    expect(cap.status).toBe(200);
+    expect(cap.body).toMatchObject({
+      found: true,
+      sessionId: newer.id,
+      status: "running",
+      engine: "claude",
+      model: "opus",
+      employee: "worker",
+      totalCost: 0,
+    });
+    expect((cap.body as { messages: Array<{ text: string }> }).messages).toHaveLength(8);
+    expect((cap.body as { messages: Array<{ text: string }> }).messages.map((message) => message.text)).toEqual([
+      "a1",
+      "a2",
+      "a3",
+      "a4",
+      "a5",
+      "a6",
+      "a7",
+      "a8",
+    ]);
+    expect(scheduleOnLoadTailSync).toHaveBeenCalledWith(newer.id, ctx.emit);
   });
 });

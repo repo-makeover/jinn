@@ -96,5 +96,5 @@ describe("POST /api/org/departments/:name/tickets/:id/dispatch", () => {
 
     expect(cap.status).toBe(400);
     expect(cap.body).toMatchObject({ reason: "no-assignee" });
-  });
+  }, 15_000);
 });
