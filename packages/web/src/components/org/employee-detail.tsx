@@ -152,7 +152,11 @@ export function EmployeeDetail({
                 <EmojiPicker
                   current={currentEmoji}
                   onSelect={(emoji) => {
-                    setEmployeeOverride(employee.name, { emoji: emoji === emojiForName(employee.name) ? undefined : emoji });
+                    setEmployeeOverride(employee.name, { emoji: emoji === emojiForName(employee.name) ? undefined : emoji, profileImage: undefined });
+                    setShowAvatarPicker(false);
+                  }}
+                  onSelectImage={(url) => {
+                    setEmployeeOverride(employee.name, { profileImage: url });
                     setShowAvatarPicker(false);
                   }}
                   onClose={() => setShowAvatarPicker(false)}
