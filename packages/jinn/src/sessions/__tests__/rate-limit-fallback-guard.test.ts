@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const engineAvailableMock = vi.fn<(...args: unknown[]) => boolean>();
 vi.mock("../../shared/models.js", () => ({
   engineAvailable: (...args: unknown[]) => engineAvailableMock(...args),
-  isKnownEngine: vi.fn((name: string) => ["claude", "codex", "antigravity", "grok", "pi"].includes(name)),
+  isKnownEngine: vi.fn((name: string) => ["claude", "codex", "antigravity", "grok", "pi", "kiro"].includes(name)),
   effortLevelsForModel: vi.fn(() => ["low", "medium", "high"]),
 }));
 

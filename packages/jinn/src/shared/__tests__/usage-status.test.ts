@@ -21,6 +21,7 @@ beforeAll(async () => { M = await import("../usage-status.js"); });
 beforeEach(() => {
   fs.rmSync(path.join(tmp, "tmp", "usage"), { recursive: true, force: true });
   fs.rmSync(path.join(tmp, "tmp", "claude-usage.json"), { force: true });
+  fs.rmSync(path.join(tmp, "usage"), { recursive: true, force: true });
 });
 
 describe("statusFromInputs (actual-usage snapshot)", () => {
@@ -66,6 +67,62 @@ describe("recordEngineRateLimit / getRecordedReset", () => {
   it("returns undefined once the reset has passed (limit cleared)", () => {
     M.recordEngineRateLimit("codex", Math.floor((NOW - 3600_000) / 1000)); // reset 1h in the past
     expect(M.getRecordedReset("codex", 180, NOW)).toBeUndefined();
+  });
+});
+
+describe("Kiro estimated credit ledger", () => {
+  const kiroCfg = {
+    engines: {
+      claude: { bin: "claude", model: "opus" },
+      codex: { bin: "codex", model: "gpt-5.5" },
+      default: "kiro",
+      kiro: { creditBudget: 10, billingAnchorDay: 15 },
+    },
+  } as any;
+
+  it("accumulates credits inside the active billing window", () => {
+    M.recordKiroCreditUsage(kiroCfg, 1.25, NOW);
+    M.recordKiroCreditUsage(kiroCfg, 2.75, NOW + 1000);
+    expect(M.readKiroCreditLedger(kiroCfg, NOW)).toEqual({
+      windowStart: "2026-06-15T00:00:00.000Z",
+      consumed: 4,
+    });
+  });
+
+  it("rolls to zero when the billing anchor advances", () => {
+    M.recordKiroCreditUsage(kiroCfg, 9, NOW);
+    const nextWindow = new Date("2026-07-15T00:00:01.000Z").getTime();
+    expect(M.readKiroCreditLedger(kiroCfg, nextWindow)).toEqual({
+      windowStart: "2026-07-15T00:00:00.000Z",
+      consumed: 0,
+    });
+  });
+
+  it("reports estimated remaining percent and reset time", () => {
+    M.recordKiroCreditUsage(kiroCfg, 8.5, NOW);
+    const status = M.getKiroCreditUsageStatus(kiroCfg, { now: NOW });
+    expect(status).toMatchObject({
+      engine: "kiro",
+      state: "low",
+      remainingPercent: 15,
+      resetsAt: Math.floor(new Date("2026-07-15T00:00:00.000Z").getTime() / 1000),
+      source: "estimate",
+      estimated: true,
+    });
+  });
+
+  it("backs off to recorded exhaustion when a turn clearly ran out of credits", async () => {
+    M.recordKiroCreditUsage(kiroCfg, 1, NOW);
+    M.recordEngineRateLimit("kiro", Math.floor(new Date("2026-07-15T00:00:00.000Z").getTime() / 1000));
+    const status = await M.getEngineUsageStatus("kiro", kiroCfg, { now: NOW });
+    expect(status).toMatchObject({
+      engine: "kiro",
+      state: "exhausted",
+      remainingPercent: 90,
+      resetsAt: Math.floor(new Date("2026-07-15T00:00:00.000Z").getTime() / 1000),
+      source: "recorded",
+      estimated: true,
+    });
   });
 });
 

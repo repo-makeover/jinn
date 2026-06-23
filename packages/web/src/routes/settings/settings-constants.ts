@@ -36,13 +36,14 @@ export interface Config {
     claude?: { bin?: string; model?: string; effortLevel?: string }
     codex?: { bin?: string; model?: string; effortLevel?: string }
     grok?: { bin?: string; model?: string; effortLevel?: string }
+    kiro?: { bin?: string; model?: string; effortLevel?: string; creditBudget?: number; billingAnchorDay?: number }
   }
   sessions?: {
     maxDurationMinutes?: number
     maxCostUsd?: number
     interruptOnNewMessage?: boolean
     rateLimitStrategy?: "wait" | "fallback"
-    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi"
+    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro"
   }
   connectors?: {
     slack?: {

@@ -1,7 +1,7 @@
 import type { EngineResult } from "./types.js";
 
 const RATE_LIMIT_ERROR_RE =
-  /rate.?limit|too many requests|429|overloaded|usage.*limit|exceeded.*limit|out of extra usage/i;
+  /rate.?limit|too many requests|429|overloaded|usage.*limit|exceeded.*limit|out of extra usage|insufficient.*credits|credits?.*exhaust/i;
 
 export interface RateLimitDetection {
   limited: boolean;
@@ -81,4 +81,3 @@ export function computeNextRetryDelayMs(resetsAtSeconds?: number): { delayMs: nu
   }
   return { delayMs: 60_000 };
 }
-

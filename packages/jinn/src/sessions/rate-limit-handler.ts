@@ -37,6 +37,7 @@ const ENGINE_LABELS: Record<string, string> = {
   antigravity: "Antigravity",
   grok: "Grok",
   pi: "Pi",
+  kiro: "Kiro",
 };
 
 export function engineLabel(engine: string): string {

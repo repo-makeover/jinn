@@ -31,7 +31,7 @@ import {
  */
 
 /** Engines registered in this build (mirrors server.ts engine map). */
-const ENGINE_NAMES = ["claude", "codex", "antigravity", "grok", "pi"] as const;
+const ENGINE_NAMES = ["claude", "codex", "antigravity", "grok", "pi", "kiro"] as const;
 export type EngineName = (typeof ENGINE_NAMES)[number];
 
 /** Binary name probed for each engine's availability (override via engines.<name>.bin). */
@@ -41,6 +41,7 @@ const ENGINE_BIN: Record<EngineName, string> = {
   antigravity: "agy",
   grok: "grok",
   pi: "pi",
+  kiro: "kiro-cli",
 };
 
 const EFFORT_MECHANISM: Record<EngineName, EffortMechanism> = {
@@ -49,6 +50,7 @@ const EFFORT_MECHANISM: Record<EngineName, EffortMechanism> = {
   antigravity: "none",
   grok: "grok-flag",
   pi: "pi-flag",
+  kiro: "kiro-flag",
 };
 
 export const CODEX_DEFAULT_MODEL = "gpt-5.5";
@@ -62,6 +64,7 @@ const SYNTH_DEFAULTS: Record<EngineName, { supportsEffort: boolean; effortLevels
   // Placeholder shown only in the brief window before pi discovery completes; the
   // provider/id form keeps it well-typed for the engine's split.
   pi: { supportsEffort: false, effortLevels: [], fallbackModel: "ollama/gemma4:12b" },
+  kiro: { supportsEffort: true, effortLevels: ["low", "medium", "high"], fallbackModel: "auto" },
 };
 
 /** Optional per-engine `bin` override from config. */
@@ -89,6 +92,7 @@ const ENGINE_INSTALL_HINT: Record<EngineName, string> = {
   antigravity: "install the Antigravity CLI (agy)",
   grok: "npm install -g @xai-official/grok, then run grok once to authenticate",
   pi: "install the Pi CLI",
+  kiro: "install kiro-cli, then authenticate it or set KIRO_API_KEY",
 };
 
 /** Actionable error message for a session blocked by a missing engine binary. */

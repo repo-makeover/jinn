@@ -20,6 +20,7 @@ import { AntigravityEngine } from "../engines/antigravity.js";
 import { PiEngine } from "../engines/pi.js";
 import { GrokEngine } from "../engines/grok.js";
 import { GrokInteractiveEngine } from "../engines/grok-interactive.js";
+import { KiroEngine } from "../engines/kiro.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { HookRegistry } from "./hook-registry.js";
 import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids } from "./gateway-info.js";
@@ -228,6 +229,8 @@ export async function startGateway(
   // Resolve gateway port/host early so boot artifacts (gateway.json) can record it.
   const port = config.gateway.port || 7777;
   const host = config.gateway.host || "127.0.0.1";
+  // Mutable config reference for hot-reload.
+  let currentConfig = config;
 
   // Normalize claude engine config (idempotent — loadConfig already normalized it)
   const claudeCfg = normalizeClaudeEngineConfig(config.engines.claude);
@@ -342,7 +345,8 @@ export async function startGateway(
   });
   const grokInteractiveEngine = new GrokInteractiveEngine(grokLifecycle);
   const piEngine = new PiEngine();
-  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), pi");
+  const kiroEngine = new KiroEngine({ configProvider: () => currentConfig });
+  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), pi, kiro (headless)");
 
   const codexEngine = new CodexEngine();
   const grokEngine = new GrokEngine();
@@ -356,6 +360,7 @@ export async function startGateway(
   engines.set("antigravity", antigravityEngine);
   engines.set("grok", grokEngine);
   engines.set("pi", piEngine);
+  engines.set("kiro", kiroEngine);
 
   // PTY-capable engines, keyed by engine name — the /ws/pty handler routes by
   // session.engine so the xterm view attaches to the right engine.
@@ -731,9 +736,6 @@ export async function startGateway(
   const cronJobs = loadJobs();
   startScheduler(cronJobs, sessionManager, config, connectorMap);
   logger.info(`Loaded ${cronJobs.length} cron job(s)`);
-
-  // Mutable config reference for hot-reload
-  let currentConfig = config;
 
   const startTime = Date.now();
 
@@ -1176,6 +1178,7 @@ export async function startGateway(
     grokEngine.killAll();
     grokInteractiveEngine.killAll();
     piEngine.killAll();
+    kiroEngine.killAll();
 
     // Dispose the PTY lifecycle manager.
     try {

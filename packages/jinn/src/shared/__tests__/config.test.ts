@@ -107,6 +107,24 @@ describe("validateConfigShape", () => {
     expect(problems.some((p) => p.includes("engines.claude"))).toBe(true);
   });
 
+  it("validates optional Kiro credit config types", () => {
+    expect(validateConfigShape({
+      engines: {
+        claude: { bin: "claude", model: "opus" },
+        kiro: { creditBudget: 25, billingAnchorDay: 5 },
+      },
+    })).toEqual([]);
+
+    const problems = validateConfigShape({
+      engines: {
+        claude: { bin: "claude", model: "opus" },
+        kiro: { creditBudget: "25", billingAnchorDay: "5" },
+      },
+    });
+    expect(problems.some((p) => p.includes("engines.kiro.creditBudget"))).toBe(true);
+    expect(problems.some((p) => p.includes("engines.kiro.billingAnchorDay"))).toBe(true);
+  });
+
   it("validates boardWorker schedule and timezone fields", () => {
     const ok = validateConfigShape({
       engines: { claude: { bin: "claude", model: "opus" } },

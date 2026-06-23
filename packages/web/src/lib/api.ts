@@ -201,7 +201,7 @@ export interface EngineRegistryEntry {
   name: string;
   available: boolean;
   defaultModel: string;
-  effortMechanism: "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "none";
+  effortMechanism: "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "kiro-flag" | "none";
   models: ModelInfo[];
 }
 export interface EnginesResponse {
@@ -235,6 +235,7 @@ export interface EngineLimitCredits {
   remainingPercent?: number;
   resetsAt?: number;
   resetsAtIso?: string;
+  estimated?: boolean;
 }
 
 export interface EngineLimitBucket {

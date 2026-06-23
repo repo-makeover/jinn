@@ -14,6 +14,7 @@ import { CLAUDE_LIMITS_DIR } from "./paths.js";
 import { getModelRegistry } from "./models.js";
 import { resolveBin } from "./resolve-bin.js";
 import { DEFAULT_PI_MESSAGES_PER_MINUTE, getPiThrottleSnapshot } from "./pi-throttle.js";
+import { nextKiroCreditResetAt, readKiroCreditLedger } from "./usage-status.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -451,6 +452,46 @@ function collectPiLimits(config: JinnConfig): EngineLimitEngineSnapshot {
   };
 }
 
+function collectKiroLimits(config: JinnConfig): EngineLimitEngineSnapshot {
+  const snap = baseSnapshot(config, "kiro");
+  if (!snap.available) {
+    return collectUnsupported(config, "kiro", "Kiro CLI is not installed.");
+  }
+
+  const ledger = readKiroCreditLedger(config);
+  const budget = config.engines.kiro?.creditBudget;
+  const resetsAt = nextKiroCreditResetAt(config);
+  const hasBudget = typeof budget === "number" && Number.isFinite(budget) && budget > 0;
+  const usedPercent = hasBudget ? Math.min(100, Math.max(0, (ledger.consumed / budget) * 100)) : undefined;
+  const remainingPercent = usedPercent === undefined ? undefined : Math.max(0, 100 - usedPercent);
+
+  return {
+    ...snap,
+    status: "snapshot",
+    source: "local Kiro credit estimate",
+    accountPlan: "Estimated Kiro credits",
+    windows: hasBudget
+      ? [{
+          name: "monthly credits (estimated)",
+          usedPercent,
+          resetsAt,
+          resetsAtIso: isoFromSeconds(resetsAt),
+        }]
+      : undefined,
+    credits: {
+      used: ledger.consumed,
+      ...(hasBudget ? { limit: budget, remainingPercent } : {}),
+      balance: hasBudget
+        ? `${ledger.consumed.toFixed(2)} used of ${budget.toFixed(2)} (estimated)`
+        : `${ledger.consumed.toFixed(2)} used (estimated; no budget configured)`,
+      resetsAt,
+      resetsAtIso: isoFromSeconds(resetsAt),
+      estimated: true,
+    },
+    unsupportedReason: "Kiro does not expose a stable local quota endpoint here; Jinn parses per-turn CLI credit footers and keeps an estimated monthly ledger.",
+  };
+}
+
 export async function collectEngineLimits(
   config: JinnConfig,
   opts: CollectEngineLimitsOptions = {},
@@ -489,6 +530,8 @@ export async function collectEngineLimits(
       };
     } else if (name === "pi") {
       engines[name] = collectPiLimits(config);
+    } else if (name === "kiro") {
+      engines[name] = collectKiroLimits(config);
     } else if (name === "grok") {
       engines[name] = collectUnsupported(
         config,

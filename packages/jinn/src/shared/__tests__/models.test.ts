@@ -28,9 +28,10 @@ describe("synthesizeFromEngineConfig (backward-compat fallback)", () => {
     expect(reg.grok.defaultModel).toBe("grok-build");
     expect(reg.grok.models.map((m) => m.id)).toEqual(["grok-build", "grok-composer-2.5-fast"]);
     expect(reg.grok.models.map((m) => m.label)).toEqual(["Grok Build", "Grok Composer 2.5 Fast"]);
+    expect(reg.kiro.models[0].id).toBe("auto");
   });
 
-  it("uses per-engine effort semantics: claude flag, codex config, grok flag, antigravity none", () => {
+  it("uses per-engine effort semantics: claude flag, codex config, grok flag, kiro flag, antigravity none", () => {
     const reg = synthesizeFromEngineConfig(cfg({}));
     expect(reg.claude.effortMechanism).toBe("claude-flag");
     expect(reg.claude.models[0].effortLevels).toEqual(["low", "medium", "high"]);
@@ -38,6 +39,8 @@ describe("synthesizeFromEngineConfig (backward-compat fallback)", () => {
     expect(reg.codex.models[0].effortLevels).toContain("xhigh");
     expect(reg.grok.effortMechanism).toBe("grok-flag");
     expect(reg.grok.models[0].effortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(reg.kiro.effortMechanism).toBe("kiro-flag");
+    expect(reg.kiro.models[0].effortLevels).toEqual(["low", "medium", "high"]);
     expect(reg.antigravity.effortMechanism).toBe("none");
     expect(reg.antigravity.models[0].supportsEffort).toBe(false);
     expect(reg.antigravity.models[0].effortLevels).toEqual([]);

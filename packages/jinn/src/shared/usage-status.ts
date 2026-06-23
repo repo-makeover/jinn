@@ -22,6 +22,8 @@ import type { JinnConfig } from "./types.js";
  */
 
 const USAGE_DIR = path.join(JINN_HOME, "tmp", "usage");
+const KIRO_USAGE_DIR = path.join(JINN_HOME, "usage");
+const KIRO_CREDITS_FILE = path.join(KIRO_USAGE_DIR, "kiro-credits.json");
 const DEFAULT_FALLBACK_WINDOW_MINS = 180; // 3h — used when the provider gives no reset time
 const DEFAULT_LOW_PERCENT = 15;           // remaining <= this → "low" → prefer switching
 const DEFAULT_MAX_WAIT_MINS = 360;        // never wait longer than this for a reset (6h)
@@ -35,7 +37,9 @@ export interface UsageStatus {
   remainingPercent?: number;
   /** Epoch seconds when the binding window resets, if known. */
   resetsAt?: number;
-  source: "live" | "recorded" | "none";
+  source: "live" | "recorded" | "estimate" | "none";
+  /** True when the provider exposes no authoritative quota endpoint and Jinn is using local accounting. */
+  estimated?: boolean;
 }
 
 export interface UsageConfig {
@@ -83,6 +87,91 @@ function readRecorded(engine: string): RecordedLimit | undefined {
     const parsed = JSON.parse(fs.readFileSync(p, "utf-8"));
     return parsed?.lastRateLimitAt ? parsed as RecordedLimit : undefined;
   } catch { return undefined; }
+}
+
+export interface KiroCreditLedger {
+  windowStart: string;
+  consumed: number;
+}
+
+function kiroAnchorDay(config: JinnConfig): number {
+  const raw = config.engines.kiro?.billingAnchorDay;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 1;
+  return Math.min(31, Math.max(1, Math.round(raw)));
+}
+
+function daysInUtcMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function anchorDateUtc(year: number, month: number, anchorDay: number): Date {
+  const day = Math.min(anchorDay, daysInUtcMonth(year, month));
+  return new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+}
+
+function kiroWindow(config: JinnConfig, now = Date.now()): { start: Date; next: Date } {
+  const anchorDay = kiroAnchorDay(config);
+  const d = new Date(now);
+  let start = anchorDateUtc(d.getUTCFullYear(), d.getUTCMonth(), anchorDay);
+  if (d.getTime() < start.getTime()) {
+    start = anchorDateUtc(d.getUTCFullYear(), d.getUTCMonth() - 1, anchorDay);
+  }
+  const next = anchorDateUtc(start.getUTCFullYear(), start.getUTCMonth() + 1, anchorDay);
+  return { start, next };
+}
+
+export function nextKiroCreditResetAt(config: JinnConfig, now = Date.now()): number {
+  return Math.floor(kiroWindow(config, now).next.getTime() / 1000);
+}
+
+export function readKiroCreditLedger(config: JinnConfig, now = Date.now()): KiroCreditLedger {
+  const { start } = kiroWindow(config, now);
+  const windowStart = start.toISOString();
+  try {
+    if (fs.existsSync(KIRO_CREDITS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(KIRO_CREDITS_FILE, "utf-8"));
+      if (
+        parsed?.windowStart === windowStart &&
+        typeof parsed.consumed === "number" &&
+        Number.isFinite(parsed.consumed)
+      ) {
+        return { windowStart, consumed: Math.max(0, parsed.consumed) };
+      }
+    }
+  } catch {
+    /* corrupt/mismatched local estimate ledger resets for the active billing window */
+  }
+  return { windowStart, consumed: 0 };
+}
+
+export function recordKiroCreditUsage(config: JinnConfig, credits: number, now = Date.now()): KiroCreditLedger {
+  const current = readKiroCreditLedger(config, now);
+  const next: KiroCreditLedger = {
+    windowStart: current.windowStart,
+    consumed: Math.max(0, current.consumed + Math.max(0, credits)),
+  };
+  try {
+    fs.mkdirSync(KIRO_USAGE_DIR, { recursive: true });
+    safeWriteFile(KIRO_CREDITS_FILE, JSON.stringify(next, null, 2)); // atomic + fsync; estimate only
+  } catch {
+    /* best-effort local usage estimate */
+  }
+  return next;
+}
+
+export function getKiroCreditUsageStatus(config: JinnConfig, opts: { now?: number } = {}): UsageStatus {
+  const now = opts.now ?? Date.now();
+  const ledger = readKiroCreditLedger(config, now);
+  const budget = config.engines.kiro?.creditBudget;
+  if (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0) {
+    return { engine: "kiro", state: "unknown", resetsAt: nextKiroCreditResetAt(config, now), source: "estimate", estimated: true };
+  }
+  const remainingPercent = Math.max(0, 100 - (ledger.consumed / budget) * 100);
+  const resetsAt = nextKiroCreditResetAt(config, now);
+  const lowPercent = usageConfig(config).lowPercent;
+  if (remainingPercent <= 0) return { engine: "kiro", state: "exhausted", remainingPercent, resetsAt, source: "estimate", estimated: true };
+  if (remainingPercent <= lowPercent) return { engine: "kiro", state: "low", remainingPercent, resetsAt, source: "estimate", estimated: true };
+  return { engine: "kiro", state: "ok", remainingPercent, resetsAt, source: "estimate", estimated: true };
 }
 
 /**
@@ -140,6 +229,20 @@ export async function getEngineUsageStatus(
   const { lowPercent, fallbackWindowMins } = usageConfig(config);
   const now = opts.now ?? Date.now();
   const recordedReset = getRecordedReset(engine, fallbackWindowMins, now);
+  if (engine === "kiro") {
+    const estimated = getKiroCreditUsageStatus(config, { now });
+    if (recordedReset !== undefined && estimated.state !== "exhausted") {
+      return {
+        engine,
+        state: "exhausted",
+        remainingPercent: estimated.remainingPercent,
+        resetsAt: recordedReset,
+        source: "recorded",
+        estimated: true,
+      };
+    }
+    return estimated;
+  }
   let snapshot: SnapshotLike | undefined;
   try {
     const resp = await collectEngineLimits(config, { engine });

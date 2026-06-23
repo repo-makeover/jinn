@@ -145,6 +145,18 @@ export function validateConfigShape(config: unknown): string[] {
     if (typeof c.engines.claude !== "object" || c.engines.claude === null || Array.isArray(c.engines.claude)) {
       problems.push("engines.claude must be a mapping");
     }
+    if (c.engines.kiro !== undefined) {
+      if (typeof c.engines.kiro !== "object" || c.engines.kiro === null || Array.isArray(c.engines.kiro)) {
+        problems.push("engines.kiro must be a mapping");
+      } else {
+        if (c.engines.kiro.creditBudget !== undefined && typeof c.engines.kiro.creditBudget !== "number") {
+          problems.push(`engines.kiro.creditBudget must be a number (got ${typeof c.engines.kiro.creditBudget})`);
+        }
+        if (c.engines.kiro.billingAnchorDay !== undefined && typeof c.engines.kiro.billingAnchorDay !== "number") {
+          problems.push(`engines.kiro.billingAnchorDay must be a number (got ${typeof c.engines.kiro.billingAnchorDay})`);
+        }
+      }
+    }
   }
 
   if (c.boardWorker !== undefined) {

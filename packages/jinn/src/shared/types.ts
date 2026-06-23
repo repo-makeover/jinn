@@ -556,7 +556,7 @@ export interface PortalConfig {
  */
 
 /** How an engine conveys reasoning-effort to its CLI. */
-export type EffortMechanism = "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "none";
+export type EffortMechanism = "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "kiro-flag" | "none";
 
 /** A single model and its capabilities, as exposed to the UI / validation. */
 export interface ModelInfo {
@@ -611,6 +611,7 @@ export interface EngineLimitCredits {
   remainingPercent?: number;
   resetsAt?: number;
   resetsAtIso?: string;
+  estimated?: boolean;
 }
 
 export interface EngineLimitBucket {
@@ -664,7 +665,7 @@ export interface EngineModelsConfig {
   models: ModelConfigEntry[];
 }
 
-/** `models:` block keyed by engine name (claude | codex | antigravity | grok | pi). */
+/** `models:` block keyed by engine name (claude | codex | antigravity | grok | pi | kiro). */
 export type ModelsConfig = Record<string, EngineModelsConfig>;
 
 export interface BoardWorkerScheduleWindow {
@@ -716,7 +717,7 @@ export interface JinnConfig {
     userHeader?: string | string[];
   };
   engines: {
-    default: "claude" | "codex" | "antigravity" | "grok" | "pi";
+    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro";
     claude: {
       bin: string;
       model: string;
@@ -732,6 +733,16 @@ export interface JinnConfig {
     antigravity?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     grok?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     pi?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
+    kiro?: {
+      bin?: string;
+      model?: string;
+      effortLevel?: string;
+      childEffortOverride?: string;
+      /** Estimated monthly Kiro credit budget. Used only for local gauge math. */
+      creditBudget?: number;
+      /** UTC day-of-month when the local Kiro estimate resets. Default 1. */
+      billingAnchorDay?: number;
+    };
   };
   /** Optional model + capability registry. When absent, synthesized from engines.<name>.model. */
   models?: ModelsConfig;
@@ -754,7 +765,7 @@ export interface JinnConfig {
     /** What to do when the active engine hits a usage/rate limit. Default: "wait" (no automatic engine switch). Set to "fallback" to opt in to switching to another configured engine while it resets. */
     rateLimitStrategy?: "wait" | "fallback";
     /** Engine to use when rateLimitStrategy="fallback". Default: "codex". */
-    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi";
+    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro";
   };
   boardWorker?: BoardWorkerConfig;
   cron?: {

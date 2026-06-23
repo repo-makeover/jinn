@@ -9,12 +9,15 @@
 - **Previous Projects archive.** Chat rooms, individual chats, and past Scheduled run sessions can be snapshotted into read-only dated archives and removed from the active sidebar; cron job definitions keep running unchanged.
 - **Opt-in board worker poller + manual Run now dispatch.** Department kanban tickets can now carry a `complexity` field, a disabled-by-default overnight board worker can dispatch one eligible `todo` ticket per tick to the department manager when chat is idle and usage allows, and the kanban detail panel exposes a manual `Run now` override for assigned tickets.
 - **Kanban live session inspector.** In-progress ticket detail panels can now resolve the backing gateway session, show session status/engine/model/cost/heartbeat, render the latest 8 transcript messages inline, and link straight to the full live chat.
+- **Kiro headless engine.** Added first-class `kiro` engine registration using `kiro-cli chat --no-interactive --trust-all-tools`, with model/effort/resume-id flags, process-aliveness tracking, ANSI-stripped final-answer extraction, `KIRO_API_KEY` child-env forwarding, and bounded session-id recovery from `kiro-cli chat --list-sessions --format json`.
+- **Estimated Kiro credit gauge.** Kiro turn footers (`Credits: X.XX - Time: ...` / `Credits: X.XX • Time: ...`) now feed a local monthly estimate ledger at `~/.jinn/usage/kiro-credits.json`. `engines.kiro.creditBudget` and `engines.kiro.billingAnchorDay` drive remaining-percent/state/reset calculations. The API shape marks the credits as estimated, and actual Kiro credit-exhaustion failures still trigger the normal usage-limit recovery path.
 
 ### ⚡ Performance / Reliability
 - **Engine lifecycle & queue hardening.** Another pass on interactive-engine teardown and per-session work queues to further reduce leaked process state and stuck turns.
 
 ### 🪄 Docs
 - Refreshed the README showcase GIF and added a **showcase video-capture** skill playbook (mock/sandbox instance recording, Playwright capture, WebM→MP4/GIF conversion).
+- Documented Kiro fidelity gaps: credit usage is footer-derived, no stable local quota endpoint is wired, and no scheduler/provider-map surface exists in this source tree for a Kiro-to-AWS mapping.
 
 ## [0.21.3] - 2026-06-22
 

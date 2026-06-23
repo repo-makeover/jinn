@@ -190,6 +190,7 @@ describe("GET /api/status", () => {
           antigravity: { bin: "__jinn_missing_agy_for_status_test__", model: "gemini" },
           grok: { bin: "__jinn_missing_grok_for_status_test__", model: "grok-build" },
           pi: { bin: "__jinn_missing_pi_for_status_test__", model: "ollama/gemma4:12b" },
+          kiro: { bin: "__jinn_missing_kiro_for_status_test__", model: "auto" },
         },
       }),
       connectors: new Map(),
