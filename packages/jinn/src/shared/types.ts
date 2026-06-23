@@ -463,6 +463,9 @@ export interface McpGlobalConfig {
   fetch?: {
     enabled: boolean;
   };
+  gateway?: {
+    enabled?: boolean;
+  };
   /** Custom MCP servers defined by the user */
   custom?: Record<string, (McpServerStdioConfig | McpServerUrlConfig) & { enabled?: boolean }>;
 }

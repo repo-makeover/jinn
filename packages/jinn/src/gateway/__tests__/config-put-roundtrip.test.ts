@@ -198,4 +198,32 @@ describe("PUT /api/config", () => {
       },
     });
   });
+
+  it("rejects unknown top-level config keys through the shared validator", async () => {
+    let currentConfig = configModule.loadConfig();
+    const ctx = {
+      getConfig: () => currentConfig,
+      reloadConfig: () => {
+        currentConfig = configModule.loadConfig();
+      },
+      emit: vi.fn(),
+      sessionManager: { getEngine: () => undefined },
+    } as unknown as ApiContext;
+
+    const cap = makeRes();
+    await api.handleApiRequest(
+      makeReq("PUT", "/api/config", {
+        gateway: { port: 7777, host: "127.0.0.1" },
+        engines: { claude: { bin: "claude", model: "opus" } },
+        surprise: true,
+      }),
+      cap.res,
+      ctx,
+    );
+
+    expect(cap.status).toBe(400);
+    expect(cap.body).toMatchObject({
+      error: expect.stringContaining("unknown config keys: surprise"),
+    });
+  });
 });

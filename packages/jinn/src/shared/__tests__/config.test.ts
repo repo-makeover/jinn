@@ -59,6 +59,10 @@ describe("validateConfigShape", () => {
   it("accepts a full default-shaped config", () => {
     expect(validateConfigShape({
       jinn: { version: "1.0.0" },
+      workspaces: {
+        roots: ["/tmp/project"],
+        defaultCwd: "/tmp/project",
+      },
       gateway: {
         port: 7777,
         host: "127.0.0.1",
@@ -74,6 +78,16 @@ describe("validateConfigShape", () => {
       engines: { default: "claude", claude: { bin: "claude", model: "opus" }, codex: { bin: "codex", model: "gpt-5.5" } },
       connectors: {},
       logging: { file: true, stdout: true, level: "info" },
+      modelFallback: {
+        enabled: true,
+        defaultMode: "auto",
+        globalChain: [{ engine: "codex", model: "gpt-5.5", effortLevel: "high" }],
+      },
+      mcp: {
+        browser: { enabled: true, provider: "playwright" },
+        fetch: { enabled: true },
+        gateway: { enabled: true },
+      },
     })).toEqual([]);
   });
 
@@ -96,6 +110,14 @@ describe("validateConfigShape", () => {
     expect(problems.some((p) => p.includes("gateway.port"))).toBe(true);
   });
 
+  it("rejects unknown top-level config keys", () => {
+    const problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      surprise: true,
+    });
+    expect(problems.some((p) => p.includes("unknown config keys: surprise"))).toBe(true);
+  });
+
   it("rejects unknown gateway keys and invalid gateway arrays", () => {
     let problems = validateConfigShape({ gateway: { surprise: true }, engines: { claude: {} } });
     expect(problems.some((p) => p.includes("unknown gateway config keys: surprise"))).toBe(true);
@@ -105,6 +127,26 @@ describe("validateConfigShape", () => {
 
     problems = validateConfigShape({ gateway: { turnStallRetries: "1" }, engines: { claude: {} } });
     expect(problems.some((p) => p.includes("gateway.turnStallRetries"))).toBe(true);
+  });
+
+  it("rejects unknown nested keys in broader config sections", () => {
+    let problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      workspaces: { roots: ["/tmp"], extra: true },
+    });
+    expect(problems.some((p) => p.includes("unknown workspaces config keys: extra"))).toBe(true);
+
+    problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      modelFallback: { enabled: true, bogus: true },
+    });
+    expect(problems.some((p) => p.includes("unknown modelFallback config keys: bogus"))).toBe(true);
+
+    problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      connectors: { slack: { botToken: "x", extra: true } },
+    });
+    expect(problems.some((p) => p.includes("unknown connectors.slack config keys: extra"))).toBe(true);
   });
 
   it("rejects missing engines / engines.claude", () => {

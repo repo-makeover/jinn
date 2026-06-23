@@ -30,13 +30,36 @@ export const WHISPER_LANGUAGES: Record<string, string> = {
 
 // Config type (gateway API)
 export interface Config {
-  gateway?: { port?: number; host?: string }
+  workspaces?: {
+    roots?: string[]
+    defaultCwd?: string
+  }
+  gateway?: {
+    port?: number
+    host?: string
+    turnStallInactivityMs?: number
+    turnStallCeilingMs?: number
+    turnStallRetries?: number
+  }
   engines?: {
     default?: string
-    claude?: { bin?: string; model?: string; effortLevel?: string }
+    claude?: { bin?: string; model?: string; effortLevel?: string; maxLivePtys?: number }
     codex?: { bin?: string; model?: string; effortLevel?: string }
+    antigravity?: { bin?: string; model?: string; effortLevel?: string }
     grok?: { bin?: string; model?: string; effortLevel?: string }
+    pi?: { bin?: string; model?: string; effortLevel?: string }
     kiro?: { bin?: string; model?: string; effortLevel?: string; creditBudget?: number; billingAnchorDay?: number }
+  }
+  modelFallback?: {
+    enabled?: boolean
+    defaultMode?: "auto" | "ask_user" | "never"
+    globalChain?: Array<{
+      engine: string
+      model?: string
+      effortLevel?: string
+      employee?: string
+      reason?: string
+    }>
   }
   sessions?: {
     maxDurationMinutes?: number
@@ -71,7 +94,7 @@ export interface Config {
     web?: Record<string, never>
     instances?: Array<{
       id: string
-      type: "discord" | "slack" | "whatsapp" | "telegram"
+      type: "discord" | "discord-remote" | "slack" | "whatsapp" | "telegram"
       employee?: string
       botToken?: string
       allowFrom?: string | string[]
@@ -91,9 +114,20 @@ export interface Config {
   cron?: {
     defaultDelivery?: { connector?: string; channel?: string }
   }
+  boardWorker?: {
+    enabled?: boolean
+    idleMinutes?: number
+    timezone?: string
+    schedule?: {
+      weekday?: { start?: string; end?: string }
+      weekend?: { start?: string; end?: string }
+    }
+    usage?: {
+      minRemainingPercent?: number
+    }
+  }
   portal?: {
     portalName?: string
     operatorName?: string
   }
-  [key: string]: unknown
 }

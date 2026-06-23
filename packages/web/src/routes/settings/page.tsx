@@ -11,7 +11,8 @@ import { api } from "@/lib/api"
 import { EmojiPicker } from "@/components/ui/emoji-picker"
 import { useModelRegistry } from "@/hooks/use-model-registry"
 import { ACCENT_PRESETS, type Config } from "./settings-constants"
-import { Section, FieldRow, SettingsInput, SettingsSelect, ToggleSwitch } from "./settings-fields"
+import { formatFallbackChain, formatLineList, parseFallbackChain, parseLineList } from "./settings-config"
+import { Section, FieldHint, FieldRow, SettingsInput, SettingsSelect, SettingsTextarea, ToggleSwitch } from "./settings-fields"
 import { SttSettingsSection } from "./stt-section"
 
 // ---------------------------------------------------------------------------
@@ -149,7 +150,7 @@ export default function SettingsPage() {
   function updateConfig(path: string[], value: unknown) {
     setConfig((prev) => {
       const next = structuredClone(prev)
-      let obj: Record<string, unknown> = next
+      let obj: Record<string, unknown> = next as unknown as Record<string, unknown>
       for (let i = 0; i < path.length - 1; i++) {
         if (!obj[path[i]] || typeof obj[path[i]] !== "object") {
           obj[path[i]] = {}
@@ -161,11 +162,16 @@ export default function SettingsPage() {
     })
   }
 
+  function updateNumberConfig(path: string[], value: string) {
+    const trimmed = value.trim()
+    updateConfig(path, trimmed ? Number(trimmed) : undefined)
+  }
+
   function handleSave() {
     setSaving(true)
     setFeedback(null)
     api
-      .updateConfig(config)
+      .updateConfig(config as unknown as Record<string, unknown>)
       .then(() =>
         setFeedback({ type: "success", message: "Settings saved successfully" })
       )
@@ -502,15 +508,13 @@ export default function SettingsPage() {
             </div>
           ) : (
             <>
-              {/* -- Section 3: Gateway Configuration -- */}
-              <Section title="Gateway Configuration">
+              {/* -- Section 3: Gateway & Workspaces -- */}
+              <Section title="Gateway & Workspaces">
                 <FieldRow label="Port">
                   <SettingsInput
                     type="number"
                     value={String(config.gateway?.port ?? "")}
-                    onChange={(v) =>
-                      updateConfig(["gateway", "port"], Number(v) || 0)
-                    }
+                    onChange={(v) => updateNumberConfig(["gateway", "port"], v)}
                     placeholder="7777"
                   />
                 </FieldRow>
@@ -528,10 +532,64 @@ export default function SettingsPage() {
                     options={[
                       { value: "claude", label: "Claude" },
                       { value: "codex", label: "Codex" },
+                      { value: "antigravity", label: "Antigravity" },
                       { value: "grok", label: "Grok" },
+                      { value: "pi", label: "Pi" },
+                      { value: "kiro", label: "Kiro" },
                     ]}
                   />
                 </FieldRow>
+                <FieldRow label="Default Working Dir">
+                  <SettingsInput
+                    value={config.workspaces?.defaultCwd ?? ""}
+                    onChange={(v) => updateConfig(["workspaces", "defaultCwd"], v.trim() || undefined)}
+                    placeholder="~/.jinn"
+                  />
+                </FieldRow>
+                <FieldRow label="Workspace Roots">
+                  <SettingsTextarea
+                    value={formatLineList(config.workspaces?.roots)}
+                    onChange={(v) => updateConfig(["workspaces", "roots"], parseLineList(v))}
+                    placeholder={"/path/to/project-a\n/path/to/project-b"}
+                    rows={4}
+                  />
+                </FieldRow>
+                <FieldHint>
+                  One allowed root per line. Session working directories must resolve inside one of these roots when this list is set.
+                </FieldHint>
+
+                <div className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]" />
+
+                <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
+                  Turn Stall Watchdog
+                </div>
+                <FieldRow label="Inactivity (ms)">
+                  <SettingsInput
+                    type="number"
+                    value={String(config.gateway?.turnStallInactivityMs ?? "")}
+                    onChange={(v) => updateNumberConfig(["gateway", "turnStallInactivityMs"], v)}
+                    placeholder="180000"
+                  />
+                </FieldRow>
+                <FieldRow label="Hard Ceiling (ms)">
+                  <SettingsInput
+                    type="number"
+                    value={String(config.gateway?.turnStallCeilingMs ?? "")}
+                    onChange={(v) => updateNumberConfig(["gateway", "turnStallCeilingMs"], v)}
+                    placeholder="2700000"
+                  />
+                </FieldRow>
+                <FieldRow label="Same-Engine Retries">
+                  <SettingsInput
+                    type="number"
+                    value={String(config.gateway?.turnStallRetries ?? "")}
+                    onChange={(v) => updateNumberConfig(["gateway", "turnStallRetries"], v)}
+                    placeholder="1"
+                  />
+                </FieldRow>
+                <FieldHint>
+                  These watchdog settings control when a quiet turn is treated as stalled and whether Jinn retries once before escalating.
+                </FieldHint>
               </Section>
 
               {/* -- Section 4: Engine Configuration -- */}
@@ -662,8 +720,8 @@ export default function SettingsPage() {
                 </FieldRow>
               </Section>
 
-              {/* -- Section 5: Sessions -- */}
-              <Section title="Sessions">
+              {/* -- Section 5: Recovery & Fallbacks -- */}
+              <Section title="Recovery & Fallbacks">
                 <FieldRow label="Interrupt on New Message">
                   <ToggleSwitch
                     checked={config.sessions?.interruptOnNewMessage ?? true}
@@ -672,19 +730,17 @@ export default function SettingsPage() {
                     }
                   />
                 </FieldRow>
-                <div
-                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
-                >
+                <FieldHint>
                   When enabled, sending a new message to a running session will stop the
                   current agent and start processing your new message immediately. When
                   disabled, messages are queued.
-                </div>
+                </FieldHint>
 
                 <div
                   className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
                 />
 
-                <FieldRow label="When Claude Hits Usage Limit">
+                <FieldRow label="Usage Limit Strategy">
                   <SettingsSelect
                     value={config.sessions?.rateLimitStrategy ?? "fallback"}
                     onChange={(v) =>
@@ -696,15 +752,125 @@ export default function SettingsPage() {
                     ]}
                   />
                 </FieldRow>
-                <div
-                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
-                >
+                <FieldRow label="Fallback Engine">
+                  <SettingsSelect
+                    value={config.sessions?.fallbackEngine ?? "codex"}
+                    onChange={(v) => updateConfig(["sessions", "fallbackEngine"], v)}
+                    options={[
+                      { value: "claude", label: "Claude" },
+                      { value: "codex", label: "Codex" },
+                      { value: "antigravity", label: "Antigravity" },
+                      { value: "grok", label: "Grok" },
+                      { value: "pi", label: "Pi" },
+                      { value: "kiro", label: "Kiro" },
+                    ]}
+                  />
+                </FieldRow>
+                <FieldHint>
                   "Wait" pauses the session and continues automatically when Claude resets.
                   "Switch" answers immediately using GPT, then returns to Claude once the reset window passes.
+                </FieldHint>
+
+                <div className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]" />
+
+                <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
+                  Global Model Fallback
                 </div>
+                <FieldRow label="Enabled">
+                  <ToggleSwitch
+                    checked={config.modelFallback?.enabled ?? true}
+                    onChange={(v) => updateConfig(["modelFallback", "enabled"], v)}
+                  />
+                </FieldRow>
+                <FieldRow label="Mode">
+                  <SettingsSelect
+                    value={config.modelFallback?.defaultMode ?? "auto"}
+                    onChange={(v) => updateConfig(["modelFallback", "defaultMode"], v)}
+                    options={[
+                      { value: "auto", label: "Auto" },
+                      { value: "ask_user", label: "Ask User" },
+                      { value: "never", label: "Never" },
+                    ]}
+                  />
+                </FieldRow>
+                <FieldRow label="Fallback Chain">
+                  <SettingsTextarea
+                    value={formatFallbackChain(config.modelFallback?.globalChain)}
+                    onChange={(v) => updateConfig(["modelFallback", "globalChain"], parseFallbackChain(v))}
+                    placeholder={"codex | gpt-5.5 | high\nclaude | claude-sonnet-4-6 | medium | reviewer | balanced backup"}
+                    rows={4}
+                  />
+                </FieldRow>
+                <FieldHint>
+                  One fallback target per line: <code>engine | model | effort | employee | reason</code>. Later columns are optional.
+                </FieldHint>
               </Section>
 
-              {/* -- Section 6: Connectors -- */}
+              {/* -- Section 6: Board Worker -- */}
+              <Section title="Board Worker">
+                <FieldRow label="Enabled">
+                  <ToggleSwitch
+                    checked={config.boardWorker?.enabled ?? false}
+                    onChange={(v) => updateConfig(["boardWorker", "enabled"], v)}
+                  />
+                </FieldRow>
+                <FieldRow label="Idle Minutes">
+                  <SettingsInput
+                    type="number"
+                    value={String(config.boardWorker?.idleMinutes ?? "")}
+                    onChange={(v) => updateNumberConfig(["boardWorker", "idleMinutes"], v)}
+                    placeholder="30"
+                  />
+                </FieldRow>
+                <FieldRow label="Timezone">
+                  <SettingsInput
+                    value={config.boardWorker?.timezone ?? ""}
+                    onChange={(v) => updateConfig(["boardWorker", "timezone"], v.trim() || undefined)}
+                    placeholder="America/New_York"
+                  />
+                </FieldRow>
+                <FieldRow label="Min Remaining %">
+                  <SettingsInput
+                    type="number"
+                    value={String(config.boardWorker?.usage?.minRemainingPercent ?? "")}
+                    onChange={(v) => updateNumberConfig(["boardWorker", "usage", "minRemainingPercent"], v)}
+                    placeholder="15"
+                  />
+                </FieldRow>
+                <FieldRow label="Weekday Window">
+                  <div className="flex gap-[var(--space-2)]">
+                    <SettingsInput
+                      value={config.boardWorker?.schedule?.weekday?.start ?? ""}
+                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekday", "start"], v.trim() || undefined)}
+                      placeholder="22:00"
+                    />
+                    <SettingsInput
+                      value={config.boardWorker?.schedule?.weekday?.end ?? ""}
+                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekday", "end"], v.trim() || undefined)}
+                      placeholder="04:00"
+                    />
+                  </div>
+                </FieldRow>
+                <FieldRow label="Weekend Window">
+                  <div className="flex gap-[var(--space-2)]">
+                    <SettingsInput
+                      value={config.boardWorker?.schedule?.weekend?.start ?? ""}
+                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekend", "start"], v.trim() || undefined)}
+                      placeholder="22:00"
+                    />
+                    <SettingsInput
+                      value={config.boardWorker?.schedule?.weekend?.end ?? ""}
+                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekend", "end"], v.trim() || undefined)}
+                      placeholder="04:00"
+                    />
+                  </div>
+                </FieldRow>
+                <FieldHint>
+                  The board worker auto-dispatches TODO tickets only when chats are idle, the schedule window is open, and the selected engine still has headroom.
+                </FieldHint>
+              </Section>
+
+              {/* -- Section 7: Connectors -- */}
               <Section title="Connectors">
                 <div
                   className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"

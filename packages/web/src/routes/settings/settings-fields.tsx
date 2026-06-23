@@ -48,6 +48,14 @@ export function FieldRow({
   )
 }
 
+export function FieldHint({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-[4px] text-[length:var(--text-caption1)] text-[var(--label-secondary)]">
+      {children}
+    </div>
+  )
+}
+
 export function SettingsInput({
   value,
   onChange,
@@ -66,6 +74,28 @@ export function SettingsInput({
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       className="apple-input w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)]"
+    />
+  )
+}
+
+export function SettingsTextarea({
+  value,
+  onChange,
+  placeholder,
+  rows = 4,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  rows?: number
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={rows}
+      className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[8px] text-[length:var(--text-footnote)] text-[var(--text-primary)] resize-y"
     />
   )
 }
