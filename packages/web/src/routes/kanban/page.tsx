@@ -9,6 +9,7 @@ import {
   saveTickets,
   createTicket,
   updateTicket,
+  appendTicketNote,
   moveTicket,
   deleteTicket,
   type KanbanStore,
@@ -326,6 +327,25 @@ export default function KanbanPage() {
     })
   }
 
+  function handleSaveDetails(ticketId: string, updates: Pick<KanbanTicket, 'title' | 'description'>) {
+    setTickets((prev) => {
+      const next = updateTicket(prev, ticketId, updates)
+      persistBoardChange(next)
+      return next
+    })
+  }
+
+  function handleAppendNote(ticketId: string, updates: { title: string; description: string; note: string }) {
+    setTickets((prev) => {
+      const next = updateTicket(prev, ticketId, {
+        title: updates.title,
+        description: appendTicketNote(updates.description, updates.note),
+      })
+      persistBoardChange(next)
+      return next
+    })
+  }
+
   function handleRunNow(ticketId: string) {
     const ticket = tickets[ticketId]
     const department = ticket?.departmentId ?? ticket?.department ?? ''
@@ -501,6 +521,8 @@ export default function KanbanPage() {
               onAssigneeChange={(name) => handleAssigneeChange(selectedTicket.id, name)}
               onRunNow={() => handleRunNow(selectedTicket.id)}
               onDelete={() => setDeleteConfirm(selectedTicket)}
+              onSaveDetails={(updates) => handleSaveDetails(selectedTicket.id, updates)}
+              onAppendNote={(updates) => handleAppendNote(selectedTicket.id, updates)}
             />
         )}
 

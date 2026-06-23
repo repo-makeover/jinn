@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { TicketDetailPanel } from '../ticket-detail-panel'
 import type { TicketSessionResponse } from '@/lib/api'
@@ -64,24 +64,38 @@ const employees = [
   },
 ]
 
-function renderPanel(ticket: KanbanTicket = baseTicket) {
+function renderPanel(
+  ticket: KanbanTicket = baseTicket,
+  overrides: {
+    onClose?: () => void
+    onStatusChange?: (status: KanbanTicket['status']) => void
+    onComplexityChange?: (complexity: KanbanTicket['complexity']) => void
+    onAssigneeChange?: (employeeName: string | null) => void
+    onRunNow?: () => void
+    onDelete?: () => void
+    onSaveDetails?: (updates: Pick<KanbanTicket, 'title' | 'description'>) => void
+    onAppendNote?: (updates: { title: string; description: string; note: string }) => void
+  } = {},
+) {
   return render(
     <MemoryRouter>
       <TicketDetailPanel
         ticket={ticket}
         employees={employees}
-        onClose={vi.fn()}
-        onStatusChange={vi.fn()}
-        onComplexityChange={vi.fn()}
-        onAssigneeChange={vi.fn()}
-        onRunNow={vi.fn()}
-        onDelete={vi.fn()}
+        onClose={overrides.onClose ?? vi.fn()}
+        onStatusChange={overrides.onStatusChange ?? vi.fn()}
+        onComplexityChange={overrides.onComplexityChange ?? vi.fn()}
+        onAssigneeChange={overrides.onAssigneeChange ?? vi.fn()}
+        onRunNow={overrides.onRunNow ?? vi.fn()}
+        onDelete={overrides.onDelete ?? vi.fn()}
+        onSaveDetails={overrides.onSaveDetails ?? vi.fn()}
+        onAppendNote={overrides.onAppendNote ?? vi.fn()}
       />
     </MemoryRouter>,
   )
 }
 
-describe('TicketDetailPanel live session', () => {
+describe('TicketDetailPanel', () => {
   beforeEach(() => {
     getTicketSession.mockReset()
     subscribeMock.mockReset()
@@ -90,6 +104,42 @@ describe('TicketDetailPanel live session', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('saves edited title and description', async () => {
+    getTicketSession.mockResolvedValue({ found: false })
+    const onSaveDetails = vi.fn()
+
+    renderPanel(baseTicket, { onSaveDetails })
+    await waitFor(() => expect(getTicketSession).toHaveBeenCalled())
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Updated worker ticket' } })
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Updated ticket description' } })
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+    expect(onSaveDetails).toHaveBeenCalledWith({
+      title: 'Updated worker ticket',
+      description: 'Updated ticket description',
+    })
+  })
+
+  it('appends a note using the current draft ticket state', async () => {
+    getTicketSession.mockResolvedValue({ found: false })
+    const onAppendNote = vi.fn()
+
+    renderPanel(baseTicket, { onAppendNote })
+    await waitFor(() => expect(getTicketSession).toHaveBeenCalled())
+
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Edited first line' } })
+    fireEvent.change(screen.getByLabelText('Append note'), { target: { value: '  Added provenance note  ' } })
+    fireEvent.click(screen.getByRole('button', { name: /^append note$/i }))
+
+    expect(onAppendNote).toHaveBeenCalledWith({
+      title: 'Live worker',
+      description: 'Edited first line',
+      note: 'Added provenance note',
+    })
+    expect((screen.getByLabelText('Append note') as HTMLTextAreaElement).value).toBe('')
   })
 
   it('shows live session header fields from the resolver response', async () => {

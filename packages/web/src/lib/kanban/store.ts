@@ -103,6 +103,18 @@ export function updateTicket(
   }
 }
 
+export function appendTicketNote(
+  description: string,
+  note: string,
+  authoredAt = new Date(),
+): string {
+  const trimmedNote = note.trim()
+  if (!trimmedNote) return description
+  const existing = description.trimEnd()
+  const block = `Update (${authoredAt.toISOString()})\n${trimmedNote}`
+  return existing ? `${existing}\n\n${block}` : block
+}
+
 export function moveTicket(
   store: KanbanStore,
   id: string,

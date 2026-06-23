@@ -82,6 +82,8 @@ interface TicketDetailPanelProps {
   onAssigneeChange: (employeeName: string | null) => void
   onRunNow: () => void
   onDelete: () => void
+  onSaveDetails: (updates: Pick<KanbanTicket, 'title' | 'description'>) => void
+  onAppendNote: (updates: { title: string; description: string; note: string }) => void
 }
 
 export function TicketDetailPanel({
@@ -93,11 +95,16 @@ export function TicketDetailPanel({
   onAssigneeChange,
   onRunNow,
   onDelete,
+  onSaveDetails,
+  onAppendNote,
 }: TicketDetailPanelProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const { subscribe } = useGateway()
   const [liveSession, setLiveSession] = useState<TicketSessionResponse | null>(null)
   const [liveLoading, setLiveLoading] = useState(false)
+  const [draftTitle, setDraftTitle] = useState(ticket.title)
+  const [draftDescription, setDraftDescription] = useState(ticket.description)
+  const [noteDraft, setNoteDraft] = useState('')
 
   // Escape key to close
   useEffect(() => {
@@ -113,8 +120,28 @@ export function TicketDetailPanel({
     closeRef.current?.focus()
   }, [])
 
+  useEffect(() => {
+    setDraftTitle(ticket.title)
+    setDraftDescription(ticket.description)
+    setNoteDraft('')
+  }, [ticket.id, ticket.title, ticket.description])
+
   function handleDelete() {
     onDelete()
+  }
+
+  function handleSaveDetails() {
+    const title = draftTitle.trim()
+    if (!title) return
+    onSaveDetails({ title, description: draftDescription })
+  }
+
+  function handleAppendNoteClick() {
+    const title = draftTitle.trim()
+    const note = noteDraft.trim()
+    if (!title || !note) return
+    onAppendNote({ title, description: draftDescription, note })
+    setNoteDraft('')
   }
 
   const loadLiveSession = useCallback(async () => {
@@ -168,6 +195,10 @@ export function TicketDetailPanel({
 
   const assignee = employees.find(e => e.name === ticket.assigneeId) ?? null
   const accentColor = 'var(--accent)'
+  const trimmedTitle = draftTitle.trim()
+  const detailsDirty = trimmedTitle !== ticket.title || draftDescription !== ticket.description
+  const saveDetailsDisabled = trimmedTitle.length === 0 || !detailsDirty
+  const appendNoteDisabled = trimmedTitle.length === 0 || noteDraft.trim().length === 0
   const runDisabled = !ticket.assigneeId || ticket.workState === 'starting'
   const runHelperText = !ticket.assigneeId
     ? 'Assign someone first.'
@@ -213,9 +244,19 @@ export function TicketDetailPanel({
 
           {/* Title + meta */}
           <div className="pt-[var(--space-2)] px-[var(--space-5)] pb-[var(--space-4)]">
-            <h2 className="text-[length:var(--text-title3)] font-bold tracking-[-0.3px] text-[var(--text-primary)] m-0 leading-[1.25]">
-              {ticket.title}
-            </h2>
+            <label
+              htmlFor={`ticket-title-${ticket.id}`}
+              className="text-[length:var(--text-caption1)] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.5px]"
+            >
+              Title
+            </label>
+            <input
+              id={`ticket-title-${ticket.id}`}
+              aria-label="Title"
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              className="mt-[var(--space-2)] w-full rounded-[var(--radius-md)] border border-[var(--separator)] bg-[var(--fill-secondary)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-title3)] font-bold tracking-[-0.3px] text-[var(--text-primary)] outline-none"
+            />
 
             <div className="flex items-center gap-[var(--space-3)] mt-[var(--space-2)]">
               <StatusBadge status={ticket.status} />
@@ -308,17 +349,69 @@ export function TicketDetailPanel({
           </div>
 
           {/* Description */}
-          {ticket.description && (
-            <div className="px-[var(--space-5)] pb-[var(--space-4)]">
-              <div className="h-px bg-[var(--separator)] mb-[var(--space-3)]" />
-              <div className="text-[length:var(--text-caption1)] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.5px] mb-[var(--space-2)]">
-                Description
-              </div>
-              <div className="text-[length:var(--text-footnote)] text-[var(--text-secondary)] leading-[1.5] whitespace-pre-wrap">
-                {ticket.description}
-              </div>
+          <div className="px-[var(--space-5)] pb-[var(--space-4)]">
+            <div className="h-px bg-[var(--separator)] mb-[var(--space-3)]" />
+            <label
+              htmlFor={`ticket-description-${ticket.id}`}
+              className="text-[length:var(--text-caption1)] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.5px] mb-[var(--space-2)] block"
+            >
+              Description
+            </label>
+            <textarea
+              id={`ticket-description-${ticket.id}`}
+              aria-label="Description"
+              rows={6}
+              value={draftDescription}
+              onChange={(e) => setDraftDescription(e.target.value)}
+              className="w-full rounded-[var(--radius-md)] border border-[var(--separator)] bg-[var(--fill-secondary)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-footnote)] text-[var(--text-secondary)] leading-[1.5] outline-none resize-y"
+            />
+            <div className="mt-[var(--space-2)] flex justify-end">
+              <button
+                onClick={handleSaveDetails}
+                disabled={saveDetailsDisabled}
+                className="rounded-[var(--radius-md)] border-none px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-footnote)] font-semibold transition-all duration-[120ms] ease-linear"
+                style={{
+                  background: saveDetailsDisabled ? 'var(--fill-tertiary)' : 'var(--accent)',
+                  color: saveDetailsDisabled ? 'var(--text-tertiary)' : 'var(--accent-contrast)',
+                  cursor: saveDetailsDisabled ? 'default' : 'pointer',
+                }}
+              >
+                Save changes
+              </button>
             </div>
-          )}
+          </div>
+
+          <div className="px-[var(--space-5)] pb-[var(--space-4)]">
+            <div className="text-[length:var(--text-caption1)] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.5px] mb-[var(--space-2)]">
+              Append note
+            </div>
+            <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
+              Adds a timestamped update to the description so provenance stays visible.
+            </div>
+            <textarea
+              id={`ticket-note-${ticket.id}`}
+              aria-label="Append note"
+              rows={4}
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              placeholder="Add a timestamped update…"
+              className="w-full rounded-[var(--radius-md)] border border-[var(--separator)] bg-[var(--fill-secondary)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-footnote)] text-[var(--text-secondary)] leading-[1.5] outline-none resize-y"
+            />
+            <div className="mt-[var(--space-2)] flex justify-end">
+              <button
+                onClick={handleAppendNoteClick}
+                disabled={appendNoteDisabled}
+                className="rounded-[var(--radius-md)] border border-[var(--separator)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-footnote)] font-semibold transition-all duration-[120ms] ease-linear"
+                style={{
+                  background: appendNoteDisabled ? 'var(--fill-tertiary)' : 'var(--fill-secondary)',
+                  color: appendNoteDisabled ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                  cursor: appendNoteDisabled ? 'default' : 'pointer',
+                }}
+              >
+                Append note
+              </button>
+            </div>
+          </div>
 
           {showLiveSection && (
             <div className="px-[var(--space-5)] pb-[var(--space-4)]">
