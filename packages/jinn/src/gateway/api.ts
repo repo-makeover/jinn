@@ -10,7 +10,7 @@ import { applyEmployeeSessionDefaults, validateNewSessionSelection, validateSess
 import { getApproval, listApprovals, resolveApproval } from "./approvals.js";
 import { listDirectory, FsBrowseError } from "./fs-browse.js";
 import { safeWriteFile } from "../shared/safe-write.js";
-import { listSessions, listRecentCwds, coercePortalEmployee, getSession, createSession, updateSession, patchSessionTransportMeta, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, enqueueQueueItem, cancelQueueItem, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
+import { listSessions, listRecentCwds, coercePortalEmployee, getSession, createSession, updateSession, patchSessionTransportMeta, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, enqueueQueueItem, cancelQueueItemForSession, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
 import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR } from "../shared/paths.js";
 import { saveConfigAtomic, validateConfigShape } from "../shared/config.js";
@@ -377,7 +377,8 @@ export async function handleApiRequest(
     if (method === "DELETE" && queueItemParams) {
       const session = getSession(queueItemParams.id);
       if (!session) return notFound(res);
-      const cancelled = cancelQueueItem(queueItemParams.itemId);
+      const sessionKey = session.sessionKey || session.sourceRef || session.id;
+      const cancelled = cancelQueueItemForSession(queueItemParams.itemId, session.id, sessionKey);
       if (!cancelled) {
         res.writeHead(409, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Item not found or already running" }));

@@ -1334,6 +1334,14 @@ export function cancelQueueItem(itemId: string): boolean {
   return result.changes > 0;
 }
 
+export function cancelQueueItemForSession(itemId: string, sessionId: string, sessionKey: string): boolean {
+  const db = initDb();
+  const result = db.prepare(
+    "UPDATE queue_items SET status = 'cancelled' WHERE id = ? AND status = 'pending' AND (session_id = ? OR session_key = ?)"
+  ).run(itemId, sessionId, sessionKey);
+  return result.changes > 0;
+}
+
 export function getQueueItems(sessionKey: string): QueueItem[] {
   const db = initDb();
   return db.prepare(
