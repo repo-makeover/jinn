@@ -83,6 +83,9 @@ describe("validateConfigShape", () => {
         defaultMode: "auto",
         globalChain: [{ engine: "codex", model: "gpt-5.5", effortLevel: "high" }],
       },
+      sessions: {
+        autoResumeOnBoot: false,
+      },
       mcp: {
         browser: { enabled: true, provider: "playwright" },
         fetch: { enabled: true },
@@ -171,6 +174,19 @@ describe("validateConfigShape", () => {
     });
     expect(problems.some((p) => p.includes("engines.kiro.creditBudget"))).toBe(true);
     expect(problems.some((p) => p.includes("engines.kiro.billingAnchorDay"))).toBe(true);
+  });
+
+  it("validates sessions.autoResumeOnBoot as an optional boolean", () => {
+    expect(validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      sessions: { autoResumeOnBoot: true },
+    })).toEqual([]);
+
+    const problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      sessions: { autoResumeOnBoot: "true" },
+    });
+    expect(problems.some((p) => p.includes("sessions.autoResumeOnBoot"))).toBe(true);
   });
 
   it("validates boardWorker schedule and timezone fields", () => {

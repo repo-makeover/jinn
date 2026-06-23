@@ -50,6 +50,8 @@ export function teardownAndDeleteSession(context: ApiContext, session: Session, 
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
+  if (context.getConfig().sessions?.autoResumeOnBoot !== true) return;
+
   const pending = listAllPendingQueueItems();
   if (pending.length === 0) return;
 

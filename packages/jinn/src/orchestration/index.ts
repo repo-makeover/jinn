@@ -5,4 +5,5 @@ export * from "./scheduler.js";
 export * from "./store.js";
 export * from "./persistent-scheduler.js";
 export * from "./routing-headroom.js";
+export * from "./coordinator.js";
 export * from "./adapter/index.js";

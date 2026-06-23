@@ -1,6 +1,6 @@
 import { MatrixScheduler, type SchedulerOptions } from "./scheduler.js";
 import { OrchestrationStore } from "./store.js";
-import type { Allocation, AllocationRequest, AllocationResult, Lease, LeaseValidationResult, OrchestrationConfig, QueueItem, TelemetryEvent } from "./types.js";
+import type { Allocation, AllocationRequest, AllocationResult, Lease, LeaseValidationResult, OrchestrationConfig, QueueItem, SchedulerSnapshot, TelemetryEvent } from "./types.js";
 
 export interface PersistentSchedulerOptions extends Omit<SchedulerOptions, "snapshot"> {
   dbPath?: string;
@@ -74,6 +74,10 @@ export class PersistentMatrixScheduler {
 
   listTelemetry(): TelemetryEvent[] {
     return this.scheduler.listTelemetry();
+  }
+
+  createSnapshot(): SchedulerSnapshot {
+    return this.scheduler.createSnapshot();
   }
 
   resolveLease(selector: { leaseId?: string; taskId?: string; role?: string; workerId?: string }): Lease {

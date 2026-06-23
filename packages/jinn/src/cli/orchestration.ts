@@ -1,7 +1,11 @@
+import fs from "node:fs";
 import { formatZodError } from "../orchestration/schemas.js";
 import { loadAllocationRequest, loadOrchestrationConfig, loadSimulationScenario } from "../orchestration/config.js";
+import { loadCoordinatorTaskBrief, planCoordinatorAllocation } from "../orchestration/coordinator.js";
+import { PersistentMatrixScheduler } from "../orchestration/persistent-scheduler.js";
 import { MatrixScheduler, runSimulation } from "../orchestration/scheduler.js";
-import type { AllocationResult, OrchestrationConfig, Worker } from "../orchestration/types.js";
+import { ORCH_DB } from "../shared/paths.js";
+import type { AllocationResult, Lease, OrchestrationConfig, QueueItem, SchedulerSnapshot, Worker } from "../orchestration/types.js";
 
 export interface ConfigDirOptions {
   configDir: string;
@@ -10,6 +14,10 @@ export interface ConfigDirOptions {
 
 export interface SchedulerAllocateOptions extends ConfigDirOptions {
   dryRun?: boolean;
+}
+
+export interface OrchestrationStateOptions extends ConfigDirOptions {
+  dbPath?: string;
 }
 
 function requireConfigDir(opts: ConfigDirOptions): string {
@@ -71,9 +79,73 @@ function formatAllocationResult(result: AllocationResult): string {
   return lines.join("\n");
 }
 
+function formatLeases(leases: Lease[]): string {
+  if (leases.length === 0) return "No orchestration leases.";
+  const lines = ["Lease               Worker              Role                 Task                State      Expires"];
+  for (const lease of leases) {
+    lines.push([
+      lease.leaseId.padEnd(19),
+      lease.workerId.padEnd(19),
+      lease.role.padEnd(20),
+      lease.taskId.padEnd(19),
+      lease.state.padEnd(10),
+      lease.leaseExpiresAt,
+    ].join(" "));
+  }
+  return lines.join("\n");
+}
+
+function formatQueue(queue: QueueItem[]): string {
+  if (queue.length === 0) return "No blocked orchestration queue items.";
+  const lines = ["Task                Coordinator         Priority  Missing roles"];
+  for (const item of queue) {
+    lines.push([
+      item.taskId.padEnd(19),
+      item.coordinatorId.padEnd(19),
+      item.priority.padEnd(9),
+      item.missingRoles.join(", "),
+    ].join(" "));
+  }
+  return lines.join("\n");
+}
+
+function readSnapshotIfPresent(config: OrchestrationConfig, opts: OrchestrationStateOptions): SchedulerSnapshot | undefined {
+  const dbPath = opts.dbPath ?? ORCH_DB;
+  if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) return undefined;
+  const scheduler = PersistentMatrixScheduler.open(config, { dbPath, expireOnHydrate: false });
+  try {
+    return scheduler.createSnapshot();
+  } finally {
+    scheduler.close();
+  }
+}
+
+function readState<T>(config: OrchestrationConfig, opts: OrchestrationStateOptions, read: (scheduler: PersistentMatrixScheduler) => T, empty: T): T {
+  const dbPath = opts.dbPath ?? ORCH_DB;
+  if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) return empty;
+  const scheduler = PersistentMatrixScheduler.open(config, { dbPath, expireOnHydrate: false });
+  try {
+    return read(scheduler);
+  } finally {
+    scheduler.close();
+  }
+}
+
 export async function runWorkersList(opts: ConfigDirOptions): Promise<void> {
   const config = loadConfigForCli(opts);
   print(opts.json ? { workers: config.workers } : formatWorkers(config.workers), opts.json);
+}
+
+export async function runLeasesList(opts: OrchestrationStateOptions): Promise<void> {
+  const config = loadConfigForCli(opts);
+  const leases = readState(config, opts, (scheduler) => scheduler.listLeases(), []);
+  print(opts.json ? { leases } : formatLeases(leases), opts.json);
+}
+
+export async function runQueueList(opts: OrchestrationStateOptions): Promise<void> {
+  const config = loadConfigForCli(opts);
+  const queue = readState(config, opts, (scheduler) => scheduler.listQueue(), []);
+  print(opts.json ? { queue } : formatQueue(queue), opts.json);
 }
 
 export async function runSchedulerAllocate(taskFile: string, opts: SchedulerAllocateOptions): Promise<void> {
@@ -83,6 +155,14 @@ export async function runSchedulerAllocate(taskFile: string, opts: SchedulerAllo
   const scheduler = new MatrixScheduler(config);
   const result = scheduler.requestAllocation(request);
   print(opts.json ? result : formatAllocationResult(result), opts.json);
+}
+
+export async function runSchedulerPlan(taskFile: string, opts: OrchestrationStateOptions): Promise<void> {
+  const config = loadConfigForCli(opts);
+  const brief = loadCoordinatorTaskBrief(taskFile, config);
+  const snapshot = readSnapshotIfPresent(config, opts);
+  const plan = planCoordinatorAllocation(brief, config, { snapshot });
+  print(opts.json ? plan : formatAllocationResult(plan.result), opts.json);
 }
 
 export async function runSchedulerSimulate(scenarioFile: string, opts: ConfigDirOptions): Promise<void> {
@@ -98,4 +178,3 @@ export async function runSchedulerSimulate(scenarioFile: string, opts: ConfigDir
   };
   print(opts.json ? result : JSON.stringify(result, null, 2), opts.json);
 }
-

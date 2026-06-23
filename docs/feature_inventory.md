@@ -23,22 +23,36 @@
 
 ## CLI
 
-### Provider-neutral matrix orchestration dry-runs
+### Provider-neutral matrix orchestration dry-runs and observe surfaces
 - `packages/jinn/src/orchestration/*`
 - `packages/jinn/src/cli/orchestration.ts`
 - `packages/jinn/bin/jinn.ts`
 - `jinn workers list --config-dir <dir> [--json]` loads explicit matrix worker config and prints available workers.
 - `jinn scheduler allocate <task-file> --config-dir <dir> --dry-run [--json]` validates a task request and performs fake-worker allocation only.
 - `jinn scheduler simulate <scenario-file> --config-dir <dir> [--json]` runs deterministic allocation/release/heartbeat/expiry scenario steps against in-memory scheduler state.
+- `jinn scheduler plan <task-file> --config-dir <dir> [--db-path <path>] [--json]` expands a coordinator template into an observe-only allocation plan.
+- `jinn leases list --config-dir <dir> [--db-path <path>] [--json]` lists durable orchestration leases when a DB exists.
+- `jinn queue list --config-dir <dir> [--db-path <path>] [--json]` lists durable blocked-resource queue items when a DB exists.
 - This foundation is inert: it does not call providers, create worktrees, change gateway session execution, update the dashboard, or write to live `~/.jinn`.
 - Fidelity gaps:
   - A SQLite store and persistent scheduler wrapper now exist for leases, allocations, queue items, and telemetry events, but they are code-level foundations only.
   - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, `mock`, and opt-in live adapters for existing Jinn engine ids via an injected engine map. The default registry used by dry-runs remains inert-only.
   - Usage-aware headroom helpers can filter unavailable, exhausted, or below-threshold live engines when future live orchestration opts in; simulation mode does not call this filter.
-  - The public CLI dry-runs still use process-local scheduler state and do not write the durable store.
+  - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
   - Persistent telemetry aggregation, worktree execution, live orchestration modes, and GUI controls are later milestones.
 
 ## API
+
+### Provider-neutral matrix orchestration observe routes
+- `packages/jinn/src/gateway/api/orchestration-routes.ts`
+- `GET /api/orchestration/workers` returns configured workers.
+- `GET /api/orchestration/leases` returns existing durable orchestration leases.
+- `GET /api/orchestration/queue` returns blocked-resource queue items, including missing roles and resume triggers.
+- `GET /api/orchestration/allocations` returns existing durable allocations.
+- These routes inherit the existing `/api/*` gateway token gate and reject non-GET methods with `405`.
+- Fidelity gaps:
+  - The routes observe state only. They do not allocate, retry, heartbeat, release, cancel, start providers, create sessions, or wire dashboard controls.
+  - If no orchestration DB exists, state routes return empty arrays rather than creating live runtime state.
 
 ### Kiro headless engine and estimated credit gauge
 - `kiro` is a registered headless engine. Work turns spawn:

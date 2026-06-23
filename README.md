@@ -248,6 +248,11 @@ engines:
     bin: codex
     model: gpt-5.5
 
+sessions:
+  # Opt in to replaying pending web queue items on gateway startup.
+  # Default false avoids silently re-running expensive or side-effectful jobs.
+  autoResumeOnBoot: false
+
 connectors:
   slack:
     shareSessionInChannel: false

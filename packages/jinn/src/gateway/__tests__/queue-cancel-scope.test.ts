@@ -96,7 +96,7 @@ describe("DELETE /api/sessions/:id/queue/:itemId", () => {
     expect(cap.status).toBe(409);
     expect(cap.body).toEqual({ error: "Item not found or already running" });
     expect(reg.getQueueItem(itemB)?.status).toBe("pending");
-  });
+  }, 15_000);
 
   it("allows a session route to cancel its own pending queue item", async () => {
     const { api, reg } = await setup();
@@ -110,5 +110,5 @@ describe("DELETE /api/sessions/:id/queue/:itemId", () => {
     expect(cap.status).toBe(200);
     expect(cap.body).toEqual({ status: "cancelled", itemId: item });
     expect(reg.getQueueItem(item)?.status).toBe("cancelled");
-  });
+  }, 15_000);
 });

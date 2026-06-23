@@ -559,12 +559,13 @@ function validateSessions(
     problems.push("sessions must be a mapping");
     return;
   }
-  pushUnknownKeys(problems, value, ["maxDurationMinutes", "maxCostUsd", "interruptOnNewMessage", "rateLimitStrategy", "fallbackEngine"], "sessions");
+  pushUnknownKeys(problems, value, ["maxDurationMinutes", "maxCostUsd", "interruptOnNewMessage", "rateLimitStrategy", "fallbackEngine", "autoResumeOnBoot"], "sessions");
   if (value.maxDurationMinutes !== undefined) validateNumber(problems, "sessions.maxDurationMinutes", value.maxDurationMinutes);
   if (value.maxCostUsd !== undefined) validateNumber(problems, "sessions.maxCostUsd", value.maxCostUsd);
   if (value.interruptOnNewMessage !== undefined) validateBoolean(problems, "sessions.interruptOnNewMessage", value.interruptOnNewMessage);
   if (value.rateLimitStrategy !== undefined) validateString(problems, "sessions.rateLimitStrategy", value.rateLimitStrategy);
   if (value.fallbackEngine !== undefined) validateString(problems, "sessions.fallbackEngine", value.fallbackEngine);
+  if (value.autoResumeOnBoot !== undefined) validateBoolean(problems, "sessions.autoResumeOnBoot", value.autoResumeOnBoot);
 }
 
 function validateBoardWorker(

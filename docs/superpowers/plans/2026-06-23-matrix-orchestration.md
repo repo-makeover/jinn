@@ -1,6 +1,6 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1, M1, and M2 are **complete** (Codex, 2026-06-23).
+> **Status:** Phase 1 and M1–M4 are **complete** (Codex, 2026-06-23).
 > This is the **full-capability roadmap** from inert scaffold to real,
 > daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
@@ -386,19 +386,21 @@ the source brief.
 - **Remaining boundary:** M3 does not wire live matrix execution into sessions, daemon
   boot, API routes, CLI commands, worktrees, or dashboard controls. Those remain M4/M5+.
 
-### M4 — Coordinator templates → live allocation API (brief Phase 3+6 surface)
+### M4 — Coordinator templates → live allocation API (complete, 2026-06-23)
 
-- **Goal:** turn a task brief + coordinator template into a real allocation the daemon
-  can act on; add the read/observe HTTP + CLI surfaces.
-- **Deliverables:** `orchestration/coordinator.ts` (template → AllocationRequest, the
-  modes from §6); HTTP routes under `/api/orchestration/` (`workers`, `leases`,
-  `queue`, `allocations` — GET/observe first) registered in `gateway/api.ts`; CLI
-  `jinn leases list`, `jinn queue list`, `jinn scheduler plan <task>`.
-- **Integration points:** `gateway/api.ts` if-chain + `matchRoute`; auth via existing
-  token; new commands in `bin/jinn.ts`.
-- **Exit gate:** operator can inspect workers/leases/queue and *why* a task is blocked;
-  no execution yet from these routes (observe-only); routes auth-gated.
-- **Team:** implementer + UX/terminology reviewer (concrete labels, no "AI team/magic").
+- **Goal:** turn a task brief + coordinator template into an allocation plan the daemon
+  can observe later; add read/observe HTTP + CLI surfaces.
+- **Delivered:** `orchestration/coordinator.ts` (template → `AllocationRequest`,
+  `matrix`, `single_worker`, and `single_worker_with_review` planning modes);
+  observe-only HTTP routes under `/api/orchestration/` (`workers`, `leases`, `queue`,
+  `allocations`) registered through `gateway/api.ts`; CLI `jinn leases list`,
+  `jinn queue list`, and `jinn scheduler plan <task>`.
+- **Validation:** focused M4 tests cover planner modes, CLI plan/list behavior, and
+  GET-only API observation. Node 24 full-suite preflight was made green with
+  timeout-only harness fixes for concurrent-load-sensitive tests.
+- **Remaining boundary:** M4 does not wire live matrix execution into sessions,
+  daemon boot, provider adapters, worktrees, dashboard controls, retry/release
+  mutation routes, or board-worker dispatch. Those remain M5+.
 
 ### M5 — First real mode: `single_worker` + `single_worker_with_review` (brief Phase 6)
 

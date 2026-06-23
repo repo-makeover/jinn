@@ -1,4 +1,5 @@
 import type { Engine, JinnConfig } from "../../shared/types.js";
+import type { OrchestrationConfig } from "../../orchestration/types.js";
 import type { SessionManager } from "../../sessions/manager.js";
 
 export interface ApiContext {
@@ -32,4 +33,11 @@ export interface ApiContext {
    *  maintained in server.ts from the interactive engine's onBackgroundActivity
    *  callback. lastActivityAt is epoch ms; serializeSession converts to ISO. */
   backgroundActivity?: Map<string, { activeStreams: number; lastActivityAt: number }>;
+  /** Optional test/embedding override for observe-only orchestration routes. */
+  orchestration?: {
+    config?: OrchestrationConfig;
+    configDir?: string;
+    dbPath?: string;
+    now?: () => Date;
+  };
 }

@@ -34,6 +34,36 @@ afterEach(() => {
 });
 
 describe("resumePendingWebQueueItems", () => {
+  it("leaves pending work untouched on startup unless autoResumeOnBoot is enabled", async () => {
+    const { dispatch, reg, SessionQueue } = await setup();
+    const session = reg.createSession({
+      engine: "claude",
+      source: "web",
+      sourceRef: "web:auto-resume-disabled",
+      prompt: "queued work",
+    });
+    const itemId = reg.enqueueQueueItem(session.id, session.sessionKey, "do not replay by default");
+
+    const queue = new SessionQueue();
+    const getEngine = vi.fn(() => ({}) as any);
+    const ctx = {
+      getConfig: () => ({ gateway: {}, engines: { default: "claude" }, sessions: {} }),
+      connectors: new Map(),
+      startTime: Date.now(),
+      emit: vi.fn(),
+      sessionManager: {
+        getEngine,
+        getQueue: () => queue,
+      },
+    } as any;
+
+    dispatch.resumePendingWebQueueItems(ctx);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(reg.getQueueItem(itemId)?.status).toBe("pending");
+    expect(getEngine).not.toHaveBeenCalled();
+  });
+
   it("leaves paused pending work untouched across a restarted queue until resume", async () => {
     const { dispatch, reg, SessionQueue } = await setup();
     const session = reg.createSession({
@@ -51,7 +81,7 @@ describe("resumePendingWebQueueItems", () => {
     const restartedQueue = new SessionQueue();
     const getEngine = vi.fn(() => ({}) as any);
     const ctx = {
-      getConfig: () => ({ gateway: {}, engines: { default: "claude" } }),
+      getConfig: () => ({ gateway: {}, engines: { default: "claude" }, sessions: { autoResumeOnBoot: true } }),
       connectors: new Map(),
       startTime: Date.now(),
       emit: vi.fn(),

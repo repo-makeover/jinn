@@ -2,17 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { loadOrchestrationConfig } from "../../orchestration/config.js";
+import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import {
+  runLeasesList,
+  runQueueList,
   runSchedulerAllocate,
+  runSchedulerPlan,
   runSchedulerSimulate,
   runWorkersList,
 } from "../orchestration.js";
 
 let tmpDir: string;
+let dbPath: string;
 let logSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orchestration-cli-"));
+  dbPath = path.join(tmpDir, "orchestration.db");
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   writeConfig(tmpDir);
 });
@@ -58,6 +65,53 @@ describe("orchestration CLI dry-run commands", () => {
     ].join("\n"));
 
     await expect(runSchedulerAllocate(taskFile, { configDir: tmpDir })).rejects.toThrow("--dry-run");
+  });
+
+  it("plans from a coordinator template without requiring --dry-run", async () => {
+    const taskFile = path.join(tmpDir, "plan.yaml");
+    fs.writeFileSync(taskFile, [
+      "taskId: task-plan",
+      "coordinatorId: coord-plan",
+      "coordinatorTemplate: standardImplementation",
+      "mode: single_worker_with_review",
+    ].join("\n"));
+
+    await runSchedulerPlan(taskFile, { configDir: tmpDir, json: true });
+
+    const output = JSON.parse(String(logSpy.mock.calls[0][0]));
+    expect(output.mode).toBe("single_worker_with_review");
+    expect(output.request.requiredRoles).toEqual(["seniorImplementer", "independentReviewer"]);
+    expect(output.summary.state).toBe("allocated");
+  });
+
+  it("lists leases and blocked queue items from an explicit orchestration db", async () => {
+    const config = loadOrchestrationConfig(tmpDir);
+    const scheduler = PersistentMatrixScheduler.open(config, { dbPath });
+    scheduler.requestAllocation({
+      taskId: "task-one",
+      coordinatorId: "coord-one",
+      requiredRoles: ["seniorImplementer"],
+      optionalRoles: [],
+      priority: "normal",
+      leaseDurationMs: 60_000,
+    });
+    scheduler.requestAllocation({
+      taskId: "task-two",
+      coordinatorId: "coord-two",
+      requiredRoles: ["seniorImplementer"],
+      optionalRoles: [],
+      priority: "high",
+      leaseDurationMs: 60_000,
+    });
+    scheduler.close();
+
+    await runLeasesList({ configDir: tmpDir, dbPath, json: true });
+    await runQueueList({ configDir: tmpDir, dbPath, json: true });
+
+    const leases = JSON.parse(String(logSpy.mock.calls[0][0]));
+    const queue = JSON.parse(String(logSpy.mock.calls[1][0]));
+    expect(leases.leases.map((lease: { taskId: string }) => lease.taskId)).toContain("task-one");
+    expect(queue.queue).toMatchObject([{ taskId: "task-two", missingRoles: ["seniorImplementer"] }]);
   });
 
   it("simulates blocked and resumed allocation steps", async () => {
@@ -148,4 +202,3 @@ function writeConfig(dir: string): void {
     "  families: {}",
   ].join("\n"));
 }
-

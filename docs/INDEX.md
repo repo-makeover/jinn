@@ -9,8 +9,9 @@ artifacts unless explicitly published.
 - `README.md`: public overview and install/use workflow.
 - `docs/feature_inventory.md`: implemented CLI/API/UI surfaces and fidelity gaps.
 - `docs/engines-hermes.md`: Hermes engine behavior and caveats.
-- `docs/orchestration/README.md`: inert provider-neutral matrix orchestration
-  foundation, durable scheduler state, adapter contracts, and CLI dry-run usage.
+- `docs/orchestration/README.md`: provider-neutral matrix orchestration
+  foundation, durable scheduler state, adapter contracts, CLI dry-run/observe
+  commands, and observe-only HTTP routes.
 
 ## Design And Planning Archives
 

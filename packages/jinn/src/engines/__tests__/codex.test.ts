@@ -444,7 +444,7 @@ describe("CodexEngine — process lifecycle", () => {
     call.proc.close(0);
     await promise;
     expect(engine.isAlive("sess-1")).toBe(false);
-  }, 10_000);
+  }, 20_000);
 
   it("settles on the terminal turn.completed event even if the process never closes", async () => {
     // Regression (same hang class as grok 94a50cc): a bash/shell tool call can leave

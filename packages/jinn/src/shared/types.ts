@@ -782,6 +782,8 @@ export interface JinnConfig {
     rateLimitStrategy?: "wait" | "fallback";
     /** Engine to use when rateLimitStrategy="fallback". Default: "codex". */
     fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro";
+    /** Opt-in replay of pending web queue items on gateway startup. Default false. */
+    autoResumeOnBoot?: boolean;
   };
   boardWorker?: BoardWorkerConfig;
   cron?: {

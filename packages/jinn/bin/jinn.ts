@@ -120,6 +120,38 @@ program
 }
 
 {
+  const leasesCmd = program
+    .command("leases")
+    .description("Inspect observe-only matrix-orchestration leases");
+
+  leasesCmd
+    .command("list")
+    .requiredOption("--config-dir <dir>", "Directory containing orchestration config YAML files")
+    .option("--db-path <path>", "Orchestration SQLite DB path (defaults to this instance's orchestration.db)")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { configDir: string; dbPath?: string; json?: boolean }) => {
+      const { runLeasesList } = await import("../src/cli/orchestration.js");
+      await runLeasesList(opts);
+    });
+}
+
+{
+  const queueCmd = program
+    .command("queue")
+    .description("Inspect observe-only matrix-orchestration queue state");
+
+  queueCmd
+    .command("list")
+    .requiredOption("--config-dir <dir>", "Directory containing orchestration config YAML files")
+    .option("--db-path <path>", "Orchestration SQLite DB path (defaults to this instance's orchestration.db)")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { configDir: string; dbPath?: string; json?: boolean }) => {
+      const { runQueueList } = await import("../src/cli/orchestration.js");
+      await runQueueList(opts);
+    });
+}
+
+{
   const schedulerCmd = program
     .command("scheduler")
     .description("Dry-run inert matrix scheduler allocation scenarios");
@@ -132,6 +164,16 @@ program
     .action(async (taskFile: string, opts: { configDir: string; dryRun?: boolean; json?: boolean }) => {
       const { runSchedulerAllocate } = await import("../src/cli/orchestration.js");
       await runSchedulerAllocate(taskFile, opts);
+    });
+
+  schedulerCmd
+    .command("plan <task-file>")
+    .requiredOption("--config-dir <dir>", "Directory containing orchestration config YAML files")
+    .option("--db-path <path>", "Orchestration SQLite DB path to account for existing leases/queue")
+    .option("--json", "Print raw JSON")
+    .action(async (taskFile: string, opts: { configDir: string; dbPath?: string; json?: boolean }) => {
+      const { runSchedulerPlan } = await import("../src/cli/orchestration.js");
+      await runSchedulerPlan(taskFile, opts);
     });
 
   schedulerCmd
