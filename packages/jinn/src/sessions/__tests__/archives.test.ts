@@ -163,6 +163,48 @@ describe("project archives API", () => {
     expect(missing.status).toBe(404);
   });
 
+  it("rolls back archive creation if live-session deletion fails", async () => {
+    const session = reg.createSession({
+      engine: "claude",
+      source: "web",
+      sourceRef: "web:archive-rollback",
+      title: "Archive rollback",
+    });
+    reg.insertMessage(session.id, "user", "keep this session live");
+    reg.enqueueQueueItem(session.id, session.sessionKey, "queued prompt");
+
+    const beforeCount = reg.listArchives().length;
+    const db = reg.initDb();
+    const originalPrepare = db.prepare.bind(db);
+    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (sql.includes("DELETE FROM sessions WHERE id IN")) {
+        throw new Error("injected archive delete failure");
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      const cap = makeRes();
+      await api.handleApiRequest(
+        makeReq("POST", "/api/archives", {
+          kind: "chat",
+          sessionIds: [session.id],
+          label: "Should roll back",
+        }),
+        cap.res,
+        makeCtx(),
+      );
+
+      expect(cap.status).toBe(500);
+      expect(reg.getSession(session.id)?.id).toBe(session.id);
+      expect(reg.getMessages(session.id)).toHaveLength(1);
+      expect(reg.getQueueItems(session.sessionKey)).toHaveLength(1);
+      expect(reg.listArchives()).toHaveLength(beforeCount);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
+
   it("validates archive creation requests", async () => {
     const cap = makeRes();
     await api.handleApiRequest(

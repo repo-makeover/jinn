@@ -10,7 +10,7 @@ import { applyEmployeeSessionDefaults, validateNewSessionSelection, validateSess
 import { getApproval, listApprovals, resolveApproval } from "./approvals.js";
 import { listDirectory, FsBrowseError } from "./fs-browse.js";
 import { safeWriteFile } from "../shared/safe-write.js";
-import { listSessions, listRecentCwds, coercePortalEmployee, getSession, createSession, updateSession, patchSessionTransportMeta, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, enqueueQueueItem, cancelQueueItemForSession, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, snapshotSessions, createArchive, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
+import { listSessions, listRecentCwds, coercePortalEmployee, getSession, createSession, updateSession, patchSessionTransportMeta, UpdateSessionFields, deleteSession, deleteSessions, duplicateSession, insertMessage, deletePartialMessages, enqueueQueueItem, cancelQueueItemForSession, getQueueItems, cancelAllPendingQueueItems, listAllPendingQueueItems, getFile, createArchiveAndDeleteSessions, listArchives, getArchive, deleteArchive } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
 import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR } from "../shared/paths.js";
 import { saveConfigAtomic, validateConfigShape } from "../shared/config.js";
@@ -177,24 +177,41 @@ export async function handleApiRequest(
       }
 
       const sessionIds = Array.from(new Set((body.sessionIds as string[]).map((id) => id.trim())));
-      const snapshots = snapshotSessions(sessionIds);
-      if (snapshots.length === 0) return badRequest(res, "no matching sessions to archive");
+      const liveSessions = sessionIds
+        .map((id) => getSession(id))
+        .filter((session): session is Session => Boolean(session));
+      if (liveSessions.length === 0) return badRequest(res, 'no matching sessions to archive');
 
-      const archive = createArchive({
+      const archive = createArchiveAndDeleteSessions({
         kind: body.kind,
-        label: typeof body.label === "string" ? body.label.slice(0, 200) : null,
-        note: typeof body.note === "string" ? body.note.slice(0, 5000) : null,
-        sourceRef: typeof body.sourceRef === "string" ? body.sourceRef.slice(0, 500) : null,
-        sessions: snapshots,
+        label: typeof body.label === 'string' ? body.label.slice(0, 200) : null,
+        note: typeof body.note === 'string' ? body.note.slice(0, 5000) : null,
+        sourceRef: typeof body.sourceRef === 'string' ? body.sourceRef.slice(0, 500) : null,
+        sessionIds: liveSessions.map((session) => session.id),
       });
+      if (!archive) return badRequest(res, 'no matching sessions to archive');
 
-      for (const snap of snapshots) {
-        const session = getSession(snap.id);
-        if (!session) continue;
-        const deleted = teardownAndDeleteSession(context, session, "Interrupted: session archived");
-        if (deleted) logger.info(`Archived and deleted session ${session.id} into archive ${archive.id}`);
+      const archivedSessions = new Map(liveSessions.map((session) => [session.id, session]));
+
+      for (const session of liveSessions) {
+        try {
+          killSessionEngines(context, session, 'Interrupted: session archived');
+        } catch (err) {
+          logger.warn(`Failed to interrupt archived session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        try {
+          context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
+        } catch (err) {
+          logger.warn(`Failed to clear queue for archived session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        maybeEmitTalkGraph(session.id, 'removed', {
+          getSession: (id) => archivedSessions.get(id) ?? getSession(id),
+          emit: context.emit,
+        });
+        context.emit('session:deleted', { sessionId: session.id });
+        logger.info(`Archived and deleted session ${session.id} into archive ${archive.id}`);
       }
-      context.emit("archive:created", { archive });
+      context.emit('archive:created', { archive });
       return json(res, archive);
     }
 

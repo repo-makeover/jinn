@@ -1178,6 +1178,63 @@ export function createArchive(opts: {
   return { id, label, note, kind: opts.kind, sourceRef, createdAt: now, sessionCount };
 }
 
+export function createArchiveAndDeleteSessions(opts: {
+  label?: string | null;
+  note?: string | null;
+  kind: ArchiveKind;
+  sourceRef?: string | null;
+  sessionIds: string[];
+}): ProjectArchive | undefined {
+  const snapshots = snapshotSessions(opts.sessionIds);
+  if (snapshots.length === 0) return undefined;
+
+  const db = initDb();
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  const label = normalizeArchiveText(opts.label);
+  const note = normalizeArchiveText(opts.note);
+  const sourceRef = normalizeArchiveText(opts.sourceRef);
+  const sessionCount = snapshots.length;
+  const archive = { id, label, note, kind: opts.kind, sourceRef, createdAt: now, sessionCount };
+  const ids = snapshots.map((snapshot) => snapshot.id);
+  const placeholders = ids.map(() => '?').join(',');
+
+  const txn = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO archives (id, label, note, kind, source_ref, created_at, session_count, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      label,
+      note,
+      opts.kind,
+      sourceRef,
+      now,
+      sessionCount,
+      JSON.stringify({ sessions: snapshots }),
+    );
+
+    const sessionKeys = db.prepare(
+      `SELECT session_key as sessionKey FROM sessions WHERE id IN (${placeholders})`,
+    ).all(...ids) as Array<{ sessionKey: string | null }>;
+    const liveSessionKeys = sessionKeys
+      .map((row) => row.sessionKey)
+      .filter((sessionKey): sessionKey is string => Boolean(sessionKey));
+
+    db.prepare(`DELETE FROM messages WHERE session_id IN (${placeholders})`).run(...ids);
+    db.prepare(`DELETE FROM queue_items WHERE session_id IN (${placeholders})`).run(...ids);
+    if (liveSessionKeys.length > 0) {
+      const keyPlaceholders = liveSessionKeys.map(() => '?').join(',');
+      db.prepare(`DELETE FROM queue_pauses WHERE session_key IN (${keyPlaceholders})`)
+        .run(...liveSessionKeys);
+    }
+    db.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...ids);
+  });
+
+  txn();
+  return archive;
+}
+
 export function listArchives(): ProjectArchive[] {
   const db = initDb();
   const rows = db
