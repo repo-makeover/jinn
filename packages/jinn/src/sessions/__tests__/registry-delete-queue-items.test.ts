@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,12 +16,28 @@ beforeAll(async () => {
   reg.initDb();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 function queueRowCount(sessionId: string): number {
   const db = reg.initDb();
   const row = db
     .prepare("SELECT COUNT(*) as count FROM queue_items WHERE session_id = ?")
     .get(sessionId) as { count: number };
   return row.count;
+}
+
+function messageRowCount(sessionId: string): number {
+  const db = reg.initDb();
+  const row = db
+    .prepare("SELECT COUNT(*) as count FROM messages WHERE session_id = ?")
+    .get(sessionId) as { count: number };
+  return row.count;
+}
+
+function sessionExists(sessionId: string): boolean {
+  return Boolean(reg.getSession(sessionId));
 }
 
 describe("deleteSession/deleteSessions queue_items cleanup", () => {
@@ -43,5 +59,29 @@ describe("deleteSession/deleteSessions queue_items cleanup", () => {
     expect(reg.deleteSessions([a.id, b.id])).toBe(2);
     expect(queueRowCount(a.id)).toBe(0);
     expect(queueRowCount(b.id)).toBe(0);
+  });
+
+  it("deleteSession rolls back if a child-table delete fails mid-transaction", () => {
+    const session = reg.createSession({ engine: "claude", source: "web", sourceRef: "web:delq-rollback" });
+    reg.insertMessage(session.id, "user", "keep me");
+    reg.enqueueQueueItem(session.id, session.sessionKey, "queued prompt");
+
+    expect(sessionExists(session.id)).toBe(true);
+    expect(messageRowCount(session.id)).toBe(1);
+    expect(queueRowCount(session.id)).toBe(1);
+
+    const db = reg.initDb();
+    const originalPrepare = db.prepare.bind(db);
+    vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (sql === "DELETE FROM queue_items WHERE session_id = ?") {
+        throw new Error("injected queue delete failure");
+      }
+      return originalPrepare(sql);
+    });
+
+    expect(() => reg.deleteSession(session.id)).toThrow(/injected queue delete failure/);
+    expect(sessionExists(session.id)).toBe(true);
+    expect(messageRowCount(session.id)).toBe(1);
+    expect(queueRowCount(session.id)).toBe(1);
   });
 });

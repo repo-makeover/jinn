@@ -1054,13 +1054,17 @@ export function duplicateSession(sourceId: string, newTitle?: string): { session
 export function deleteSession(id: string): boolean {
   const db = initDb();
   const session = getSession(id);
-  db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
-  db.prepare('DELETE FROM queue_items WHERE session_id = ?').run(id);
-  if (session?.sessionKey) {
-    db.prepare('DELETE FROM queue_pauses WHERE session_key = ?').run(session.sessionKey);
-  }
-  const result = db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
-  return result.changes > 0;
+  if (!session) return false;
+  const txn = db.transaction(() => {
+    db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
+    db.prepare('DELETE FROM queue_items WHERE session_id = ?').run(id);
+    if (session.sessionKey) {
+      db.prepare('DELETE FROM queue_pauses WHERE session_key = ?').run(session.sessionKey);
+    }
+    const result = db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+    return result.changes > 0;
+  });
+  return txn();
 }
 
 export function deleteSessions(ids: string[]): number {
