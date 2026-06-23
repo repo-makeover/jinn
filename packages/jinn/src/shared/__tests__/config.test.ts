@@ -63,6 +63,9 @@ describe("validateConfigShape", () => {
         port: 7777,
         host: "127.0.0.1",
         streaming: true,
+        turnStallInactivityMs: 180000,
+        turnStallCeilingMs: 2700000,
+        turnStallRetries: 1,
         fileReadRoots: ["/tmp"],
         allowArbitraryFileRead: false,
         exposeResolvedFilePaths: false,
@@ -99,6 +102,9 @@ describe("validateConfigShape", () => {
 
     problems = validateConfigShape({ gateway: { userHeader: [123] }, engines: { claude: {} } });
     expect(problems.some((p) => p.includes("gateway.userHeader"))).toBe(true);
+
+    problems = validateConfigShape({ gateway: { turnStallRetries: "1" }, engines: { claude: {} } });
+    expect(problems.some((p) => p.includes("gateway.turnStallRetries"))).toBe(true);
   });
 
   it("rejects missing engines / engines.claude", () => {

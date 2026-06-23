@@ -699,6 +699,12 @@ export interface JinnConfig {
     port: number;
     host: string;
     streaming?: boolean;
+    /** No-output watchdog: interrupt a turn after this many idle ms. Default 180000. */
+    turnStallInactivityMs?: number;
+    /** Absolute per-turn watchdog ceiling in ms. Default 2700000. */
+    turnStallCeilingMs?: number;
+    /** Same-engine retries after a stall before model fallback/escalation. Default 1. */
+    turnStallRetries?: number;
     /** Opt-in unsafe local convenience: allow POST /api/files to write a custom managed path. Default false. */
     allowFileCustomPaths?: boolean;
     /** Opt-in unsafe local convenience: allow POST /api/files {open:true} to open uploaded files. Default false. */

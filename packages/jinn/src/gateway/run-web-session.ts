@@ -30,6 +30,35 @@ import { deliverConnectorReply } from "./connector-reply.js";
 import { isTurnSuperseded, clearSupersededTurnMeta } from "./session-turn-state.js";
 import type { ApiContext } from "./api.js";
 
+export interface TurnStallWatchdogConfig {
+  tickMs: number;
+  inactivityMs: number;
+  hardCeilingMs: number;
+  maxRetries: number;
+}
+
+function positiveNumberOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && value > 0 ? value : fallback;
+}
+
+export function resolveTurnStallWatchdogConfig(config: JinnConfig): TurnStallWatchdogConfig {
+  const STALL_TICK_MS = 30_000;
+  const gatewayConfig = config.gateway ?? {};
+  return {
+    tickMs: STALL_TICK_MS,
+    inactivityMs: positiveNumberOr(gatewayConfig.turnStallInactivityMs, 3 * 60_000),
+    hardCeilingMs: positiveNumberOr(gatewayConfig.turnStallCeilingMs, 45 * 60_000),
+    maxRetries:
+      typeof gatewayConfig.turnStallRetries === "number" && gatewayConfig.turnStallRetries >= 0
+        ? Math.floor(gatewayConfig.turnStallRetries)
+        : 1,
+  };
+}
+
+export function shouldRetrySameEngineAfterStall(stallAttempt: number, maxRetries: number): boolean {
+  return stallAttempt < maxRetries;
+}
+
 /**
  * Web/queue session execution orchestrator.
  *
@@ -167,15 +196,10 @@ export async function runWebSession(
     // we interrupt it. The first stall is retried in place (bounded); once retries
     // are exhausted the caller escalates to the parent instead of stranding a
     // half-dead turn for a human to find.
-    const STALL_TICK_MS = 30_000;
-    const gwCfg = (config as unknown as { gateway?: Record<string, unknown> }).gateway ?? {};
-    const posNum = (v: unknown, fallback: number) => (typeof v === "number" && v > 0 ? v : fallback);
-    const stallInactivityMs = posNum(gwCfg.turnStallInactivityMs, 8 * 60_000);
-    const stallHardCeilingMs = posNum(gwCfg.turnStallCeilingMs, 45 * 60_000);
-    const maxStallRetries =
-      typeof gwCfg.turnStallRetries === "number" && gwCfg.turnStallRetries >= 0
-        ? Math.floor(gwCfg.turnStallRetries)
-        : 1;
+    const stallPolicy = resolveTurnStallWatchdogConfig(config);
+    const stallInactivityMs = stallPolicy.inactivityMs;
+    const stallHardCeilingMs = stallPolicy.hardCeilingMs;
+    const maxStallRetries = stallPolicy.maxRetries;
     const killer = isInterruptibleEngine(engine) ? engine : null;
     const canKill = !!killer; // only engines we can interrupt get a watchdog
     let lastStreamAt = Date.now();
@@ -189,7 +213,7 @@ export async function runWebSession(
     // Bounded by `sessions.maxModelEscalations` plus the tried-rungs set; the ladder
     // is overridable via `sessions.modelLadder`.
     const sessCfg = (config as unknown as { sessions?: Record<string, unknown> }).sessions ?? {};
-    const maxEscalations = posNum(sessCfg.maxModelEscalations, 2);
+    const maxEscalations = positiveNumberOr(sessCfg.maxModelEscalations, 2);
     const customLadder = Array.isArray(sessCfg.modelLadder)
       ? (sessCfg.modelLadder as import("../shared/model-escalation.js").ModelLadder)
       : undefined;
@@ -412,13 +436,13 @@ export async function runWebSession(
               clearInterval(stallWatchdog!);
               logger.warn(
                 `[watchdog] web session ${currentSession.id} (${currentSession.engine}) stalled: ${stalledReason} ` +
-                  `— interrupting${stallAttempt < maxStallRetries ? " and retrying" : ""}`,
+                  `— interrupting${shouldRetrySameEngineAfterStall(stallAttempt, maxStallRetries) ? " and retrying" : ""}`,
               );
               // Interrupted-prefixed reason so the engine settles the run promise;
               // the stalledReason flag (not this text) is what routes escalation.
               killer?.kill(currentSession.id, `Interrupted: stalled — ${stalledReason}`);
             }
-          }, STALL_TICK_MS)
+          }, stallPolicy.tickMs)
         : null;
       try {
       result = await engine.run({
@@ -528,7 +552,7 @@ export async function runWebSession(
       } finally {
         if (stallWatchdog) clearInterval(stallWatchdog);
       }
-      if (!stallKilled || stallAttempt >= maxStallRetries) break;
+      if (!stallKilled || !shouldRetrySameEngineAfterStall(stallAttempt, maxStallRetries)) break;
       // Bounded auto-recovery (#3): the slice stalled and retries remain. Drop the
       // killed attempt's partial rows and re-run the same turn in place. Only after
       // the budget is spent do we fall through to the escalation branch below.

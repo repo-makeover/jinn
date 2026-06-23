@@ -89,6 +89,9 @@ export function validateConfigShape(config: unknown): string[] {
         "port",
         "host",
         "streaming",
+        "turnStallInactivityMs",
+        "turnStallCeilingMs",
+        "turnStallRetries",
         "allowFileCustomPaths",
         "allowFileOpen",
         "fileReadRoots",
@@ -108,6 +111,15 @@ export function validateConfigShape(config: unknown): string[] {
       }
       if (c.gateway.streaming !== undefined && typeof c.gateway.streaming !== "boolean") {
         problems.push(`gateway.streaming must be a boolean (got ${typeof c.gateway.streaming})`);
+      }
+      if (c.gateway.turnStallInactivityMs !== undefined && typeof c.gateway.turnStallInactivityMs !== "number") {
+        problems.push(`gateway.turnStallInactivityMs must be a number (got ${typeof c.gateway.turnStallInactivityMs})`);
+      }
+      if (c.gateway.turnStallCeilingMs !== undefined && typeof c.gateway.turnStallCeilingMs !== "number") {
+        problems.push(`gateway.turnStallCeilingMs must be a number (got ${typeof c.gateway.turnStallCeilingMs})`);
+      }
+      if (c.gateway.turnStallRetries !== undefined && typeof c.gateway.turnStallRetries !== "number") {
+        problems.push(`gateway.turnStallRetries must be a number (got ${typeof c.gateway.turnStallRetries})`);
       }
       if (c.gateway.allowFileCustomPaths !== undefined && typeof c.gateway.allowFileCustomPaths !== "boolean") {
         problems.push(`gateway.allowFileCustomPaths must be a boolean (got ${typeof c.gateway.allowFileCustomPaths})`);
