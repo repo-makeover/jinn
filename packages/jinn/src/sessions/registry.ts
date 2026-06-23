@@ -218,6 +218,12 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_queue_session
       ON queue_items (session_key, status, position);
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS queue_pauses (
+      session_key TEXT PRIMARY KEY,
+      paused_at TEXT NOT NULL
+    );
+  `);
   db.exec(CREATE_FILES_TABLE);
   db.exec(CREATE_ARCHIVES_TABLE);
   db.exec(CREATE_ARCHIVES_CREATED_INDEX);
@@ -1047,8 +1053,12 @@ export function duplicateSession(sourceId: string, newTitle?: string): { session
 
 export function deleteSession(id: string): boolean {
   const db = initDb();
+  const session = getSession(id);
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
   db.prepare('DELETE FROM queue_items WHERE session_id = ?').run(id);
+  if (session?.sessionKey) {
+    db.prepare('DELETE FROM queue_pauses WHERE session_key = ?').run(session.sessionKey);
+  }
   const result = db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
   return result.changes > 0;
 }
@@ -1058,8 +1068,16 @@ export function deleteSessions(ids: string[]): number {
   const db = initDb();
   const placeholders = ids.map(() => '?').join(',');
   const txn = db.transaction(() => {
+    const sessionKeys = db.prepare(
+      `SELECT session_key as sessionKey FROM sessions WHERE id IN (${placeholders})`
+    ).all(...ids) as Array<{ sessionKey: string }>;
     db.prepare(`DELETE FROM messages WHERE session_id IN (${placeholders})`).run(...ids);
     db.prepare(`DELETE FROM queue_items WHERE session_id IN (${placeholders})`).run(...ids);
+    if (sessionKeys.length > 0) {
+      const keyPlaceholders = sessionKeys.map(() => '?').join(',');
+      db.prepare(`DELETE FROM queue_pauses WHERE session_key IN (${keyPlaceholders})`)
+        .run(...sessionKeys.map((row) => row.sessionKey));
+    }
     const result = db.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...ids);
     return result.changes;
   });
@@ -1355,6 +1373,25 @@ export function cancelAllPendingQueueItems(sessionKey: string): number {
     "UPDATE queue_items SET status = 'cancelled' WHERE session_key = ? AND status = 'pending'"
   ).run(sessionKey);
   return result.changes;
+}
+
+export function pauseQueueKey(sessionKey: string): void {
+  const db = initDb();
+  db.prepare(
+    "INSERT OR REPLACE INTO queue_pauses (session_key, paused_at) VALUES (?, ?)"
+  ).run(sessionKey, new Date().toISOString());
+}
+
+export function resumeQueueKey(sessionKey: string): void {
+  const db = initDb();
+  db.prepare("DELETE FROM queue_pauses WHERE session_key = ?").run(sessionKey);
+}
+
+export function listPausedQueueKeys(): string[] {
+  const db = initDb();
+  return db.prepare("SELECT session_key as sessionKey FROM queue_pauses ORDER BY paused_at ASC")
+    .all()
+    .map((row) => (row as { sessionKey: string }).sessionKey);
 }
 
 export function recoverStaleQueueItems(): number {

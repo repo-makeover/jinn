@@ -4,11 +4,20 @@ import { SessionQueue } from "../queue.js";
 // markQueueItemRunning/Completed touch the registry DB — stub them out
 vi.mock("../registry.js", () => ({
   getQueueItem: vi.fn(() => ({ status: "pending" })),
+  listPausedQueueKeys: vi.fn(() => []),
   markQueueItemRunning: vi.fn(),
   markQueueItemCompleted: vi.fn(),
+  pauseQueueKey: vi.fn(),
+  resumeQueueKey: vi.fn(),
 }));
 
-import { getQueueItem, markQueueItemRunning, markQueueItemCompleted } from "../registry.js";
+import {
+  getQueueItem,
+  markQueueItemCompleted,
+  markQueueItemRunning,
+  pauseQueueKey,
+  resumeQueueKey,
+} from "../registry.js";
 
 const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -30,6 +39,8 @@ describe("SessionQueue pause/resume", () => {
     queue.resumeQueue(key);
     await task;
     expect(ran).toBe(true);
+    expect(pauseQueueKey).toHaveBeenCalledWith(key);
+    expect(resumeQueueKey).toHaveBeenCalledWith(key);
     // Event-based wakeup: must not wait out a polling interval after resume.
     expect(Date.now() - resumedAt).toBeLessThan(400);
   });

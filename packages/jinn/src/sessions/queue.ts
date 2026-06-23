@@ -1,4 +1,11 @@
-import { getQueueItem, markQueueItemRunning, markQueueItemCompleted } from "./registry.js";
+import {
+  getQueueItem,
+  listPausedQueueKeys,
+  markQueueItemCompleted,
+  markQueueItemRunning,
+  pauseQueueKey,
+  resumeQueueKey,
+} from "./registry.js";
 
 export class SessionQueue {
   private queues = new Map<string, Promise<void>>();
@@ -12,6 +19,10 @@ export class SessionQueue {
   private paused = new Set<string>();
   /** Resolvers for tasks blocked on a paused session key, woken on resume. */
   private pauseWaiters = new Map<string, Array<() => void>>();
+
+  constructor() {
+    this.paused = new Set(listPausedQueueKeys());
+  }
 
   /**
    * Check if a session is currently running.
@@ -52,10 +63,12 @@ export class SessionQueue {
 
   pauseQueue(sessionKey: string): void {
     this.paused.add(sessionKey);
+    pauseQueueKey(sessionKey);
   }
 
   resumeQueue(sessionKey: string): void {
     this.paused.delete(sessionKey);
+    resumeQueueKey(sessionKey);
     const waiters = this.pauseWaiters.get(sessionKey);
     if (waiters) {
       this.pauseWaiters.delete(sessionKey);

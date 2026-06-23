@@ -63,6 +63,7 @@ export function resumePendingWebQueueItems(context: ApiContext): void {
     let session = existingSession;
     if (session.source !== "web") continue;
     session = maybeRevertEngineOverride(session);
+    if (context.sessionManager.getQueue().isPaused(item.sessionKey)) continue;
 
     const config = context.getConfig();
     const engine = context.sessionManager.getEngine(session.engine);
