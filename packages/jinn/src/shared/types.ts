@@ -728,7 +728,7 @@ export interface JinnConfig {
     userHeader?: string | string[];
   };
   engines: {
-    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro";
+    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro" | "hermes";
     claude: {
       bin: string;
       model: string;
@@ -754,6 +754,8 @@ export interface JinnConfig {
       /** UTC day-of-month when the local Kiro estimate resets. Default 1. */
       billingAnchorDay?: number;
     };
+    /** Hermes (`hermes` CLI) engine. `bin` optional — PATH-resolved. No effort. */
+    hermes?: { bin?: string; model?: string };
   };
   /** Optional model + capability registry. When absent, synthesized from engines.<name>.model. */
   models?: ModelsConfig;

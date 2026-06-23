@@ -37,3 +37,6 @@ governance/logs/doc_drift_registry.json
 !.agents/skills/showcase-video-capture/
 !.claude/skills/release-jinn-cli/
 !.claude/skills/showcase-video-capture/
+
+# Superpowers SDD scratch (briefs, reports, ledger, diffs)
+.superpowers/

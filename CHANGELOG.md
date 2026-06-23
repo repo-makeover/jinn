@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.22.0] - 2026-06-23
+
+> Hermes joins the engine lineup, and the README is rebuilt to actually sell what Jinn is.
+
+### ✨ Features
+- **Hermes engine (NousResearch).** Jinn now drives the `hermes` CLI as a first-class, version- and path-agnostic engine with real token streaming. Chat Mode runs a warm per-session `hermes acp` process over the Agent Client Protocol (ndjson JSON-RPC), with live model discovery, resume, and full auto-approve; CLI Mode exposes the `hermes` TUI as a live terminal view. Like every engine, it appears only when its binary is on your `PATH`. Hermes is metered (pay-per-token on the provider configured in `~/.hermes`); see `docs/engines-hermes.md`.
+
+### 🪄 Docs
+- **Value-first README.** Rewritten to lead with what Jinn is and does — an orchestration layer that runs any agent CLI as a company of AI employees — with a corrected quickstart, an all-six-engines table, a persona example, and fresh dashboard screenshots (org map, kanban, chat). Removed the competitor comparison in favor of the value story.
+
 ## [Unreleased]
 
 ### 💥 Breaking

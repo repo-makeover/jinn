@@ -5,7 +5,7 @@ import path from "node:path";
 import yaml from "js-yaml";
 import type { CronJob, Engine, IncomingMessage, JinnConfig, JsonObject, Session, Target } from "../shared/types.js";
 import { isInterruptibleEngine } from "../shared/types.js";
-import { getModelRegistry, invalidateModelRegistry, refreshGrokModels, refreshPiModels } from "../shared/models.js";
+import { getModelRegistry, invalidateModelRegistry, refreshGrokModels, refreshPiModels, refreshHermesModels } from "../shared/models.js";
 import { applyEmployeeSessionDefaults, validateNewSessionSelection, validateSessionPatch, validateCwd } from "../sessions/session-patch.js";
 import { getApproval, listApprovals, resolveApproval } from "./approvals.js";
 import { listDirectory, FsBrowseError } from "./fs-browse.js";
@@ -1251,6 +1251,7 @@ export async function handleApiRequest(
       const config = context.getConfig();
       await refreshPiModels(config);
       await refreshGrokModels(config);
+      await refreshHermesModels(config);
       context.emit("engines:updated", {});
       return json(res, { default: config.engines.default, engines: getModelRegistry(config) });
     }
