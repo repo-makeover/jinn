@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 
 /**
  * Route-level tests for two hardened GET handlers in ../api.ts:
@@ -80,12 +81,15 @@ function makeRes(): CapturedRes {
   };
 }
 
-function makeReq(method: string, urlPath: string) {
-  return {
+function makeReq(method: string, urlPath: string, body?: unknown) {
+  const req = body === undefined
+    ? Readable.from([])
+    : Readable.from([Buffer.from(JSON.stringify(body))]);
+  return Object.assign(req, {
     method,
     url: urlPath,
     headers: { host: "localhost" },
-  } as unknown as Parameters<typeof handleApiRequest>[0];
+  }) as unknown as Parameters<typeof handleApiRequest>[0];
 }
 
 // Minimal context — the target routes return before reading these fields.
@@ -187,6 +191,50 @@ describe("GET /api/org/departments/:name/board — corrupt board.json", () => {
       deletedTickets: [],
       retentionDays: 3,
     });
+  });
+});
+
+describe("PUT /api/org/departments/:name/board — assignee department boundary", () => {
+  it("rejects a ticket assigned to an employee from another department", async () => {
+    const softwareDir = path.join(orgDir, "software-delivery");
+    const researchDir = path.join(orgDir, "research");
+    fs.mkdirSync(softwareDir, { recursive: true });
+    fs.mkdirSync(researchDir, { recursive: true });
+    fs.writeFileSync(path.join(softwareDir, "board.json"), JSON.stringify([]));
+    fs.writeFileSync(path.join(researchDir, "researcher.yaml"), [
+      "name: researcher",
+      "displayName: Researcher",
+      "department: research",
+      "rank: employee",
+      "engine: claude",
+      "model: opus",
+      "persona: researcher",
+    ].join("\n"));
+
+    const cap = makeRes();
+    await handleApiRequest(
+      makeReq("PUT", "/api/org/departments/software-delivery/board", {
+        tickets: [{
+          id: "ticket-foreign",
+          title: "Wrong board",
+          description: "",
+          status: "todo",
+          priority: "medium",
+          complexity: "medium",
+          assignee: "researcher",
+          createdAt: "2026-06-22T00:00:00.000Z",
+          updatedAt: "2026-06-22T00:00:00.000Z",
+        }],
+      }),
+      cap.res,
+      ctx,
+    );
+
+    expect(cap.status).toBe(400);
+    expect(cap.body).toMatchObject({
+      error: expect.stringContaining("belongs to department"),
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(softwareDir, "board.json"), "utf-8"))).toEqual([]);
   });
 });
 

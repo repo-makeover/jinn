@@ -60,6 +60,7 @@ import { supersedeRunningTurn } from "./session-turn-state.js";
 import { createPtyAccessToken } from "./auth.js";
 import { defaultBoardState, readBoardArray, readBoardState, writeMergedBoard } from "./board-service.js";
 import { dispatchTicket } from "./ticket-dispatch.js";
+import { findEmployee, scanOrg } from "./org.js";
 import {
   resolveBestSessionForTicket,
   resolveTicketSessionFailureReason,
@@ -75,6 +76,25 @@ const TICKET_SESSION_TAIL_LIMIT = 8;
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
 const SESSION_LIST_PER_GROUP = 50;
 type ResWithEncoding = ServerResponse & { __acceptEncoding?: string };
+
+function validateBoardAssigneesForDepartment(department: string, payload: unknown): string | null {
+  const tickets = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object" && !Array.isArray(payload) && Array.isArray((payload as { tickets?: unknown }).tickets)
+      ? (payload as { tickets: unknown[] }).tickets
+      : [];
+  const registry = scanOrg();
+  for (const ticket of tickets) {
+    if (!ticket || typeof ticket !== "object") continue;
+    const assignee = (ticket as { assignee?: unknown }).assignee;
+    if (typeof assignee !== "string" || !assignee.trim()) continue;
+    const employee = findEmployee(assignee.trim(), registry);
+    if (employee && employee.department !== department) {
+      return `assignee "${employee.name}" belongs to department "${employee.department}", not "${department}"`;
+    }
+  }
+  return null;
+}
 
 /**
  * GET /api/skills description cache, keyed by skill dir name and invalidated
@@ -1085,6 +1105,7 @@ export async function handleApiRequest(
       );
       if (!result.ok) {
         if (result.reason === "no-assignee") return json(res, { reason: result.reason, error: "Assign someone first." }, 400);
+        if (result.reason === "foreign-department-assignee") return json(res, { reason: result.reason, error: "Assignee does not belong to this department." }, 400);
         if (result.reason === "already-running") return json(res, { reason: result.reason, error: "Ticket already has a running session." }, 409);
         if (result.reason === "not-found") return notFound(res);
         return json(res, { reason: result.reason, error: result.reason }, 404);
@@ -1100,6 +1121,8 @@ export async function handleApiRequest(
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
       try {
+        const assigneeError = validateBoardAssigneesForDepartment(p.name, _parsed.body);
+        if (assigneeError) return badRequest(res, assigneeError);
         writeMergedBoard(ORG_DIR, p.name, _parsed.body);
       } catch (err) {
         logger.warn(`PUT /api/org/departments/${p.name}/board failed: ${err instanceof Error ? err.message : String(err)}`);

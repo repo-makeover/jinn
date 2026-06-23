@@ -97,4 +97,59 @@ describe("POST /api/org/departments/:name/tickets/:id/dispatch", () => {
     expect(cap.status).toBe(400);
     expect(cap.body).toMatchObject({ reason: "no-assignee" });
   }, 15_000);
+
+  it("rejects a ticket assigned to an employee from another department without creating a session", async () => {
+    const softwareDir = path.join(tmpHome, "org", "software-delivery");
+    const researchDir = path.join(tmpHome, "org", "research");
+    fs.mkdirSync(softwareDir, { recursive: true });
+    fs.mkdirSync(researchDir, { recursive: true });
+    fs.writeFileSync(path.join(researchDir, "researcher.yaml"), [
+      "name: researcher",
+      "displayName: Researcher",
+      "department: research",
+      "rank: employee",
+      "engine: claude",
+      "model: opus",
+      "persona: researcher",
+    ].join("\n"));
+    fs.writeFileSync(path.join(softwareDir, "board.json"), JSON.stringify([
+      {
+        id: "ticket-foreign",
+        title: "Run me elsewhere",
+        description: "Wrong department",
+        status: "todo",
+        priority: "medium",
+        complexity: "medium",
+        assignee: "researcher",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+      },
+    ]));
+
+    const api = await import("../api.js");
+    const registry = await import("../../sessions/registry.js");
+    const cap = makeRes();
+    const ctx = {
+      getConfig: () => ({ gateway: {}, engines: { default: "claude", claude: { bin: "claude", model: "opus" } } }),
+      connectors: new Map(),
+      startTime: Date.now(),
+      emit: vi.fn(),
+      sessionManager: {
+        getEngine: () => {
+          throw new Error("engine should not be resolved for rejected dispatch");
+        },
+        getQueue: () => ({ enqueue: vi.fn(), getPendingCount: () => 0, getTransportState: (_key: string, status: string) => status }),
+      },
+    } as any;
+
+    await api.handleApiRequest(
+      makeReq("POST", "/api/org/departments/software-delivery/tickets/ticket-foreign/dispatch"),
+      cap.res,
+      ctx,
+    );
+
+    expect(cap.status).toBe(400);
+    expect(cap.body).toMatchObject({ reason: "foreign-department-assignee" });
+    expect(registry.listSessions()).toHaveLength(0);
+  }, 15_000);
 });

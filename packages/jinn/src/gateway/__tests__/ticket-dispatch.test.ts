@@ -61,4 +61,13 @@ describe("ticket dispatch resolution", () => {
       reason: "no-assignee",
     });
   });
+
+  it("rejects manual dispatch to an employee from another department", () => {
+    const registry = new Map<string, Employee>([
+      ["worker", employee({ name: "worker", department: "research" })],
+    ]);
+    expect(resolveDispatchEmployee("software-delivery", ticket(), registry, false)).toEqual({
+      reason: "foreign-department-assignee",
+    });
+  });
 });

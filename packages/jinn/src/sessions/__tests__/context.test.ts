@@ -322,6 +322,32 @@ describe("buildContext — audience scoping", () => {
     expect(out).toContain("Delegate to another employee");
   });
 
+  it("SECONDARY-parent supervisor (reportsTo[1]) still gets the delegation mini-ref", () => {
+    // A reviewer can name two implementers as parents; only the first becomes its
+    // tree parentName/directReports. The secondary parent must still be delegate-capable
+    // or it can't spawn/read the reviewer it owns.
+    const primary: Employee = { ...minimalEmployee, name: "impl-a", displayName: "Impl A", rank: "senior" };
+    const secondary: Employee = { ...minimalEmployee, name: "impl-b", displayName: "Impl B", rank: "senior" };
+    const reviewer: Employee = {
+      ...minimalEmployee,
+      name: "rev",
+      displayName: "Reviewer",
+      rank: "employee",
+      reportsTo: ["impl-a", "impl-b"],
+    };
+    const h = {
+      nodes: {
+        "impl-a": { employee: primary, parentName: null, directReports: ["rev"], depth: 0, chain: [] },
+        "impl-b": { employee: secondary, parentName: null, directReports: [], depth: 0, chain: [] },
+        rev: { employee: reviewer, parentName: "impl-a", directReports: [], depth: 1, chain: ["impl-a"] },
+      },
+      sorted: ["impl-a", "impl-b", "rev"],
+    } as any;
+    // Primary parent already had it via directReports; the secondary is the regression.
+    const out = buildContext({ ...baseOpts, employee: secondary, hierarchy: h });
+    expect(out).toContain("Delegate to another employee");
+  });
+
   it("chain of command carries slugs for delegation", () => {
     const out = buildContext({ ...baseOpts, employee: minimalEmployee, hierarchy });
     expect(out).toContain("`writer`"); // direct report slug

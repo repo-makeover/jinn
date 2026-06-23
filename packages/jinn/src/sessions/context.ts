@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Employee, JinnConfig } from "../shared/types.js";
 import { JINN_HOME, ORG_DIR, CRON_JOBS, DOCS_DIR } from "../shared/paths.js";
+import { getAllParents } from "../gateway/org-hierarchy.js";
 
 /**
  * Token budget strategy:
@@ -275,10 +276,25 @@ export function buildContext(opts: {
   // ── STANDARD: Gateway API reference (audience-scoped; full table in CLAUDE.md) ──
   if (!noToolEmployee) {
     const employeeNode = opts.employee ? opts.hierarchy?.nodes[opts.employee.name] : undefined;
+    // Count everyone this employee supervises: primary-parent direct reports
+    // (resolved tree edges, == directReports) UNION anyone who names this employee
+    // as a SECONDARY parent in reportsTo. A reviewer may list two implementers as
+    // parents (e.g. haiku-adversarial-reviewer ->
+    // [code-implementer, codex-standard-implementer]); only the primary shows up in
+    // directReports, so the secondary parent would otherwise miss the delegation
+    // endpoints and improvise a raw CLI spawn with no return path. Falls back to
+    // directReports when the hierarchy is unavailable.
+    const me = opts.employee?.name;
+    const supervisesCount =
+      me && opts.hierarchy
+        ? Object.values(opts.hierarchy.nodes).filter(
+            (n) => n.parentName === me || getAllParents(n.employee.reportsTo).includes(me),
+          ).length
+        : (employeeNode?.directReports?.length ?? 0);
     sections.push({
       tier: Tier.STANDARD,
       marker: `## ${portalName} Gateway API`,
-      content: buildApiReference(gatewayUrl, portalName, opts.employee, employeeNode?.directReports?.length ?? 0),
+      content: buildApiReference(gatewayUrl, portalName, opts.employee, supervisesCount),
       summary: `## ${portalName} Gateway API (${gatewayUrl})\nFull endpoint reference: CLAUDE.md / AGENTS.md.`,
     });
   }
@@ -727,7 +743,10 @@ function buildApiReference(gatewayUrl: string, portalName: string, employee?: Em
   if (!employee) {
     return `${header}\nThe full endpoint reference is in CLAUDE.md / AGENTS.md (auto-loaded). Substitute the base URL above.\n${attachmentsLine}`;
   }
-  // Anyone who manages reports needs the delegation endpoints — rank alone undercounts (seniors can have reportsTo'd reports).
+  // Anyone who supervises reports needs the delegation endpoints. The caller
+  // passes a count of ALL reportsTo edges (primary + secondary), so a reviewer's
+  // secondary-parent implementer is delegate-capable too — rank alone undercounts
+  // (seniors, and even employees, can be a reviewer's reportsTo target).
   if (employee.rank === "manager" || employee.rank === "executive" || directReportCount > 0) {
     return [
       header,

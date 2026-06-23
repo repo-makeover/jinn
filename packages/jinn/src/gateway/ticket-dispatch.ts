@@ -10,6 +10,7 @@ export type DispatchTicketFailureReason =
   | "no-assignee"
   | "not-found"
   | "unknown-employee"
+  | "foreign-department-assignee"
   | "no-manager"
   | "already-running";
 
@@ -55,6 +56,7 @@ export function resolveDispatchEmployee(
   if (!assignee) return { reason: "no-assignee" };
   const employee = findEmployee(assignee, registry);
   if (!employee) return { reason: "unknown-employee" };
+  if (employee.department !== department) return { reason: "foreign-department-assignee" };
   return { employee };
 }
 
