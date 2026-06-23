@@ -1,5 +1,5 @@
-import { createSession, getSession, updateSession } from "../sessions/registry.js";
-import type { Employee } from "../shared/types.js";
+import { createSession, getSession, getSessionBySessionKey, updateSession } from "../sessions/registry.js";
+import type { Employee, JsonObject, Session } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { dispatchWebSessionRun } from "./api/session-dispatch.js";
 import { findEmployee, scanOrg } from "./org.js";
@@ -27,6 +27,44 @@ export interface DispatchTicketDeps {
 export interface DispatchTicketOptions {
   source: string;
   routeToManager: boolean;
+}
+
+type BoardDispatchState = "session_created" | "board_linked";
+
+function boardDispatchMeta(session: Session): Record<string, unknown> {
+  const meta = session.transportMeta;
+  return meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {};
+}
+
+function withBoardDispatchState(
+  session: Session,
+  state: BoardDispatchState,
+): JsonObject {
+  return {
+    ...boardDispatchMeta(session),
+    boardDispatchState: state,
+  };
+}
+
+function isRecoverableBoardDispatchSession(session: Session): boolean {
+  const state = boardDispatchMeta(session).boardDispatchState;
+  return state === "session_created" || state === "board_linked";
+}
+
+function matchesBoardDispatchSession(
+  session: Session,
+  sessionKey: string,
+  source: DispatchTicketOptions["source"],
+  department: string,
+  ticketId: string,
+): boolean {
+  const meta = boardDispatchMeta(session);
+  return (
+    session.sessionKey === sessionKey &&
+    meta.dispatchSource === source &&
+    meta.boardDepartment === department &&
+    meta.boardTicketId === ticketId
+  );
 }
 
 function ticketPrompt(ticket: BoardTicket): string {
@@ -82,9 +120,28 @@ export function dispatchTicket(
   const ticket = getTicket(tickets, ticketId);
   if (!ticket) return { ok: false, reason: "not-found" };
 
+  const sessionKey = `${opts.source}:${department}:${ticketId}`;
+  let reusableSession: Session | undefined;
   if (ticket.sessionId) {
     const existing = getSession(ticket.sessionId);
     if (existing?.status === "running") return { ok: false, reason: "already-running" };
+    if (
+      existing &&
+      ticket.status === "in_progress" &&
+      isRecoverableBoardDispatchSession(existing) &&
+      matchesBoardDispatchSession(existing, sessionKey, opts.source, department, ticketId)
+    ) {
+      reusableSession = existing;
+    }
+  } else {
+    const existing = getSessionBySessionKey(sessionKey);
+    if (
+      existing &&
+      isRecoverableBoardDispatchSession(existing) &&
+      matchesBoardDispatchSession(existing, sessionKey, opts.source, department, ticketId)
+    ) {
+      reusableSession = existing;
+    }
   }
 
   const registry = scanOrg();
@@ -102,16 +159,17 @@ export function dispatchTicket(
   const now = deps.now?.() ?? Date.now();
   const iso = new Date(now).toISOString();
   const prompt = ticketPrompt(ticket);
-  const session = createSession({
+  const session = reusableSession ?? createSession({
     engine: employee.engine,
     source: opts.source,
     sourceRef: `${opts.source}:${department}:${ticketId}:${now}`,
     connector: opts.source,
-    sessionKey: `${opts.source}:${department}:${ticketId}`,
+    sessionKey,
     replyContext: { source: opts.source, department, ticketId },
     transportMeta: {
       boardDepartment: department,
       boardTicketId: ticketId,
+      boardDispatchState: "session_created",
       dispatchSource: opts.source,
       routedToManager: opts.routeToManager,
     },
@@ -123,17 +181,25 @@ export function dispatchTicket(
     promptExcerpt: ticket.title,
   });
 
-  updateSession(session.id, {
-    status: "running",
-    lastActivity: iso,
-    lastError: null,
-  });
-
   ticket.status = "in_progress";
   ticket.sessionId = session.id;
   ticket.assignee = employee.name;
   ticket.updatedAt = iso;
   writeBoardTickets(deps.orgDir, department, tickets);
+
+  const runningSession = updateSession(session.id, {
+    status: "running",
+    lastActivity: iso,
+    lastError: null,
+    transportMeta: withBoardDispatchState(session, "board_linked"),
+  }) ?? {
+    ...session,
+    status: "running" as const,
+    lastActivity: iso,
+    lastError: null,
+    transportMeta: withBoardDispatchState(session, "board_linked"),
+  };
+
   deps.context.emit("board:updated", { department });
   deps.context.emit("ticket:dispatched", {
     department,
@@ -145,7 +211,7 @@ export function dispatchTicket(
   });
 
   dispatchWebSessionRun(
-    { ...session, status: "running", lastActivity: iso, lastError: null },
+    runningSession,
     prompt,
     engine,
     deps.context.getConfig(),
