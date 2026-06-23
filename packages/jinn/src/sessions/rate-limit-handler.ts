@@ -3,10 +3,12 @@
  *
  * Both the connector path (sessions/manager.ts → runSession) and the web path
  * (gateway/api.ts → runWebSession) need to:
- *   1. Detect a Claude usage-limit response.
- *   2. Optionally fall back to a different engine (default: Codex) while Claude resets.
- *   3. Otherwise enter a "waiting" loop: sleep until the reset window, retry on Claude,
- *      keep the session's lastActivity heartbeat fresh, and loop again if still limited.
+ *   1. Detect a usage-limit response.
+ *   2. Optionally fall back to a different engine (default: Codex) while the active
+ *      engine resets.
+ *   3. Otherwise enter a "waiting" loop: sleep until the reset window, retry on the
+ *      active engine, keep the session's lastActivity heartbeat fresh, and loop again
+ *      if still limited.
  *   4. Bail out when the deadline passes without recovery.
  *
  * The state machine, engine invocations, retry math, heartbeat cadence, deadline
@@ -23,12 +25,43 @@ import type { Employee, Engine, EngineResult, JinnConfig, JsonObject, Session, S
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import { resolveEffort } from "../shared/effort.js";
-import { effortLevelsForModel, engineAvailable, type EngineName } from "../shared/models.js";
+import { effortLevelsForModel, engineAvailable, isKnownEngine } from "../shared/models.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit } from "../shared/rateLimit.js";
-import { recordClaudeRateLimit } from "../shared/usageAwareness.js";
+import { recordEngineRateLimit } from "../shared/usage-status.js";
 import { getSession, getMessages, updateSession, patchSessionTransportMeta } from "./registry.js";
 
 const WAIT_CANCEL_POLL_MS = 5000;
+const ENGINE_LABELS: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  antigravity: "Antigravity",
+  grok: "Grok",
+  pi: "Pi",
+};
+
+export function engineLabel(engine: string): string {
+  return ENGINE_LABELS[engine] ?? (engine ? engine.charAt(0).toUpperCase() + engine.slice(1) : "Engine");
+}
+
+export function rateLimitSummary(engine: string): string {
+  return `${engineLabel(engine)} usage limit`;
+}
+
+export function rateLimitFallbackNotice(engine: string, fallbackEngine: string, resumeText: string | null): string {
+  return `⚠️ ${rateLimitSummary(engine)} reached${resumeText ? `. Resets ${resumeText}` : ""}. Switching to ${engineLabel(fallbackEngine)} for now.`;
+}
+
+export function rateLimitWaitingNotice(engine: string, resumeText: string | null): string {
+  return `⏳ ${rateLimitSummary(engine)} reached${resumeText ? `. Resets ${resumeText}` : ""} — I'll continue automatically.`;
+}
+
+export function rateLimitPausedNotice(engine: string, resumeText: string | null): string {
+  return `⏳ Still paused due to ${rateLimitSummary(engine).toLowerCase()}${resumeText ? ` (resets ${resumeText})` : ""}. I queued this message and will respond automatically.`;
+}
+
+export function rateLimitTimeoutError(engine: string): string {
+  return `${rateLimitSummary(engine)} did not clear in time`;
+}
 
 /** What detectRateLimit returned for the original turn. */
 export interface RateLimitInfo {
@@ -45,19 +78,17 @@ export type RateLimitOutcome =
 
 export interface RateLimitHandlerHooks {
   /**
-   * Called once, immediately after detection, before any state changes. Used to
-   * record that Claude is rate-limited globally (usage awareness).
-   *
-   * The default implementation just calls `recordClaudeRateLimit(rateLimit.resetsAt)`.
+   * Called once, immediately after detection, before any state changes. The
+   * default usage-awareness recorder records the active engine.
    * Override only if you need additional bookkeeping.
    */
   onDetected?: (rateLimit: RateLimitInfo) => void;
 
   /**
-   * Called when entering the Codex fallback branch (before the fallback engine runs).
+   * Called when entering the fallback branch (before the fallback engine runs).
    * Use this to: notify the user we're switching engines (UI message, Discord, etc.).
    */
-  onFallbackStart?: (info: { resumeAt: Date | null; until: Date }) => void | Promise<void>;
+  onFallbackStart?: (info: { resumeAt: Date | null; until: Date; originalEngine: string; fallbackName: string }) => void | Promise<void>;
 
   /**
    * Optional stream callback for the fallback engine's run (web emits deltas here).
@@ -133,7 +164,7 @@ export interface RateLimitHandlerOpts {
   engines: Map<string, Engine>;
   /** Optional employee record (for fallback effort + cliFlags). */
   employee?: Employee;
-  /** The Claude engine used for retries — the engine that returned the rate-limited result. */
+  /** The engine used for retries — the engine that returned the rate-limited result. */
   engine: Engine;
   /** Result of detectRateLimit() on the original turn. */
   rateLimit: RateLimitInfo;
@@ -155,99 +186,102 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
     mcpConfigPath, attachments, config, engines, employee, engine,
     rateLimit, originalResult, hooks,
   } = opts;
+  const sourceEngine = session.engine;
 
-  // Always record globally — both call sites did this on every detection.
-  (hooks.onDetected ?? defaultRecord)(rateLimit);
+  if (hooks.onDetected) hooks.onDetected(rateLimit);
+  else recordEngineRateLimit(sourceEngine, rateLimit.resetsAt);
 
   const strategy = config.sessions?.rateLimitStrategy ?? "wait";
 
-  // ── Branch A: Codex fallback ───────────────────────────────────────────────
-  if (session.engine === "claude" && strategy === "fallback") {
+  // ── Branch A: fallback to another configured engine ───────────────────────
+  if (strategy === "fallback") {
     const fallbackName = config.sessions?.fallbackEngine ?? "codex";
-    const fallbackEngine = engines.get(fallbackName);
-    if (fallbackEngine && engineAvailable(config, fallbackName as EngineName)) {
-      const { resumeAt } = computeNextRetryDelayMs(rateLimit.resetsAt);
-      const until = resumeAt ?? new Date(Date.now() + 6 * 60 * 60_000);
-      const syncSince = new Date().toISOString();
+    if (isKnownEngine(fallbackName) && fallbackName !== sourceEngine) {
+      const fallbackEngine = engines.get(fallbackName);
+      const fallbackConfig = (config.engines as unknown as Record<string, { bin?: string; model?: string; effortLevel?: string } | undefined>)[fallbackName];
+      if (fallbackEngine && fallbackConfig && engineAvailable(config, fallbackName)) {
+        const { resumeAt } = computeNextRetryDelayMs(rateLimit.resetsAt);
+        const until = resumeAt ?? new Date(Date.now() + 6 * 60 * 60_000);
+        const syncSince = new Date().toISOString();
 
-      await hooks.onFallbackStart?.({ resumeAt: resumeAt ?? null, until });
+        await hooks.onFallbackStart?.({ resumeAt: resumeAt ?? null, until, originalEngine: sourceEngine, fallbackName });
 
-      const nextMeta = { ...(session.transportMeta || {}) } as Record<string, unknown>;
-      const engineSessionsRaw = nextMeta.engineSessions;
-      const engineSessions = (engineSessionsRaw && typeof engineSessionsRaw === "object" && !Array.isArray(engineSessionsRaw))
-        ? { ...(engineSessionsRaw as Record<string, unknown>) }
-        : {};
-      if (session.engineSessionId) {
-        engineSessions.claude = session.engineSessionId;
+        const nextMeta = { ...(session.transportMeta || {}) } as Record<string, unknown>;
+        const engineSessionsRaw = nextMeta.engineSessions;
+        const engineSessions = (engineSessionsRaw && typeof engineSessionsRaw === "object" && !Array.isArray(engineSessionsRaw))
+          ? { ...(engineSessionsRaw as Record<string, unknown>) }
+          : {};
+        if (session.engineSessionId) {
+          engineSessions[sourceEngine] = session.engineSessionId;
+        }
+        nextMeta.engineSessions = engineSessions;
+        nextMeta.engineOverride = {
+          originalEngine: sourceEngine,
+          originalEngineSessionId: session.engineSessionId,
+          until: until.toISOString(),
+          syncSince,
+        };
+
+        updateSession(session.id, {
+          engine: fallbackName,
+          // Keep the original engine_session_id intact for later restore; the fallback engine will return its own thread id.
+          status: "running",
+          lastActivity: new Date().toISOString(),
+          lastError: resumeAt
+            ? `${rateLimitSummary(sourceEngine)} — using ${engineLabel(fallbackName)} until ${resumeAt.toISOString()}`
+            : `${rateLimitSummary(sourceEngine)} — using ${engineLabel(fallbackName)} temporarily`,
+        });
+        patchSessionTransportMeta(session.id, (current) => ({
+          ...current,
+          engineSessions: engineSessions as JsonObject,
+          engineOverride: nextMeta.engineOverride as JsonObject,
+        }));
+
+        const fallbackEffort = resolveEffort(
+          fallbackConfig,
+          session,
+          employee,
+          effortLevelsForModel(config, fallbackName, fallbackConfig.model),
+        );
+        const fallbackResume = typeof engineSessions[fallbackName] === "string" ? (engineSessions[fallbackName] as string) : undefined;
+        const history = getMessages(session.id)
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => `${m.role.toUpperCase()}: ${m.content}`);
+        const historyText = history.slice(-12).join("\n\n");
+        const fallbackPrompt = fallbackResume
+          ? prompt
+          : `Continue this conversation and respond to the last USER message.\n\nConversation so far:\n\n${historyText}`;
+
+        const fallbackResult = await fallbackEngine.run({
+          prompt: fallbackPrompt,
+          resumeSessionId: fallbackResume,
+          systemPrompt,
+          cwd: session.cwd || JINN_HOME,
+          bin: fallbackConfig.bin,
+          model: fallbackConfig.model,
+          effortLevel: fallbackEffort,
+          cliFlags: employee?.cliFlags ?? cliFlags,
+          attachments: attachments?.length ? attachments : undefined,
+          sessionId: session.id,
+          ...(hooks.onFallbackStream ? { onStream: hooks.onFallbackStream } : {}),
+        });
+
+        // Persist the fallback engine thread id so future fallbacks can resume it.
+        const nextEngineSessions = { ...engineSessions };
+        if (fallbackResult.sessionId) {
+          nextEngineSessions[fallbackName] = fallbackResult.sessionId;
+        }
+        patchSessionTransportMeta(session.id, { engineSessions: nextEngineSessions as any });
+
+        await hooks.onFallbackComplete?.(fallbackResult);
+
+        return { kind: "fallback", result: fallbackResult };
       }
-      nextMeta.engineSessions = engineSessions;
-      nextMeta.engineOverride = {
-        originalEngine: "claude",
-        originalEngineSessionId: session.engineSessionId,
-        until: until.toISOString(),
-        syncSince,
-      };
-
-      updateSession(session.id, {
-        engine: fallbackName,
-        // Keep Claude engine_session_id intact for later restore; Codex will return its own thread id.
-        status: "running",
-        lastActivity: new Date().toISOString(),
-        lastError: resumeAt
-          ? `Claude usage limit — using GPT until ${resumeAt.toISOString()}`
-          : "Claude usage limit — using GPT temporarily",
-      });
-      patchSessionTransportMeta(session.id, (current) => ({
-        ...current,
-        engineSessions: engineSessions as JsonObject,
-        engineOverride: nextMeta.engineOverride as JsonObject,
-      }));
-
-      const fallbackConfig = config.engines.codex;
-      const fallbackEffort = resolveEffort(
-        fallbackConfig,
-        session,
-        employee,
-        effortLevelsForModel(config, fallbackName, fallbackConfig.model),
-      );
-      const codexResume = typeof engineSessions.codex === "string" ? (engineSessions.codex as string) : undefined;
-      const history = getMessages(session.id)
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => `${m.role.toUpperCase()}: ${m.content}`);
-      const historyText = history.slice(-12).join("\n\n");
-      const fallbackPrompt = codexResume
-        ? prompt
-        : `Continue this conversation and respond to the last USER message.\n\nConversation so far:\n\n${historyText}`;
-
-      const fallbackResult = await fallbackEngine.run({
-        prompt: fallbackPrompt,
-        resumeSessionId: codexResume,
-        systemPrompt,
-        cwd: session.cwd || JINN_HOME,
-        bin: fallbackConfig.bin,
-        model: session.model ?? fallbackConfig.model,
-        effortLevel: fallbackEffort,
-        cliFlags: employee?.cliFlags ?? cliFlags,
-        attachments: attachments?.length ? attachments : undefined,
-        sessionId: session.id,
-        ...(hooks.onFallbackStream ? { onStream: hooks.onFallbackStream } : {}),
-      });
-
-      // Persist Codex thread id so future fallbacks can resume it.
-      const nextEngineSessions = { ...engineSessions };
-      if (fallbackResult.sessionId) {
-        nextEngineSessions.codex = fallbackResult.sessionId;
-      }
-      patchSessionTransportMeta(session.id, { engineSessions: nextEngineSessions as any });
-
-      await hooks.onFallbackComplete?.(fallbackResult);
-
-      return { kind: "fallback", result: fallbackResult };
     }
     // No fallback engine available — fall through to wait-and-retry.
   }
 
-  // ── Branch B: wait-and-retry on Claude ─────────────────────────────────────
+  // ── Branch B: wait-and-retry on the active engine ──────────────────────────
   const { delayMs, resumeAt } = computeNextRetryDelayMs(rateLimit.resetsAt);
   const deadlineMs = computeRateLimitDeadlineMs(
     rateLimit.resetsAt,
@@ -255,7 +289,7 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
   );
 
   logger.info(
-    `Session ${session.id} hit Claude usage limit — will auto-retry ${resumeAt ? `at ${resumeAt.toISOString()}` : `in ${Math.round(delayMs / 1000)}s`}`,
+    `Session ${session.id} hit ${rateLimitSummary(sourceEngine).toLowerCase()} — will auto-retry ${resumeAt ? `at ${resumeAt.toISOString()}` : `in ${Math.round(delayMs / 1000)}s`}`,
   );
 
   updateSession(session.id, {
@@ -263,8 +297,8 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
     status: "waiting",
     lastActivity: new Date().toISOString(),
     lastError: resumeAt
-      ? `Claude usage limit — resumes ${resumeAt.toISOString()}`
-      : "Claude usage limit — waiting for reset",
+      ? `${rateLimitSummary(sourceEngine)} — resumes ${resumeAt.toISOString()}`
+      : `${rateLimitSummary(sourceEngine)} — waiting for reset`,
   });
 
   await hooks.onWaitingStart?.({ resumeAt: resumeAt ?? null, rateLimit });
@@ -326,7 +360,7 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
       const retryRateLimit = !retryInterrupted ? detectRateLimit(retryResult) : { limited: false as const };
 
       if (retryRateLimit.limited) {
-        recordClaudeRateLimit(retryRateLimit.resetsAt);
+        recordEngineRateLimit(sourceEngine, retryRateLimit.resetsAt);
         logger.info(`Session ${session.id} still rate limited (attempt ${attempt})`);
 
         const next = computeNextRetryDelayMs(retryRateLimit.resetsAt);
@@ -337,8 +371,8 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
           status: "waiting",
           lastActivity: new Date().toISOString(),
           lastError: next.resumeAt
-            ? `Claude usage limit — resumes ${next.resumeAt.toISOString()}`
-            : "Claude usage limit — waiting for reset",
+            ? `${rateLimitSummary(sourceEngine)} — resumes ${next.resumeAt.toISOString()}`
+            : `${rateLimitSummary(sourceEngine)} — waiting for reset`,
         });
 
         await hooks.onStillLimited?.({ attempt, resumeAt: next.resumeAt ?? null });
@@ -358,10 +392,6 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
   } finally {
     clearInterval(heartbeat);
   }
-}
-
-function defaultRecord(rateLimit: RateLimitInfo): void {
-  recordClaudeRateLimit(rateLimit.resetsAt);
 }
 
 async function waitWhileSessionWaiting(sessionId: string, delayMs: number): Promise<boolean> {

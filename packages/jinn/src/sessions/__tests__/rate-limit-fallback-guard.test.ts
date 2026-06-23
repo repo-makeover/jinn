@@ -6,20 +6,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const engineAvailableMock = vi.fn<(...args: unknown[]) => boolean>();
 vi.mock("../../shared/models.js", () => ({
   engineAvailable: (...args: unknown[]) => engineAvailableMock(...args),
+  isKnownEngine: vi.fn((name: string) => ["claude", "codex", "antigravity", "grok", "pi"].includes(name)),
   effortLevelsForModel: vi.fn(() => ["low", "medium", "high"]),
 }));
 
 // Registry side effects — no real DB.
 const getSessionMock = vi.fn();
+const updateSessionMock = vi.fn();
 vi.mock("../registry.js", () => ({
   getSession: (...a: unknown[]) => getSessionMock(...a),
   getMessages: vi.fn(() => []),
-  updateSession: vi.fn(),
+  updateSession: (...a: unknown[]) => updateSessionMock(...a),
   patchSessionTransportMeta: vi.fn(),
 }));
 
-vi.mock("../../shared/usageAwareness.js", () => ({
-  recordClaudeRateLimit: vi.fn(),
+vi.mock("../../shared/usage-status.js", () => ({
+  recordEngineRateLimit: vi.fn(),
 }));
 
 vi.mock("../../shared/effort.js", () => ({
@@ -69,57 +71,90 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   } as Session;
 }
 
-function makeOpts(fallbackRun: ReturnType<typeof vi.fn>): RateLimitHandlerOpts {
-  const session = makeSession();
+function makeOpts(fallbackRun: ReturnType<typeof vi.fn>, overrides: Partial<Session> = {}): RateLimitHandlerOpts {
+  const session = makeSession(overrides);
   const fallbackEngine = { run: fallbackRun } as unknown as RateLimitHandlerOpts["engine"];
   const claudeEngine = { run: vi.fn() } as unknown as RateLimitHandlerOpts["engine"];
   return {
     session,
     prompt: "hello",
-    engineConfig: { bin: "claude", model: "opus" },
+    engineConfig: { bin: "codex", model: "gpt-5.3-codex" },
     config: {
-      sessions: { rateLimitStrategy: "fallback", fallbackEngine: "codex" },
-      engines: { codex: { bin: "codex", model: "gpt-5.3-codex" } },
+      sessions: { rateLimitStrategy: "fallback", fallbackEngine: "grok" },
+      engines: { grok: { bin: "grok", model: "grok-build" } },
     } as unknown as RateLimitHandlerOpts["config"],
-    engines: new Map([["codex", fallbackEngine]]),
+    engines: new Map([["grok", fallbackEngine]]),
     engine: claudeEngine,
     rateLimit: { resetsAt: undefined },
-    originalResult: { result: "", sessionId: "claude-thread-1" } as EngineResult,
+    originalResult: { result: "", sessionId: "codex-thread-1" } as EngineResult,
     hooks: {},
   };
 }
 
-describe("handleRateLimit — Codex fallback guard (#40)", () => {
+describe("handleRateLimit — fallback guard (#40)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // getSession is consulted inside both branches; return the live session.
     getSessionMock.mockImplementation(() => makeSession());
+    updateSessionMock.mockImplementation((_id, patch) => ({ ...makeSession(), ...(patch as object) }));
   });
 
   it("falls through to wait-and-retry when the fallback engine is NOT installed", async () => {
     engineAvailableMock.mockReturnValue(false);
-    const fallbackRun = vi.fn(async () => ({ result: "from-codex", sessionId: "codex-1" }) as EngineResult);
+    const fallbackRun = vi.fn(async () => ({ result: "from-grok", sessionId: "grok-1" }) as EngineResult);
 
-    const outcome = await handleRateLimit(makeOpts(fallbackRun));
+    const outcome = await handleRateLimit(makeOpts(fallbackRun, { engine: "codex", engineSessionId: "codex-thread-1" }));
 
-    // Branch A skipped → no Codex spawn.
+    // Branch A skipped → no fallback spawn.
     expect(fallbackRun).not.toHaveBeenCalled();
     expect(outcome.kind).not.toBe("fallback");
     // With a past deadline, Branch B exits straight to timeout.
     expect(outcome.kind).toBe("timeout");
   });
 
-  it("uses the Codex fallback when the fallback engine IS installed", async () => {
+  it("uses the configured fallback when the fallback engine IS installed", async () => {
     engineAvailableMock.mockReturnValue(true);
-    const fallbackRun = vi.fn(async () => ({ result: "from-codex", sessionId: "codex-1" }) as EngineResult);
+    const fallbackRun = vi.fn(async () => ({ result: "from-grok", sessionId: "grok-1" }) as EngineResult);
 
-    const outcome = await handleRateLimit(makeOpts(fallbackRun));
+    const outcome = await handleRateLimit(makeOpts(fallbackRun, { engine: "codex", engineSessionId: "codex-thread-1" }));
 
     expect(fallbackRun).toHaveBeenCalledTimes(1);
     expect(outcome.kind).toBe("fallback");
     if (outcome.kind === "fallback") {
-      expect(outcome.result.result).toBe("from-codex");
+      expect(outcome.result.result).toBe("from-grok");
     }
+  });
+
+  it("uses the configured fallback even when the rate-limited source engine is not Claude", async () => {
+    engineAvailableMock.mockReturnValue(true);
+    const fallbackRun = vi.fn(async () => ({ result: "from-grok", sessionId: "grok-2" }) as EngineResult);
+
+    const outcome = await handleRateLimit(
+      makeOpts(fallbackRun, { engine: "antigravity", engineSessionId: "agy-thread-1", model: "Gemini 3.5 Flash (Medium)" }),
+    );
+
+    expect(fallbackRun).toHaveBeenCalledTimes(1);
+    expect(outcome.kind).toBe("fallback");
+  });
+
+  it("uses the fallback engine's configured model instead of the source engine model", async () => {
+    engineAvailableMock.mockReturnValue(true);
+    const fallbackRun = vi.fn(async () => ({ result: "from-grok", sessionId: "grok-3" }) as EngineResult);
+
+    const outcome = await handleRateLimit(
+      makeOpts(fallbackRun, { engine: "antigravity", engineSessionId: "agy-thread-2", model: "Gemini 3.5 Flash (Medium)" }),
+    );
+
+    expect(fallbackRun).toHaveBeenCalledWith(expect.objectContaining({
+      model: "grok-build",
+      bin: "grok",
+      resumeSessionId: undefined,
+    }));
+    expect(updateSessionMock).toHaveBeenCalledWith("sess-1", expect.objectContaining({
+      engine: "grok",
+      lastError: expect.stringContaining("Grok"),
+    }));
+    expect(outcome.kind).toBe("fallback");
   });
 });
 

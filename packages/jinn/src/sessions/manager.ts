@@ -28,12 +28,20 @@ import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel, engineAvailable, isKnownEngine, engineUnavailableMessage } from "../shared/models.js";
 import { detectRateLimit, isDeadSessionError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit } from "../shared/usageAwareness.js";
+import { getRecordedReset, usageConfig } from "../shared/usage-status.js";
 import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
 import { checkBudget } from "../gateway/budgets.js";
 import { markTranscriptSyncedThrough } from "../gateway/external-turns.js";
 import { resolveMcpServers, writeMcpConfigFile, cleanupMcpConfigFile } from "../mcp/resolver.js";
-import { handleRateLimit } from "./rate-limit-handler.js";
+import {
+  handleRateLimit,
+  rateLimitFallbackNotice,
+  rateLimitPausedNotice,
+  rateLimitSummary,
+  rateLimitTimeoutError,
+  rateLimitWaitingNotice,
+} from "./rate-limit-handler.js";
 
 export interface RouteOptions {
   employee?: Employee;
@@ -188,13 +196,14 @@ export class SessionManager {
       .filter((filePath): filePath is string => !!filePath);
 
     if (session.status === "waiting") {
-      const expectedResetAt = getClaudeExpectedResetAt();
+      const recordedReset = getRecordedReset(session.engine, usageConfig(this.config).fallbackWindowMins);
+      const expectedResetAt = typeof recordedReset === "number" ? new Date(recordedReset * 1000) : getClaudeExpectedResetAt();
       const resumeText = expectedResetAt
         ? expectedResetAt.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
         : null;
       await connector.replyMessage(
         target,
-        `⏳ Still paused due to Claude usage limit${resumeText ? ` (resets ${resumeText})` : ""}. I queued this message and will respond automatically.`,
+        rateLimitPausedNotice(session.engine, resumeText),
       ).catch(() => {});
     }
 
@@ -324,8 +333,8 @@ export class SessionManager {
         lastActivity: new Date().toISOString(),
       });
 
-      // If we previously switched to GPT while Claude was rate-limited, inject a sync transcript
-      // so Claude can resume with full context when it comes back online.
+      // If we previously switched engines while rate-limited, inject a sync transcript
+      // so the original engine can resume with full context when it comes back online.
       const syncSinceIso = (session.transportMeta as any)?.claudeSyncSince;
       let promptToRun = msg.text;
       const syncSinceMs = typeof syncSinceIso === "string" ? new Date(syncSinceIso).getTime() : NaN;
@@ -336,7 +345,7 @@ export class SessionManager {
           .map((m) => `${m.role.toUpperCase()}: ${m.content}`);
         const transcript = sinceMessages.slice(-20).join("\n\n");
         promptToRun =
-          `We temporarily switched to GPT due to a Claude usage limit. Sync your context with this transcript (most recent last), then respond to the last USER message.\n\n${transcript}`;
+          `We temporarily switched engines due to a usage limit on ${session.engine}. Sync your context with this transcript (most recent last), then respond to the last USER message.\n\n${transcript}`;
       }
 
       // Budget enforcement — check BEFORE engine.run()
@@ -440,6 +449,7 @@ export class SessionManager {
       const rateLimit = (!wasInterrupted && !isDead) ? detectRateLimit(result) : { limited: false as const };
       if (rateLimit.limited) {
         const waitEmoji = "hourglass_flowing_sand";
+        const sourceEngine = session.engine;
 
         const outcome = await handleRateLimit({
           session,
@@ -457,24 +467,23 @@ export class SessionManager {
           rateLimit,
           originalResult: result,
           hooks: {
-            onFallbackStart: async ({ resumeAt }) => {
+            onFallbackStart: async ({ resumeAt, originalEngine, fallbackName }) => {
               const resumeText = resumeAt
                 ? resumeAt.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
                 : null;
 
               notifyDiscordChannel(
-                `⚠️ Claude usage limit reached. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} switching to GPT.`,
+                `⚠️ ${rateLimitSummary(originalEngine)} reached. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} switching to ${fallbackName}.`,
               );
 
               await connector.replyMessage(
                 target,
-                `⚠️ Claude usage limit reached${resumeText ? `. Resets ${resumeText}` : ""}. Switching to GPT for now.`,
+                rateLimitFallbackNotice(originalEngine, fallbackName, resumeText),
               ).catch(() => {});
 
-              // Switching away from Claude — drop any warm Claude PTY so it isn't orphaned.
-              const claudeEngine = this.engines.get("claude");
-              if (claudeEngine && isInterruptibleEngine(claudeEngine)) {
-                claudeEngine.kill(session.id, "Interrupted: engine switched");
+              // Switching away from the source engine — drop any warm PTY so it isn't orphaned.
+              if (engine && isInterruptibleEngine(engine)) {
+                engine.kill(session.id, "Interrupted: engine switched");
               }
             },
             onFallbackComplete: async (fallbackResult) => {
@@ -514,9 +523,9 @@ export class SessionManager {
                 ? resumeAt.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
                 : null;
 
-              // Send hardcoded Discord notification — does not depend on LLM
+              // Send a deterministic Discord notification — does not depend on the LLM
               notifyDiscordChannel(
-                `⚠️ Claude usage limit reached. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
+                `⚠️ ${rateLimitSummary(sourceEngine)} reached. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
               );
 
               // Clear "thinking" UI and show waiting state
@@ -538,7 +547,7 @@ export class SessionManager {
 
               await connector.replyMessage(
                 target,
-                `⏳ Claude usage limit reached${resumeText ? `. Resets ${resumeText}` : ""} — I'll continue automatically.`,
+                rateLimitWaitingNotice(sourceEngine, resumeText),
               ).catch(() => {});
             },
             onRetryAttempt: async () => {
@@ -595,20 +604,21 @@ export class SessionManager {
               if (retryUpdated) {
                 notifyRateLimitResumed(retryUpdated);
                 notifyDiscordChannel(
-                  `✅ Claude usage limit cleared. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} resumed.`,
+                  `✅ ${rateLimitSummary(sourceEngine)} cleared. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} resumed.`,
                 );
                 notifyParentSession(retryUpdated, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
               }
             },
             onTimeout: async () => {
+              const timeoutError = rateLimitTimeoutError(sourceEngine);
               notifyDiscordChannel(
-                `❌ Claude usage limit did not clear in time. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} has been stopped.`,
+                `❌ ${timeoutError}. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} has been stopped.`,
               );
               await connector.replyMessage(target, "Usage limit didn't reset in time. Please try again later.").catch(() => {});
               updateSession(session.id, {
                 status: "error",
                 lastActivity: new Date().toISOString(),
-                lastError: "Claude usage limit did not clear in time",
+                lastError: timeoutError,
               });
 
               // Clear reactions on failure

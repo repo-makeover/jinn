@@ -12,7 +12,13 @@ import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveEffort } from "../shared/effort.js";
 import { detectRateLimit } from "../shared/rateLimit.js";
-import { handleRateLimit } from "../sessions/rate-limit-handler.js";
+import {
+  handleRateLimit,
+  rateLimitFallbackNotice,
+  rateLimitSummary,
+  rateLimitTimeoutError,
+  rateLimitWaitingNotice,
+} from "../sessions/rate-limit-handler.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "../sessions/callbacks.js";
 import { markTranscriptSyncedThrough } from "./external-turns.js";
 import { getOrchestratorPersona } from "../talk/orchestrator-persona.js";
@@ -376,7 +382,7 @@ export async function runWebSession(
           .filter((m) => (m.role === "user" || m.role === "assistant") && m.timestamp >= syncSinceMs)
           .map((m) => `${m.role.toUpperCase()}: ${m.content}`);
         const transcript = sinceMessages.slice(-20).join("\n\n");
-        return `We temporarily switched to GPT due to a Claude usage limit. Sync your context with this transcript (most recent last), then respond to the last USER message.\n\n${transcript}`;
+        return `We temporarily switched engines due to a usage limit on ${currentSession.engine}. Sync your context with this transcript (most recent last), then respond to the last USER message.\n\n${transcript}`;
       })()
       : prompt;
 
@@ -631,24 +637,22 @@ export async function runWebSession(
         rateLimit,
         originalResult: result,
         hooks: {
-          onFallbackStart: ({ resumeAt }) => {
+          onFallbackStart: ({ resumeAt, originalEngine, fallbackName }) => {
             const resumeText = resumeAt
               ? resumeAt.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
               : null;
-            const notificationText =
-              `⚠️ Claude usage limit reached${resumeText ? `. Resets ${resumeText}` : ""}. Switching to GPT for now.`;
+            const notificationText = rateLimitFallbackNotice(originalEngine, fallbackName, resumeText);
             insertMessage(currentSession.id, "notification", notificationText);
 
             notifyDiscordChannel(
-              `⚠️ Claude usage limit reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} switching to GPT.`,
+              `⚠️ ${rateLimitSummary(originalEngine)} reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} switching to ${fallbackName}.`,
             );
 
-            // Switching away from Claude — drop any warm Claude PTY AND its armed
-            // late-recovery listener so the abandoned claude turn can't double-answer
-            // after the GPT fallback delivers.
-            const claudeEngine = context.sessionManager.getEngines().get("claude");
-            if (claudeEngine && isInterruptibleEngine(claudeEngine)) {
-              claudeEngine.kill(currentSession.id, "Interrupted: engine switched");
+            // Switching away from the source engine — drop any warm PTY AND its armed
+            // late-recovery listener so the abandoned turn can't double-answer after
+            // the fallback delivers.
+            if (engine && isInterruptibleEngine(engine)) {
+              engine.kill(currentSession.id, "Interrupted: engine switched");
             }
           },
           onFallbackStream: emitDelta,
@@ -684,14 +688,15 @@ export async function runWebSession(
             const resumeText = resumeAt
               ? resumeAt.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
               : null;
+            const sourceEngine = currentSession.engine;
 
-            // Send hardcoded Discord notification — does not depend on the LLM
+            // Send a deterministic Discord notification — does not depend on the LLM
             notifyDiscordChannel(
-              `⚠️ Claude usage limit reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
+              `⚠️ ${rateLimitSummary(sourceEngine)} reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
             );
 
             const notificationText =
-              `⏳ Claude usage limit reached${resumeText ? `. Resets ${resumeText}` : ""} — I'll continue automatically.`;
+              rateLimitWaitingNotice(sourceEngine, resumeText);
             insertMessage(currentSession.id, "notification", notificationText);
 
             // Notify parent session about rate limit (fire-and-forget)
@@ -716,6 +721,7 @@ export async function runWebSession(
             if (retryResult.result) {
               insertMessage(currentSession.id, "assistant", retryResult.result);
             }
+            const sourceEngine = currentSession.engine;
 
             const completedAfterRetry = updateSession(currentSession.id, {
               ...(retryResult.sessionId?.trim() ? { engineSessionId: retryResult.sessionId } : {}),
@@ -727,7 +733,7 @@ export async function runWebSession(
             if (completedAfterRetry) {
               notifyRateLimitResumed(completedAfterRetry);
               notifyDiscordChannel(
-                `✅ Claude usage limit cleared. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} resumed.`,
+                `✅ ${rateLimitSummary(sourceEngine)} cleared. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} resumed.`,
               );
               notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
               // Relay the resumed (rate-limit-cleared) turn to the originating connector channel (#51).
@@ -746,21 +752,23 @@ export async function runWebSession(
             maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
           },
           onTimeout: () => {
+            const sourceEngine = currentSession.engine;
+            const timeoutError = rateLimitTimeoutError(sourceEngine);
             notifyDiscordChannel(
-              `❌ Claude usage limit did not clear in time. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} has been stopped.`,
+              `❌ ${timeoutError}. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} has been stopped.`,
             );
             const erroredSession = updateSession(currentSession.id, {
               status: "error",
               lastActivity: new Date().toISOString(),
-              lastError: "Claude usage limit did not clear in time",
+              lastError: timeoutError,
             });
             if (erroredSession) {
-              notifyParentSession(erroredSession, { error: "Claude usage limit did not clear in time" }, { alwaysNotify: employee?.alwaysNotify });
+              notifyParentSession(erroredSession, { error: timeoutError }, { alwaysNotify: employee?.alwaysNotify });
             }
             context.emit("session:completed", {
               sessionId: currentSession.id,
               result: null,
-              error: "Claude usage limit did not clear in time",
+              error: timeoutError,
             });
             maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
           },

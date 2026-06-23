@@ -42,7 +42,7 @@ export interface Config {
     maxCostUsd?: number
     interruptOnNewMessage?: boolean
     rateLimitStrategy?: "wait" | "fallback"
-    fallbackEngine?: "codex"
+    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi"
   }
   connectors?: {
     slack?: {

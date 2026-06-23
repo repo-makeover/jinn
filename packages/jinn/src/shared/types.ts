@@ -746,10 +746,10 @@ export interface JinnConfig {
     maxDurationMinutes?: number;
     maxCostUsd?: number;
     interruptOnNewMessage?: boolean;
-    /** What to do when Claude hits a usage/rate limit. Default: "wait" (no automatic engine switch). Set to "fallback" to opt in to switching to Codex while Claude resets. */
+    /** What to do when the active engine hits a usage/rate limit. Default: "wait" (no automatic engine switch). Set to "fallback" to opt in to switching to another configured engine while it resets. */
     rateLimitStrategy?: "wait" | "fallback";
-    /** Engine to use when rateLimitStrategy="fallback". Default: "codex" */
-    fallbackEngine?: "codex";
+    /** Engine to use when rateLimitStrategy="fallback". Default: "codex". */
+    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi";
   };
   boardWorker?: BoardWorkerConfig;
   cron?: {
