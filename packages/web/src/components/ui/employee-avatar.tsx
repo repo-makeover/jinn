@@ -3,12 +3,9 @@ import { emojiForName } from "@/lib/emoji-pool"
 import { officeAvatarPath } from "@/lib/office-avatar-pool"
 
 /** Parse "office:<id>" avatar field into a resolved image URL, or null. */
-function resolveOfficeAvatar(value: string | undefined, size: number): string | null {
+function resolveOfficeAvatar(value: string | undefined): string | null {
   if (!value?.startsWith("office:")) return null
-  const id = value.slice("office:".length)
-  // Pick the closest bucket: 64 / 128 / 256 / 512
-  const bucket = size <= 64 ? 64 : size <= 128 ? 128 : size <= 256 ? 256 : 512
-  return officeAvatarPath(id, bucket)
+  return officeAvatarPath(value.slice("office:".length))
 }
 
 interface EmployeeAvatarProps {
@@ -33,9 +30,9 @@ export function EmployeeAvatar({
 
   // Resolution order: settings.profileImage > settings.emoji (if office:) > avatarProp > settings.emoji > emojiForName
   const imgSrc =
-    resolveOfficeAvatar(override?.profileImage, size) ??
-    resolveOfficeAvatar(override?.emoji, size) ??
-    resolveOfficeAvatar(avatarProp, size)
+    resolveOfficeAvatar(override?.profileImage) ??
+    resolveOfficeAvatar(override?.emoji) ??
+    resolveOfficeAvatar(avatarProp)
 
   const emoji = override?.emoji?.startsWith("office:") ? undefined : (override?.emoji || emojiForName(name || ''))
   const fontSize = Math.round(size * 0.6)
@@ -96,8 +93,8 @@ export function AvatarPreview({
   avatar: avatarProp,
 }: EmployeeAvatarProps & { emoji?: string }) {
   const imgSrc =
-    resolveOfficeAvatar(overrideEmoji, size) ??
-    resolveOfficeAvatar(avatarProp, size)
+    resolveOfficeAvatar(overrideEmoji) ??
+    resolveOfficeAvatar(avatarProp)
 
   const emoji = overrideEmoji?.startsWith("office:") ? undefined : (overrideEmoji || emojiForName(name))
   const fontSize = Math.round(size * 0.6)
