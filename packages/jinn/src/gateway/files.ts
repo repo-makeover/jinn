@@ -11,6 +11,7 @@ import { logger } from "../shared/logger.js";
 import { checkPublicUrl } from "../shared/ssrf-guard.js";
 import { insertFile, getFile, listFiles, deleteFile, setFilePath, insertMessage, type FileMeta, type MessageMedia } from "../sessions/registry.js";
 import type { ApiContext } from "./api.js";
+import { readJsonBody } from "./http-helpers.js";
 import { jsonApiHeaders } from "./internal-auth.js";
 
 // Ensure managed files directory exists
@@ -73,6 +74,10 @@ export function allowUploadedFileOpen(context: Pick<ApiContext, "getConfig">): b
 }
 
 class FileRequestError extends Error {}
+
+const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
+const MAX_UPLOAD_SIZE_MB = MAX_UPLOAD_SIZE / 1024 / 1024;
+const MAX_JSON_UPLOAD_BODY_SIZE = Math.ceil(MAX_UPLOAD_SIZE / 3) * 4 + 64 * 1024;
 
 /** Delete date-bucket directories under UPLOADS_DIR older than maxAgeDays. Returns count removed. */
 export function cleanupOldUploads(maxAgeDays = 30): number {
@@ -296,6 +301,64 @@ function serverError(res: ServerResponse, message: string): void {
   json(res, { error: message }, 500);
 }
 
+function uploadTooLargeMessage(): string {
+  return `File exceeds ${MAX_UPLOAD_SIZE_MB} MB limit`;
+}
+
+function estimateBase64DecodedBytes(content: string): number {
+  let normalizedLength = 0;
+  let trailing = "";
+  let trailingPrev = "";
+
+  for (let i = 0; i < content.length; i++) {
+    const code = content.charCodeAt(i);
+    if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) continue;
+    normalizedLength++;
+    trailingPrev = trailing;
+    trailing = content[i];
+  }
+
+  if (normalizedLength === 0) return 0;
+
+  let padding = 0;
+  if (trailing === "=") padding++;
+  if (trailing === "=" && trailingPrev === "=") padding++;
+  return Math.floor((normalizedLength * 3) / 4) - padding;
+}
+
+async function bufferResponseWithLimit(response: Response, maxBytes: number): Promise<Buffer> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsed = Number.parseInt(contentLength, 10);
+    if (Number.isFinite(parsed) && parsed > maxBytes) {
+      throw new FileRequestError(uploadTooLargeMessage());
+    }
+  }
+
+  if (!response.body) return Buffer.alloc(0);
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new FileRequestError(uploadTooLargeMessage());
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks);
+}
+
 interface UploadResult {
   id: string;
   filename: string;
@@ -356,8 +419,7 @@ async function saveFile(result: UploadResult, context: ApiContext): Promise<File
 /** Handle POST /api/files — multipart upload */
 async function handleMultipartUpload(req: HttpRequest, res: ServerResponse, context: ApiContext): Promise<void> {
   return new Promise((resolve) => {
-    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
-    const busboy = Busboy({ headers: req.headers, limits: { fileSize: MAX_FILE_SIZE } });
+    const busboy = Busboy({ headers: req.headers, limits: { fileSize: MAX_UPLOAD_SIZE } });
     let filename = "";
     let fileBuffer: Buffer | null = null;
     let customPath: string | null = null;
@@ -381,7 +443,7 @@ async function handleMultipartUpload(req: HttpRequest, res: ServerResponse, cont
 
     busboy.on("finish", async () => {
       if (fileTruncated) {
-        badRequest(res, `File exceeds ${MAX_FILE_SIZE / 1024 / 1024} MB limit`);
+        badRequest(res, uploadTooLargeMessage());
         resolve();
         return;
       }
@@ -422,12 +484,12 @@ async function handleMultipartUpload(req: HttpRequest, res: ServerResponse, cont
 
 /** Handle POST /api/files — JSON body (base64 content or URL fetch) */
 async function handleJsonUpload(req: HttpRequest, res: ServerResponse, context: ApiContext): Promise<void> {
-  let body: Record<string, unknown>;
-  try {
-    body = JSON.parse(await readBody(req));
-  } catch {
+  const parsed = await readJsonBody(req, res, { maxBytes: MAX_JSON_UPLOAD_BODY_SIZE });
+  if (!parsed.ok) return;
+  if (!parsed.body || typeof parsed.body !== "object" || Array.isArray(parsed.body)) {
     return badRequest(res, "Invalid JSON body");
   }
+  const body = parsed.body as Record<string, unknown>;
 
   const filename = body.filename as string | undefined;
   const content = body.content as string | undefined;
@@ -443,11 +505,17 @@ async function handleJsonUpload(req: HttpRequest, res: ServerResponse, context: 
   let buffer: Buffer;
 
   if (content) {
+    if (estimateBase64DecodedBytes(content) > MAX_UPLOAD_SIZE) {
+      return badRequest(res, uploadTooLargeMessage());
+    }
     // Base64 decode
     try {
       buffer = Buffer.from(content, "base64");
     } catch {
       return badRequest(res, "Invalid base64 content");
+    }
+    if (buffer.length > MAX_UPLOAD_SIZE) {
+      return badRequest(res, uploadTooLargeMessage());
     }
   } else {
     // URL fetch — SSRF guard before reaching out (SEC-F-003).
@@ -458,10 +526,15 @@ async function handleJsonUpload(req: HttpRequest, res: ServerResponse, context: 
       if (!response.ok) {
         return serverError(res, `Failed to fetch URL: ${response.status} ${response.statusText}`);
       }
-      const arrayBuf = await response.arrayBuffer();
-      buffer = Buffer.from(arrayBuf);
+      buffer = await bufferResponseWithLimit(response, MAX_UPLOAD_SIZE);
     } catch (err) {
+      if (err instanceof FileRequestError) {
+        return badRequest(res, err.message);
+      }
       return serverError(res, `Failed to fetch URL: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (buffer.length > MAX_UPLOAD_SIZE) {
+      return badRequest(res, uploadTooLargeMessage());
     }
   }
 
