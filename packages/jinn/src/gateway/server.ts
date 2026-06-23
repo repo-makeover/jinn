@@ -867,6 +867,9 @@ export async function startGateway(
   };
   apiContext.reloadConfig = reloadConfig;
 
+  // Replay any pending web queue items (e.g. gateway restart mid-run)
+  resumePendingWebQueueItems(apiContext);
+
   reconcileOrphanedTickets({
     engines,
     orgDir: ORG_DIR,
@@ -875,9 +878,6 @@ export async function startGateway(
     emit,
     cause: "startup",
   });
-
-  // Replay any pending web queue items (e.g. gateway restart mid-run)
-  resumePendingWebQueueItems(apiContext);
 
   // Unstick sessions whose completion event was lost (status:"running" with no
   // live turn). 15s sweep; logs one line per fix.

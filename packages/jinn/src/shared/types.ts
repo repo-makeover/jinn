@@ -49,6 +49,11 @@ export interface EngineRunOpts {
   /** Path to resolved Jinn MCP config JSON. Claude gets --mcp-config; Codex gets equivalent -c mcp_servers.* overrides. */
   mcpConfigPath?: string;
   onStream?: (delta: StreamDelta) => void;
+  /** Stall-watchdog liveness hook: called on ANY raw engine output (PTY bytes —
+   *  tool logs, progress, thinking), not just parsed deltas. run-web-session uses it
+   *  to bump the inactivity timer so long tool calls / thinking don't false-trip the
+   *  stall watchdog. The hard ceiling remains the genuine-hang backstop. */
+  onActivity?: () => void;
   /** Unique Jinn session ID for tracking the spawned process. */
   sessionId?: string;
   /** Session source ("cron", "web", "slack", …) — used by the interactive engine for lifecycle policy. */

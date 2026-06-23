@@ -433,6 +433,10 @@ export async function runWebSession(
       attachments: attachments?.length ? attachments : undefined,
       sessionId: currentSession.id,
       source: currentSession.source,
+      // Any raw engine output (tool logs, progress, thinking) is proof-of-life:
+      // bump the inactivity timer so long tool calls / thinking blocks — which emit
+      // no parsed deltas — don't false-trip the stall watchdog.
+      onActivity: () => { lastStreamAt = Date.now(); },
       onStream: (delta) => {
         // Same guard as runHeartbeat: a delta may arrive after the user
         // deleted the session; don't resurrect registry state for it.

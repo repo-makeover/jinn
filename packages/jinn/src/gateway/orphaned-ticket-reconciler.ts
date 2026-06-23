@@ -26,7 +26,7 @@ export type OrphanSweepCause = "startup" | "periodic";
 
 export interface OrphanedTicketDecision {
   shouldUpdate: boolean;
-  description?: string;
+  blockedReason?: string;
 }
 
 function findSessionForTicket(ticket: Pick<BoardTicket, "id" | "sessionId">, sessions: Session[]): Session | undefined {
@@ -70,8 +70,8 @@ export function classifyOrphanedBoardTicket(
   const sessionId = typeof ticket.sessionId === "string" ? ticket.sessionId.trim() : "";
   if (!sessionId) return { shouldUpdate: false };
   const session = findSessionForTicket(ticket, sessions);
-  const description = orphanReason(ticket, session, deps, now, staleMs, cause);
-  return description ? { shouldUpdate: true, description } : { shouldUpdate: false };
+  const blockedReason = orphanReason(ticket, session, deps, now, staleMs, cause);
+  return blockedReason ? { shouldUpdate: true, blockedReason } : { shouldUpdate: false };
 }
 
 export function sweepOrphanedBoardTickets(
@@ -87,7 +87,7 @@ export function sweepOrphanedBoardTickets(
     const decision = classifyOrphanedBoardTicket(ticket, sessions, deps, now, staleMs, cause);
     if (!decision.shouldUpdate) continue;
     ticket.status = "blocked";
-    if (decision.description) ticket.description = decision.description;
+    if (decision.blockedReason) ticket.blockedReason = decision.blockedReason;
     ticket.updatedAt = new Date(now).toISOString();
     changed++;
   }

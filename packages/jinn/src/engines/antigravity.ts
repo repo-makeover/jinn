@@ -90,6 +90,10 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
 
   async run(opts: EngineRunOpts): Promise<EngineResult> {
     const jinnSessionId = opts.sessionId;
+    if (jinnSessionId) {
+      if (opts.onActivity) this.onActivityCbs.set(jinnSessionId, opts.onActivity);
+      else this.onActivityCbs.delete(jinnSessionId);
+    }
     if (!jinnSessionId) throw new Error("AntigravityEngine.run requires opts.sessionId");
     if (this.active.has(jinnSessionId)) {
       return { sessionId: opts.resumeSessionId ?? "", result: "", error: "Antigravity engine: a turn is already running for this session" };
@@ -364,9 +368,14 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
 
   // --- PTY stream plumbing (shared PtyStreamManager, mirrors InteractiveClaudeEngine) ---
 
+  /** Per-session stall-watchdog liveness callback (opts.onActivity), looked up
+   *  dynamically from the PTY onData closure so a warm-reused PTY calls the CURRENT
+   *  turn's callback. Any raw output = proof-of-life. */
+  private onActivityCbs = new Map<string, () => void>();
+
   private wireProcToStream(jinnSessionId: string, proc: pty.IPty, onExitExtra?: () => void): PtyHandle {
     const handle = createPtyHandle(proc);
-    this.streams.attach(jinnSessionId, proc);
+    this.streams.attach(jinnSessionId, proc, () => this.onActivityCbs.get(jinnSessionId)?.());
     proc.onExit(() => {
       // Identity-gate session cleanup. In a kill->respawn race the lifecycle/stream
       // entries already point at the NEW PTY by the time THIS (old, killed) PTY's exit
@@ -376,6 +385,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
       if (isCurrent) {
         this.streams.onPtyExit(jinnSessionId);
         this.lifecycle.releaseSession(jinnSessionId);
+        this.onActivityCbs.delete(jinnSessionId);
       }
       // Settle the active turn as interrupted ONLY if this dying proc is the one bound
       // to it — after a kill->respawn race the active entry holds the NEW turn's proc and

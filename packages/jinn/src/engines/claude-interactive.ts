@@ -481,6 +481,10 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  release (its job is to size the NEXT spawn); growth is bounded by setCapped. */
   private lastGeom = new Map<string, { cols: number; rows: number }>();
   private lastOutputAt = new Map<string, number>();
+  /** Per-session stall-watchdog liveness callback (opts.onActivity). Looked up
+   *  dynamically from the PTY onData closure so a warm-reused PTY (wired once)
+   *  always calls the CURRENT turn's callback. Any raw output = proof-of-life. */
+  private onActivityCbs = new Map<string, () => void>();
   /** Model/effort the live PTY was spawned with, per session. `--model`/`--effort`
    *  apply only at spawn, so a mid-chat switch must cold-respawn rather than reuse
    *  the warm PTY (which would keep running the old model). */
@@ -508,6 +512,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     // are repopulated on the next spawn. lastGeom is NOT purged here — see above.
     this.lifecycle.onRelease((id) => {
       this.lastOutputAt.delete(id);
+      this.onActivityCbs.delete(id);
       this.spawnParams.delete(id);
       // The PTY (and its SSE proxy) died — any in-flight counts are moot.
       this.clearBackground(id);
@@ -594,6 +599,10 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
 
   async run(opts: EngineRunOpts): Promise<EngineResult> {
     const jinnSessionId = opts.sessionId;
+    if (jinnSessionId) {
+      if (opts.onActivity) this.onActivityCbs.set(jinnSessionId, opts.onActivity);
+      else this.onActivityCbs.delete(jinnSessionId);
+    }
     if (!jinnSessionId) throw new Error("InteractiveClaudeEngine.run requires opts.sessionId");
     const turnStartedAt = Date.now();
 
@@ -893,7 +902,10 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  `proxy` (the per-PTY SSE forward proxy) is torn down when this PTY exits. */
   private wireProcToStream(jinnSessionId: string, proc: pty.IPty, proxy?: SsePtyProxy): PtyHandle {
     const handle = createPtyHandle(proc);
-    this.streams.attach(jinnSessionId, proc, () => this.lastOutputAt.set(jinnSessionId, Date.now()));
+    this.streams.attach(jinnSessionId, proc, () => {
+      this.lastOutputAt.set(jinnSessionId, Date.now());
+      this.onActivityCbs.get(jinnSessionId)?.(); // raw PTY bytes = proof-of-life for the stall watchdog
+    });
     proc.onExit(() => {
       // Session-level cleanup MUST be identity-gated. In a kill->respawn race the
       // lifecycle/stream entries already point at the NEW PTY by the time THIS

@@ -73,7 +73,7 @@ describe("orphaned ticket reconciler", () => {
       undefined,
       "startup",
     );
-    expect(decision).toEqual({ shouldUpdate: true, description: "interrupted - gateway restarted" });
+    expect(decision).toEqual({ shouldUpdate: true, blockedReason: "interrupted - gateway restarted" });
   });
 
   it("classifies a stale running session with no live turn as worker died", () => {
@@ -84,7 +84,7 @@ describe("orphaned ticket reconciler", () => {
       { engines: new Map([["claude", engine]]) },
       NOW,
     );
-    expect(decision).toEqual({ shouldUpdate: true, description: "interrupted - worker died" });
+    expect(decision).toEqual({ shouldUpdate: true, blockedReason: "interrupted - worker died" });
   });
 
   it("resolves a ticket via the existing board-ticket mapping rules", () => {
@@ -101,7 +101,7 @@ describe("orphaned ticket reconciler", () => {
       { engines: new Map() },
       NOW,
     );
-    expect(decision).toEqual({ shouldUpdate: true, description: "interrupted - gateway restarted" });
+    expect(decision).toEqual({ shouldUpdate: true, blockedReason: "interrupted - gateway restarted" });
   });
 
   it("preserves a live running session when the engine still reports a turn", () => {
@@ -111,6 +111,18 @@ describe("orphaned ticket reconciler", () => {
       [session({ status: "running" })],
       { engines: new Map([["claude", engine]]) },
       NOW,
+    );
+    expect(decision).toEqual({ shouldUpdate: false });
+  });
+
+  it("preserves a freshly resumed running session during startup sweep", () => {
+    const decision = classifyOrphanedBoardTicket(
+      { status: "in_progress", sessionId: "s-1" } as any,
+      [session({ status: "running", lastActivity: iso(1_000) })],
+      { engines: new Map() },
+      NOW,
+      undefined,
+      "startup",
     );
     expect(decision).toEqual({ shouldUpdate: false });
   });
@@ -136,7 +148,8 @@ describe("orphaned ticket reconciler", () => {
     expect(board[0].status).toBe("todo");
     expect(board[1]).toMatchObject({
       status: "blocked",
-      description: "interrupted - gateway restarted",
+      description: "running",
+      blockedReason: "interrupted - gateway restarted",
       sessionId: "s-1",
     });
   });
@@ -156,7 +169,8 @@ describe("orphaned ticket reconciler", () => {
     });
     expect(readBoard("software-delivery")[0]).toMatchObject({
       status: "blocked",
-      description: "interrupted - worker died",
+      description: "running",
+      blockedReason: "interrupted - worker died",
     });
   });
 });
