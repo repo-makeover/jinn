@@ -1281,62 +1281,9 @@ export async function handleApiRequest(
     if (method === "PUT" && pathname === "/api/config") {
       const _parsed = await readJsonBody(req, res);
       if (!_parsed.ok) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body = _parsed.body as any;
-      // Basic validation: must be a plain object
+      const body = _parsed.body as Record<string, unknown> | null;
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return badRequest(res, "Config must be a JSON object");
-      }
-      // Validate known top-level keys
-      // Keep this aligned with `JinnConfig` in src/shared/types.ts
-      const KNOWN_KEYS = [
-        "jinn",
-        "gateway",
-        "engines",
-        "models",
-        "connectors",
-        "logging",
-        "mcp",
-        "sessions",
-        "cron",
-        "notifications",
-        "portal",
-        "context",
-        "stt",
-        "talk",
-        "skills",
-        "remotes",
-      ];
-      const unknownKeys = Object.keys(body).filter((k) => !KNOWN_KEYS.includes(k));
-      if (unknownKeys.length > 0) {
-        return badRequest(res, `Unknown config keys: ${unknownKeys.join(", ")}`);
-      }
-      // Validate critical field types
-      if (body.gateway !== undefined) {
-        if (typeof body.gateway !== "object" || Array.isArray(body.gateway)) {
-          return badRequest(res, "gateway must be an object");
-        }
-        const KNOWN_GATEWAY_KEYS = [
-          "port",
-          "host",
-          "streaming",
-          "allowFileCustomPaths",
-          "allowFileOpen",
-          "fileReadRoots",
-          "allowArbitraryFileRead",
-          "exposeResolvedFilePaths",
-          "userHeader",
-        ];
-        const unknownGatewayKeys = Object.keys(body.gateway).filter((k) => !KNOWN_GATEWAY_KEYS.includes(k));
-        if (unknownGatewayKeys.length > 0) {
-          return badRequest(res, `Unknown gateway config keys: ${unknownGatewayKeys.join(", ")}`);
-        }
-        if (body.gateway.port !== undefined && typeof body.gateway.port !== "number") {
-          return badRequest(res, "gateway.port must be a number");
-        }
-      }
-      if (body.engines !== undefined && (typeof body.engines !== "object" || Array.isArray(body.engines))) {
-        return badRequest(res, "engines must be an object");
       }
       // Deep-merge incoming config with existing config to preserve
       // fields not included in the update (e.g. connector tokens).
@@ -1345,6 +1292,8 @@ export async function handleApiRequest(
         existing = yaml.load(fs.readFileSync(CONFIG_PATH, "utf-8")) as Record<string, unknown> || {};
       } catch { /* start fresh if unreadable */ }
       const merged = deepMerge(existing, body);
+      // Use the same schema/shape validator as runtime config loading so
+      // /api/config accepts any config the gateway can already load.
       const configProblems = validateConfigShape(merged);
       if (configProblems.length > 0) return badRequest(res, `Invalid config:\n- ${configProblems.join("\n- ")}`);
       saveConfigAtomic(merged);
