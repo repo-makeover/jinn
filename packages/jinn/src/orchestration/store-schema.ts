@@ -7,7 +7,7 @@ import { writeRecoveryManifest } from "./store-recovery.js";
 import { DEFAULT_LEASE_DURATION_MS, type TelemetryEvent } from "./types.js";
 import { setMeta } from "./store-utils.js";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const NEXT_SEQ_META_KEY = "scheduler_next_seq";
 export const QUEUE_PAUSE_META_KEY = "queue_pause";
 
@@ -103,6 +103,54 @@ CREATE TABLE IF NOT EXISTS live_run_continuations (
   PRIMARY KEY (task_id, coordinator_id)
 );
 CREATE INDEX IF NOT EXISTS idx_orch_live_run_state ON live_run_continuations (state, updated_at, task_id, coordinator_id);
+
+CREATE TABLE IF NOT EXISTS task_pauses (
+  task_id TEXT NOT NULL,
+  coordinator_id TEXT NOT NULL,
+  paused_at TEXT NOT NULL,
+  pause_reason TEXT,
+  manager_name TEXT,
+  PRIMARY KEY (task_id, coordinator_id)
+);
+
+CREATE TABLE IF NOT EXISTS orchestration_holds (
+  hold_id TEXT PRIMARY KEY,
+  manager_name TEXT NOT NULL,
+  state TEXT NOT NULL,
+  roles_json TEXT NOT NULL,
+  worker_ids_json TEXT NOT NULL,
+  task_id TEXT,
+  coordinator_id TEXT,
+  reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orch_holds_state_expiry ON orchestration_holds (state, expires_at);
+
+CREATE TABLE IF NOT EXISTS artifact_records (
+  artifact_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  lane TEXT,
+  path TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_orch_artifacts_task_kind ON artifact_records (task_id, kind, lane);
+
+CREATE TABLE IF NOT EXISTS patch_apply_attempts (
+  attempt_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  winner_lane TEXT NOT NULL,
+  state TEXT NOT NULL,
+  base_cwd TEXT NOT NULL,
+  patch_path TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orch_patch_apply_task ON patch_apply_attempts (task_id, created_at);
 `;
 
 export function openStoreDatabase(dbPath: string, opts: StoreOpenOptions = {}): OpenedStoreDatabase {

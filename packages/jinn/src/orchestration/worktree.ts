@@ -118,6 +118,41 @@ export function diffWorktree(handle: WorktreeHandle): string {
   return diffGitWorkspace(handle.path, [WORKTREE_MARKER]);
 }
 
+export function patchWorktree(handle: WorktreeHandle): string {
+  const untracked = listUntrackedGitFiles(handle.path, [WORKTREE_MARKER]);
+  if (untracked.length > 0) runGit(["add", "-N", "--", ...untracked], handle.path);
+  try {
+    return runGit(["diff", "--binary", "HEAD", "--"], handle.path);
+  } finally {
+    if (untracked.length > 0) {
+      try {
+        runGit(["reset", "--", ...untracked], handle.path);
+      } catch {
+        // Leave the winner worktree inspectable if index cleanup fails.
+      }
+    }
+  }
+}
+
+export function isGitWorkspaceDirty(cwd: string): boolean {
+  return runGit(["status", "--porcelain"], cwd).trim().length > 0;
+}
+
+export function applyPatchToGitWorkspace(cwd: string, patch: string): void {
+  execFileSync("git", ["apply", "--check"], {
+    cwd,
+    input: patch,
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  execFileSync("git", ["apply"], {
+    cwd,
+    input: patch,
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
 export function diffWorktreeByTaskLane(root: string, taskId: string, lane: string): string {
   return diffWorktree(requireManagedWorktree(root, taskId, lane));
 }
@@ -291,11 +326,7 @@ function diffGitWorkspace(cwd: string, excludedUntracked: string[] = []): string
   const gitRoot = findGitRoot(cwd);
   if (!gitRoot) return "";
   const diff = runGit(["diff", "HEAD", "--"], cwd);
-  const ignored = new Set(excludedUntracked);
-  const untracked = runGit(["ls-files", "--others", "--exclude-standard"], cwd)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !ignored.has(line));
+  const untracked = listUntrackedGitFiles(cwd, excludedUntracked);
   if (untracked.length === 0) return diff;
   return [
     diff.trimEnd(),
@@ -303,4 +334,12 @@ function diffGitWorkspace(cwd: string, excludedUntracked: string[] = []): string
     ...untracked.map((file) => `  ${file}`),
     "",
   ].filter((line, index) => index !== 0 || line.length > 0).join("\n");
+}
+
+function listUntrackedGitFiles(cwd: string, excludedUntracked: string[] = []): string[] {
+  const ignored = new Set(excludedUntracked);
+  return runGit(["ls-files", "--others", "--exclude-standard"], cwd)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !ignored.has(line));
 }

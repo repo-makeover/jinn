@@ -2,6 +2,26 @@ import Database from "better-sqlite3";
 import { ORCH_DB } from "../shared/paths.js";
 import type { LiveRunContinuationRecord, LiveRunContinuationState } from "./live-run.js";
 import {
+  addArtifactRecordInDb,
+  addPatchApplyAttemptInDb,
+  cancelHoldInDb,
+  deleteTaskPauseFromDb,
+  expireHoldsInDb,
+  getHoldFromDb,
+  getTaskPauseFromDb,
+  listArtifactRecordsFromDb,
+  listHoldsFromDb,
+  listPatchApplyAttemptsFromDb,
+  listTaskPausesFromDb,
+  setTaskPauseInDb,
+  upsertHoldInDb,
+  type ArtifactKind,
+  type ArtifactRecord,
+  type HoldRecord,
+  type PatchApplyAttemptRecord,
+  type TaskPauseRecord,
+} from "./store-controls.js";
+import {
   claimQueuedLiveContinuationInDb,
   deleteLiveContinuationFromDb,
   getLiveContinuationFromDb,
@@ -17,6 +37,13 @@ import { applySnapshotDeltaToDb, loadSnapshotFromDb, replaceSnapshotInDb } from 
 import type { SchedulerSnapshot, TelemetryEvent } from "./types.js";
 
 export type { QueuePauseState, StoreOpenOptions };
+export type {
+  ArtifactKind,
+  ArtifactRecord,
+  HoldRecord,
+  PatchApplyAttemptRecord,
+  TaskPauseRecord,
+};
 
 export class OrchestrationStore {
   private constructor(
@@ -88,5 +115,57 @@ export class OrchestrationStore {
 
   setQueuePauseState(state: QueuePauseState): void {
     setQueuePauseStateInDb(this.db, state);
+  }
+
+  setTaskPause(record: TaskPauseRecord): void {
+    setTaskPauseInDb(this.db, record);
+  }
+
+  deleteTaskPause(taskId: string, coordinatorId: string): boolean {
+    return deleteTaskPauseFromDb(this.db, taskId, coordinatorId);
+  }
+
+  getTaskPause(taskId: string, coordinatorId: string): TaskPauseRecord | undefined {
+    return getTaskPauseFromDb(this.db, taskId, coordinatorId);
+  }
+
+  listTaskPauses(): TaskPauseRecord[] {
+    return listTaskPausesFromDb(this.db);
+  }
+
+  upsertHold(record: HoldRecord): void {
+    upsertHoldInDb(this.db, record);
+  }
+
+  getHold(holdId: string): HoldRecord | undefined {
+    return getHoldFromDb(this.db, holdId);
+  }
+
+  listHolds(opts: { includeInactive?: boolean } = {}): HoldRecord[] {
+    return listHoldsFromDb(this.db, opts);
+  }
+
+  expireHolds(nowIso = new Date().toISOString()): number {
+    return expireHoldsInDb(this.db, nowIso);
+  }
+
+  cancelHold(holdId: string, updatedAt = new Date().toISOString()): HoldRecord | undefined {
+    return cancelHoldInDb(this.db, holdId, updatedAt);
+  }
+
+  addArtifactRecord(record: ArtifactRecord): void {
+    addArtifactRecordInDb(this.db, record);
+  }
+
+  listArtifactRecords(taskId: string, kind?: ArtifactKind): ArtifactRecord[] {
+    return listArtifactRecordsFromDb(this.db, taskId, kind);
+  }
+
+  addPatchApplyAttempt(record: PatchApplyAttemptRecord): void {
+    addPatchApplyAttemptInDb(this.db, record);
+  }
+
+  listPatchApplyAttempts(taskId?: string): PatchApplyAttemptRecord[] {
+    return listPatchApplyAttemptsFromDb(this.db, taskId);
   }
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
@@ -7,8 +8,9 @@ import { resolveCrossFamilyReviewPolicy, type CrossFamilyReviewPolicy } from "./
 import { listProtectedDualLaneTaskIds } from "./dual-lane-state.js";
 import type { LiveRunContinuationRecord } from "./live-run.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
+import { queueTaskKey } from "./scheduler.js";
 import { filterWorkersWithHeadroom, type HeadroomFilterResult } from "./routing-headroom.js";
-import { OrchestrationStore, type QueuePauseState } from "./store.js";
+import { OrchestrationStore, type HoldRecord, type QueuePauseState, type TaskPauseRecord } from "./store.js";
 import { computeWorkerScores, readOrchestrationTelemetry } from "./telemetry.js";
 import {
   DEFAULT_LEASE_DURATION_MS,
@@ -70,6 +72,16 @@ export type RetryLiveContinuationResult =
     allocation: Allocation;
     reviewPolicy: ReviewPolicySummary;
   };
+
+export interface HoldCreateInput {
+  managerName: string;
+  roles?: string[];
+  workerIds?: string[];
+  taskId?: string;
+  coordinatorId?: string;
+  reason?: string;
+  ttlMs: number;
+}
 
 type ResumeQueuedRunHandler = (run: ResumeQueuedRun) => Promise<void>;
 
@@ -158,7 +170,9 @@ export class OrchestrationRuntime {
 
   retryQueued(): AllocationResult[] {
     if (this.getControlState().queuePaused) return [];
-    const results = this.scheduler.retryQueued();
+    const results = this.scheduler.retryQueued({
+      skipQueuedTaskKeys: this.pausedTaskKeys(),
+    });
     this.dispatchRetryResults(results);
     return results;
   }
@@ -171,6 +185,7 @@ export class OrchestrationRuntime {
     if (this.getControlState().queuePaused) return [];
     const results = this.scheduler.retryQueued({
       allowedWorkerIds,
+      skipQueuedTaskKeys: this.pausedTaskKeys(),
     });
     this.dispatchRetryResults(results);
     return results;
@@ -227,6 +242,10 @@ export class OrchestrationRuntime {
     return this.store.getQueuePauseState();
   }
 
+  listTaskPauses(): TaskPauseRecord[] {
+    return this.store.listTaskPauses();
+  }
+
   pauseQueue(reason?: string): QueuePauseState {
     const state = {
       queuePaused: true,
@@ -242,6 +261,74 @@ export class OrchestrationRuntime {
     this.store.setQueuePauseState(controlState);
     const retryResults = await this.retryQueuedWithLiveHeadroom();
     return { controlState, retryResults };
+  }
+
+  pauseTask(taskId: string, coordinatorId: string, opts: { reason?: string; managerName?: string } = {}): TaskPauseRecord {
+    const record: TaskPauseRecord = {
+      taskId,
+      coordinatorId,
+      pausedAt: new Date().toISOString(),
+      pauseReason: sanitizePauseReason(opts.reason),
+      managerName: sanitizeOptional(opts.managerName),
+    };
+    this.store.setTaskPause(record);
+    return record;
+  }
+
+  async resumeTask(taskId: string, coordinatorId: string): Promise<{ paused: boolean; retryResults: AllocationResult[] }> {
+    const paused = this.store.deleteTaskPause(taskId, coordinatorId);
+    if (this.getControlState().queuePaused) return { paused, retryResults: [] };
+    const allowedWorkerIds = await this.resolveLiveHeadroomWorkerIds();
+    const results = this.scheduler.retryQueued({
+      allowedWorkerIds,
+      skipQueuedTaskKeys: this.pausedTaskKeys(),
+      onlyQueuedTaskKeys: [queueTaskKey(taskId, coordinatorId)],
+    });
+    this.dispatchRetryResults(results);
+    return { paused, retryResults: results };
+  }
+
+  listHolds(opts: { includeInactive?: boolean } = {}): HoldRecord[] {
+    this.store.expireHolds();
+    return this.store.listHolds(opts);
+  }
+
+  createHold(input: HoldCreateInput): HoldRecord {
+    const now = new Date();
+    const ttlMs = Math.max(1, Math.floor(input.ttlMs));
+    const record: HoldRecord = {
+      holdId: `hold_${randomUUID()}`,
+      managerName: input.managerName,
+      state: "active",
+      roles: uniqueNonEmpty(input.roles ?? []),
+      workerIds: uniqueNonEmpty(input.workerIds ?? []),
+      taskId: sanitizeOptional(input.taskId),
+      coordinatorId: sanitizeOptional(input.coordinatorId),
+      reason: sanitizePauseReason(input.reason),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+    };
+    this.store.upsertHold(record);
+    return record;
+  }
+
+  extendHold(holdId: string, ttlMs: number): HoldRecord | undefined {
+    this.store.expireHolds();
+    const current = this.store.getHold(holdId);
+    if (!current || current.state !== "active") return current;
+    const now = new Date();
+    const updated = {
+      ...current,
+      updatedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + Math.max(1, Math.floor(ttlMs))).toISOString(),
+    };
+    this.store.upsertHold(updated);
+    return updated;
+  }
+
+  cancelHold(holdId: string): HoldRecord | undefined {
+    return this.store.cancelHold(holdId);
   }
 
   async retryFailedLiveContinuation(taskId: string, coordinatorId: string): Promise<RetryLiveContinuationResult> {
@@ -439,7 +526,11 @@ export class OrchestrationRuntime {
   }
 
   private async resolveLiveHeadroomWorkerIds(): Promise<Set<string> | undefined> {
-    if (!this.jinnConfig) return undefined;
+    const heldWorkerIds = this.activeHeldWorkerIds();
+    if (!this.jinnConfig) {
+      if (heldWorkerIds.size === 0) return undefined;
+      return new Set(this.config.workers.map((worker) => worker.id).filter((workerId) => !heldWorkerIds.has(workerId)));
+    }
     try {
       const result = await this.headroomFilter(this.config.workers, this.jinnConfig);
       if (result.rejected.length > 0) {
@@ -449,11 +540,20 @@ export class OrchestrationRuntime {
           }`,
         );
       }
-      return new Set(result.allowed.map((worker) => worker.id));
+      return new Set(result.allowed.map((worker) => worker.id).filter((workerId) => !heldWorkerIds.has(workerId)));
     } catch (err) {
       logger.warn(`Orchestration headroom filter failed closed: ${err instanceof Error ? err.message : String(err)}`);
       return new Set();
     }
+  }
+
+  private activeHeldWorkerIds(): Set<string> {
+    this.store.expireHolds();
+    return new Set(this.store.listHolds().flatMap((hold) => hold.workerIds));
+  }
+
+  private pausedTaskKeys(): Set<string> {
+    return new Set(this.store.listTaskPauses().map((pause) => queueTaskKey(pause.taskId, pause.coordinatorId)));
   }
 
   private startReaper(): void {
@@ -539,4 +639,13 @@ function resolveEmpiricalWorkerScores(config: JinnConfig): Record<string, number
 function sanitizePauseReason(reason: string | undefined): string | null {
   const trimmed = typeof reason === "string" ? reason.trim() : "";
   return trimmed ? trimmed.slice(0, 500) : null;
+}
+
+function sanitizeOptional(value: string | undefined): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed ? trimmed.slice(0, 200) : null;
+}
+
+function uniqueNonEmpty(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }

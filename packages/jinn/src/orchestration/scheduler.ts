@@ -54,6 +54,8 @@ export interface SchedulerOptions {
 export interface AllocationRequestOptions {
   queueOnBlock?: boolean;
   allowedWorkerIds?: Iterable<string>;
+  skipQueuedTaskKeys?: Iterable<string>;
+  onlyQueuedTaskKeys?: Iterable<string>;
 }
 
 interface CandidateState {
@@ -241,8 +243,13 @@ export class MatrixScheduler {
 
   retryQueued(opts: AllocationRequestOptions = {}): AllocationResult[] {
     const ordered = [...this.queue].sort(compareQueueItems);
+    const skipped = opts.skipQueuedTaskKeys ? new Set(opts.skipQueuedTaskKeys) : undefined;
+    const only = opts.onlyQueuedTaskKeys ? new Set(opts.onlyQueuedTaskKeys) : undefined;
     const results: AllocationResult[] = [];
     for (const item of ordered) {
+      const key = queueTaskKey(item.taskId, item.coordinatorId);
+      if (skipped?.has(key)) continue;
+      if (only && !only.has(key)) continue;
       const result = this.requestAllocation(item.request, {
         allowedWorkerIds: opts.allowedWorkerIds,
       });
@@ -567,6 +574,10 @@ export class MatrixScheduler {
     pruneTerminalAllocations(this.allocations, now, this.retention);
     pruneSchedulerTelemetry(this.telemetry, now, this.retention);
   }
+}
+
+export function queueTaskKey(taskId: string, coordinatorId: string): string {
+  return `${taskId}\u0000${coordinatorId}`;
 }
 
 export function runSimulation(
