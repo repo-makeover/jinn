@@ -81,11 +81,13 @@ function formatWorkers(workers: Worker[]): string {
 
 function formatAllocationResult(result: AllocationResult): string {
   if (!result.ok) {
-    return [
+    const lines = [
       `Task ${result.queueItem.taskId} blocked_resource`,
       `Missing roles: ${result.queueItem.missingRoles.join(", ")}`,
       `Resume on: ${result.queueItem.resumeOn.join(", ")}`,
-    ].join("\n");
+    ];
+    lines.push(...formatReviewPolicy(result.reviewPolicy));
+    return lines.join("\n");
   }
   const lines = [
     `Allocation ${result.allocation.allocationId}`,
@@ -98,6 +100,7 @@ function formatAllocationResult(result: AllocationResult): string {
   if (result.allocation.optionalRolesSkipped.length > 0) {
     lines.push(`Optional roles skipped: ${result.allocation.optionalRolesSkipped.join(", ")}`);
   }
+  lines.push(...formatReviewPolicy(result.reviewPolicy));
   return lines.join("\n");
 }
 
@@ -133,11 +136,13 @@ function formatQueue(queue: QueueItem[]): string {
 
 function formatRunResult(result: any): string {
   if (result?.ok === false) {
-    return [
+    const lines = [
       `Task ${result.queueItem?.taskId ?? "(unknown)"} blocked_resource`,
       `Missing roles: ${(result.queueItem?.missingRoles ?? []).join(", ")}`,
       `Resume on: ${(result.queueItem?.resumeOn ?? []).join(", ")}`,
-    ].join("\n");
+    ];
+    lines.push(...formatReviewPolicy(result?.reviewPolicy));
+    return lines.join("\n");
   }
   const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
   const lines = [
@@ -148,7 +153,18 @@ function formatRunResult(result: any): string {
   for (const session of sessions) {
     lines.push(`- ${session.role}: ${session.workerId} (${session.sessionId}) ${session.status}${session.error ? `: ${session.error}` : ""}`);
   }
+  lines.push(...formatReviewPolicy(result?.reviewPolicy));
   return lines.join("\n");
+}
+
+function formatReviewPolicy(reviewPolicy: any): string[] {
+  const explanations = Array.isArray(reviewPolicy?.explanations) ? reviewPolicy.explanations : [];
+  if (explanations.length === 0) return [];
+  return explanations.map((entry: any) => {
+    const decision = typeof entry?.decision === "string" ? entry.decision : "unknown";
+    const detail = typeof entry?.detail === "string" ? entry.detail : "review policy decision recorded";
+    return `Review policy: ${decision} - ${detail}`;
+  });
 }
 
 function readTaskYaml(filePath: string): unknown {

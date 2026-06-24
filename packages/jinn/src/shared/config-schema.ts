@@ -600,7 +600,16 @@ function validateOrchestration(problems: string[], value: unknown): void {
     problems.push("orchestration must be a mapping");
     return;
   }
-  pushUnknownKeys(problems, value, ["enabled", "configDir", "dbPath", "leaseDurationMs", "reaperIntervalMs", "worktreeRoot", "maxWorktrees"], "orchestration");
+  pushUnknownKeys(problems, value, [
+    "enabled",
+    "configDir",
+    "dbPath",
+    "leaseDurationMs",
+    "reaperIntervalMs",
+    "worktreeRoot",
+    "maxWorktrees",
+    "sameFamilyReviewerFallback",
+  ], "orchestration");
   if (value.enabled !== undefined) validateBoolean(problems, "orchestration.enabled", value.enabled);
   if (value.configDir !== undefined) validateString(problems, "orchestration.configDir", value.configDir);
   if (value.dbPath !== undefined) validateString(problems, "orchestration.dbPath", value.dbPath);
@@ -608,6 +617,9 @@ function validateOrchestration(problems: string[], value: unknown): void {
   if (value.reaperIntervalMs !== undefined) validateNumber(problems, "orchestration.reaperIntervalMs", value.reaperIntervalMs);
   if (value.worktreeRoot !== undefined) validateString(problems, "orchestration.worktreeRoot", value.worktreeRoot);
   if (value.maxWorktrees !== undefined) validateNumber(problems, "orchestration.maxWorktrees", value.maxWorktrees);
+  if (value.sameFamilyReviewerFallback !== undefined) {
+    validateBoolean(problems, "orchestration.sameFamilyReviewerFallback", value.sameFamilyReviewerFallback);
+  }
 }
 
 function validateCron(problems: string[], value: unknown): void {

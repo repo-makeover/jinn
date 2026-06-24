@@ -1,6 +1,6 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 and M1–M4 are **complete** (Codex, 2026-06-23).
+> **Status:** Phase 1 and M1–M7 are **complete** (Codex, 2026-06-23).
 > This is the **full-capability roadmap** from inert scaffold to real,
 > daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
@@ -455,14 +455,19 @@ the source brief.
 - **Remaining boundary:** integration worktrees, dual-lane selection, durable patch
   artifacts, dashboard controls, and board-worker routing remain later milestones.
 
-### M7 — Cross-family review policy in live runs (brief Phase 7)
+### M7 — Cross-family review policy in live runs (complete, 2026-06-23)
 
 - **Goal:** enforce model-family diversity for reviewers at runtime (the scheduler core
   already supports `opposite_of_implementer`; this makes it a live, explainable policy).
-- **Deliverables:** policy resolution + explainability (`why this reviewer / why
-  blocked`); config flag to permit/forbid same-family fallback.
-- **Exit gate (brief AC):** scheduler can explain reviewer selection and blocked-reviewer
-  allocation; policy can permit or forbid same-family fallback; no silent downgrade.
+- **Delivered:** `orchestration/cross-family.ts` resolves fail-closed reviewer policy,
+  role-metadata reviewer detection, and explanation records. `MatrixScheduler`
+  now emits reviewer-policy explanations for selected, blocked, and explicit
+  same-family fallback decisions. `orchestration.sameFamilyReviewerFallback`
+  permits same-family fallback only after no qualified opposite-family reviewer
+  is available; opposite-family candidates still win when present.
+- **Exit gate:** passed for reviewer-selection explainability, blocked-reviewer
+  allocation explainability, same-family fallback permit/forbid behavior, and no
+  silent downgrade in CLI/API JSON/text output.
 - **Team:** implementer; **review:** department policy critique.
 
 ### M8 — Dual-lane competition (brief Phase 8) ✦ high-value, last

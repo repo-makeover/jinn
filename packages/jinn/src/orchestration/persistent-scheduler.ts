@@ -12,6 +12,7 @@ export class PersistentMatrixScheduler {
   private scheduler: MatrixScheduler;
   private readonly now: () => Date;
   private readonly ownsStore: boolean;
+  private readonly schedulerOptions: Omit<SchedulerOptions, "snapshot" | "now">;
 
   constructor(
     private readonly config: OrchestrationConfig,
@@ -20,6 +21,9 @@ export class PersistentMatrixScheduler {
   ) {
     this.now = opts.now ?? (() => new Date());
     this.ownsStore = !opts.store;
+    this.schedulerOptions = {
+      reviewPolicy: opts.reviewPolicy,
+    };
     this.scheduler = this.hydrateScheduler();
     if (opts.expireOnHydrate !== false) {
       const before = this.scheduler.createSnapshot();
@@ -104,6 +108,7 @@ export class PersistentMatrixScheduler {
   private hydrateScheduler(): MatrixScheduler {
     return new MatrixScheduler(this.config, {
       now: this.now,
+      ...this.schedulerOptions,
       snapshot: this.store.loadSnapshot(),
     });
   }

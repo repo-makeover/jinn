@@ -189,6 +189,22 @@ describe("validateConfigShape", () => {
     expect(problems.some((p) => p.includes("sessions.autoResumeOnBoot"))).toBe(true);
   });
 
+  it("validates orchestration same-family reviewer fallback as an optional boolean", () => {
+    expect(validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      orchestration: {
+        enabled: true,
+        sameFamilyReviewerFallback: true,
+      },
+    })).toEqual([]);
+
+    const problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      orchestration: { sameFamilyReviewerFallback: "true" },
+    });
+    expect(problems.some((p) => p.includes("orchestration.sameFamilyReviewerFallback"))).toBe(true);
+  });
+
   it("validates boardWorker schedule and timezone fields", () => {
     const ok = validateConfigShape({
       engines: { claude: { bin: "claude", model: "opus" } },

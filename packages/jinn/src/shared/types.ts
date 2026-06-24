@@ -667,6 +667,7 @@ export interface OrchestrationRuntimeConfig {
   reaperIntervalMs?: number;
   worktreeRoot?: string;
   maxWorktrees?: number;
+  sameFamilyReviewerFallback?: boolean;
 }
 
 export interface JinnConfig {

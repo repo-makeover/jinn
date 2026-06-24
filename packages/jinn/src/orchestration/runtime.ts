@@ -1,6 +1,7 @@
 import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
 import type { JinnConfig } from "../shared/types.js";
 import { loadOrchestrationConfig } from "./config.js";
+import { resolveCrossFamilyReviewPolicy, type CrossFamilyReviewPolicy } from "./cross-family.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
 import { DEFAULT_LEASE_DURATION_MS, type AllocationRequest, type AllocationResult, type Lease, type LeaseValidationResult, type OrchestrationConfig } from "./types.js";
 import { DEFAULT_MAX_WORKTREES, reapOrphanedWorktrees, type WorktreeHandle, type WorktreeOptions } from "./worktree.js";
@@ -16,6 +17,7 @@ export interface OrchestrationRuntimeOptions {
   startReaper?: boolean;
   worktreeRoot?: string;
   maxWorktrees?: number;
+  reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
 }
 
 export class OrchestrationRuntime {
@@ -32,6 +34,7 @@ export class OrchestrationRuntime {
     this.scheduler = PersistentMatrixScheduler.open(this.config, {
       dbPath: this.dbPath,
       now: opts.now,
+      reviewPolicy: opts.reviewPolicy,
     });
     this.reaperIntervalMs = Math.max(1, Math.floor(opts.reaperIntervalMs ?? DEFAULT_REAPER_INTERVAL_MS));
     this.worktrees = {
@@ -131,6 +134,7 @@ export function createOrchestrationRuntimeFromConfig(
     reaperIntervalMs: config.orchestration.reaperIntervalMs,
     worktreeRoot: config.orchestration.worktreeRoot,
     maxWorktrees: config.orchestration.maxWorktrees,
+    reviewPolicy: resolveCrossFamilyReviewPolicy(config.orchestration),
     ...opts,
   });
 }

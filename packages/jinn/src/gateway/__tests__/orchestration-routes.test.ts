@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import { handleApiRequest, type ApiContext } from "../api.js";
+import { handleOrchestrationRoutes } from "../api/orchestration-routes.js";
+import { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import type { OrchestrationConfig } from "../../orchestration/types.js";
 
@@ -65,6 +68,47 @@ describe("GET /api/orchestration/*", () => {
     expect(workers.body).toMatchObject({ workers: [{ id: "runtimeWorker" }] });
     expect(leases.body).toMatchObject({ leases: [{ taskId: "runtime-task" }] });
   });
+
+  it("returns review-policy explanations for blocked run requests", async () => {
+    const runtime = new OrchestrationRuntime({
+      config: sameFamilyReviewConfig(),
+      dbPath: ":memory:",
+      startReaper: false,
+    });
+    const ctx = makeCtx(sameFamilyReviewConfig());
+    ctx.orchestration = { runtime };
+    const cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/run",
+      cap.res,
+      ctx,
+      makeJsonReq({
+        mode: "single_worker_with_review",
+        task: {
+          taskId: "api-blocked",
+          coordinatorId: "api-coord",
+          coordinatorTemplate: "withReview",
+          mode: "single_worker_with_review",
+          prompt: "Implement and review",
+        },
+      }),
+    );
+
+    expect(cap.status).toBe(409);
+    expect(cap.body).toMatchObject({
+      ok: false,
+      state: "blocked_resource",
+      reviewPolicy: {
+        explanations: [{
+          decision: "same_family_fallback_forbidden",
+          role: "independentReviewer",
+        }],
+      },
+    });
+    runtime.close();
+  });
 });
 
 async function get(pathname: string, ctx: ApiContext) {
@@ -80,6 +124,16 @@ function makeReq(method: string, urlPath: string) {
     url: urlPath,
     headers: { host: "localhost" },
   } as Parameters<typeof handleApiRequest>[0];
+}
+
+function makeJsonReq(body: unknown) {
+  const req = Readable.from([Buffer.from(JSON.stringify(body))]) as NonNullable<Parameters<typeof handleOrchestrationRoutes>[4]>;
+  Object.assign(req, {
+    method: "POST",
+    url: "/api/orchestration/run",
+    headers: { host: "localhost", "content-type": "application/json" },
+  });
+  return req;
 }
 
 function makeRes() {
@@ -156,6 +210,57 @@ function config(): OrchestrationConfig {
         id: "standardImplementation",
         purpose: "feature work",
         requiredRoles: ["seniorImplementer"],
+        optionalRoles: [],
+      },
+    ],
+    quotas: { providers: {}, families: {} },
+  };
+}
+
+function sameFamilyReviewConfig(): OrchestrationConfig {
+  return {
+    workers: [
+      {
+        id: "mockImplementer",
+        provider: "mock",
+        family: "local",
+        tier: "frontier",
+        capabilities: ["repo_edit", "coding"],
+        tools: ["git", "filesystem"],
+        maxConcurrentTasks: 1,
+        costClass: "low",
+        workspacePolicy: "shared",
+      },
+      {
+        id: "mockReviewer",
+        provider: "mock",
+        family: "local",
+        tier: "frontier",
+        capabilities: ["code_review"],
+        tools: ["filesystem"],
+        maxConcurrentTasks: 1,
+        costClass: "low",
+        workspacePolicy: "read_only",
+      },
+    ],
+    roles: [
+      {
+        id: "seniorImplementer",
+        requiredCapabilities: ["repo_edit", "coding"],
+        requiredTools: ["git", "filesystem"],
+      },
+      {
+        id: "independentReviewer",
+        requiredCapabilities: ["code_review"],
+        requiredTools: ["filesystem"],
+        familyConstraint: "opposite_of_implementer",
+      },
+    ],
+    coordinatorTemplates: [
+      {
+        id: "withReview",
+        purpose: "implementation with review",
+        requiredRoles: ["seniorImplementer", "independentReviewer"],
         optionalRoles: [],
       },
     ],

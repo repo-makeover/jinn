@@ -88,6 +88,29 @@ export interface Allocation {
   createdAt: string;
 }
 
+export type ReviewPolicyDecision =
+  | "opposite_family_selected"
+  | "same_family_fallback_used"
+  | "same_family_fallback_forbidden"
+  | "no_qualified_reviewer";
+
+export interface ReviewPolicyExplanation {
+  role: string;
+  familyConstraint: "opposite_of_implementer";
+  sameFamilyReviewerFallback: boolean;
+  implementerFamilies: string[];
+  selectedWorkerId?: string;
+  selectedWorkerFamily?: string;
+  oppositeFamilyCandidateIds: string[];
+  sameFamilyCandidateIds: string[];
+  decision: ReviewPolicyDecision;
+  detail: string;
+}
+
+export interface ReviewPolicySummary {
+  explanations: ReviewPolicyExplanation[];
+}
+
 export interface QueueItem {
   taskId: string;
   coordinatorId: string;
@@ -133,8 +156,8 @@ export interface SchedulerSnapshot {
 }
 
 export type AllocationResult =
-  | { ok: true; allocation: Allocation }
-  | { ok: false; queueItem: QueueItem };
+  | { ok: true; allocation: Allocation; reviewPolicy: ReviewPolicySummary }
+  | { ok: false; queueItem: QueueItem; reviewPolicy: ReviewPolicySummary };
 
 export interface SimulationStepResult {
   step: number;

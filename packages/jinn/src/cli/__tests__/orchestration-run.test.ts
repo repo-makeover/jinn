@@ -56,6 +56,38 @@ describe("jinn run orchestration client", () => {
     });
     expect(JSON.parse(String(logSpy.mock.calls[0][0]))).toMatchObject({ state: "completed" });
   });
+
+  it("prints review-policy explanations for text run output", async () => {
+    const taskFile = path.join(tmpHome, "task.yaml");
+    fs.writeFileSync(taskFile, [
+      "taskId: cli-task",
+      "coordinatorId: cli-coord",
+      "requiredRoles: [seniorImplementer, independentReviewer]",
+      "prompt: Implement and review a small task",
+    ].join("\n"));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      ok: false,
+      state: "blocked_resource",
+      mode: "single_worker_with_review",
+      queueItem: {
+        taskId: "cli-task",
+        missingRoles: ["independentReviewer"],
+        resumeOn: ["worker_released", "quota_available", "lease_expired"],
+      },
+      reviewPolicy: {
+        explanations: [{
+          role: "independentReviewer",
+          decision: "same_family_fallback_forbidden",
+          detail: "independentReviewer blocked because only same-family reviewers were qualified and fallback is disabled.",
+        }],
+      },
+    }), { status: 409, headers: { "Content-Type": "application/json" } })));
+
+    const { runOrchestrationRun } = await import("../orchestration.js");
+    await runOrchestrationRun({ mode: "single_worker_with_review", task: taskFile });
+
+    expect(String(logSpy.mock.calls[0][0])).toContain("Review policy: same_family_fallback_forbidden");
+  });
 });
 
 function writeGatewayFiles(dir: string): void {

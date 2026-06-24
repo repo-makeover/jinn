@@ -6,12 +6,21 @@ import type {
   LeaseValidationResult,
   OrchestrationConfig,
   QueueItem,
+  ReviewPolicyExplanation,
   RoleDefinition,
   SchedulerSnapshot,
   SimulationStepResult,
   TelemetryEvent,
   Worker,
 } from "./types.js";
+import {
+  DEFAULT_CROSS_FAMILY_REVIEW_POLICY,
+  explainReviewPolicy,
+  isImplementerRole,
+  resolveCrossFamilyReviewPolicy,
+  selectedImplementerFamilies,
+  type CrossFamilyReviewPolicy,
+} from "./cross-family.js";
 
 const COST_RANK: Record<string, number> = {
   near_zero: 0,
@@ -29,12 +38,18 @@ const PRIORITY_RANK: Record<string, number> = {
 export interface SchedulerOptions {
   now?: () => Date;
   snapshot?: SchedulerSnapshot;
+  reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
 }
 
 interface CandidateState {
   workerLeaseCounts: Map<string, number>;
   providerCounts: Map<string, number>;
   familyCounts: Map<string, number>;
+}
+
+interface WorkerSelection {
+  worker: Worker | null;
+  explanation?: ReviewPolicyExplanation;
 }
 
 export class MatrixScheduler {
@@ -45,12 +60,16 @@ export class MatrixScheduler {
   private readonly leases = new Map<string, Lease>();
   private readonly queue: QueueItem[] = [];
   private readonly telemetry: TelemetryEvent[] = [];
+  private readonly reviewPolicy: CrossFamilyReviewPolicy;
   private nextSeq = 1;
 
   constructor(private readonly config: OrchestrationConfig, opts: SchedulerOptions = {}) {
     this.workers = [...config.workers].sort((a, b) => a.id.localeCompare(b.id));
     this.roles = new Map(config.roles.map((role) => [role.id, role]));
     this.now = opts.now ?? (() => new Date());
+    this.reviewPolicy = opts.reviewPolicy
+      ? resolveCrossFamilyReviewPolicy(opts.reviewPolicy)
+      : DEFAULT_CROSS_FAMILY_REVIEW_POLICY;
     if (opts.snapshot) this.hydrate(opts.snapshot);
   }
 
@@ -59,10 +78,13 @@ export class MatrixScheduler {
     const activeState = this.activeState();
     const selected: Array<{ role: string; worker: Worker }> = [];
     const missingRoles: string[] = [];
+    const explanations: ReviewPolicyExplanation[] = [];
 
     for (const roleId of request.requiredRoles) {
       const role = this.requireRole(roleId);
-      const worker = this.selectWorker(role, selected, activeState);
+      const selection = this.selectWorker(role, selected, activeState);
+      if (selection.explanation) explanations.push(selection.explanation);
+      const worker = selection.worker;
       if (!worker) {
         missingRoles.push(roleId);
         continue;
@@ -78,13 +100,15 @@ export class MatrixScheduler {
         timestamp: queueItem.blockedSince,
         detail: { missingRoles },
       });
-      return { ok: false, queueItem };
+      return { ok: false, queueItem, reviewPolicy: { explanations } };
     }
 
     const optionalRolesSkipped: string[] = [];
     for (const roleId of request.optionalRoles) {
       const role = this.requireRole(roleId);
-      const worker = this.selectWorker(role, selected, activeState);
+      const selection = this.selectWorker(role, selected, activeState);
+      if (selection.explanation) explanations.push(selection.explanation);
+      const worker = selection.worker;
       if (!worker) {
         optionalRolesSkipped.push(roleId);
         continue;
@@ -114,7 +138,7 @@ export class MatrixScheduler {
         roles: leases.map((lease) => lease.role),
       },
     });
-    return { ok: true, allocation };
+    return { ok: true, allocation, reviewPolicy: { explanations } };
   }
 
   heartbeatLease(leaseId: string, coordinatorId?: string): Lease {
@@ -263,11 +287,80 @@ export class MatrixScheduler {
     role: RoleDefinition,
     selected: Array<{ role: string; worker: Worker }>,
     state: CandidateState,
-  ): Worker | null {
-    const candidates = this.workers
-      .filter((worker) => this.workerQualifies(worker, role, selected, state))
+  ): WorkerSelection {
+    if (role.familyConstraint === "opposite_of_implementer") {
+      return this.selectOppositeFamilyReviewer(role, selected, state);
+    }
+    return { worker: this.sortedCandidates(role, selected, state, "normal")[0] ?? null };
+  }
+
+  private selectOppositeFamilyReviewer(
+    role: RoleDefinition,
+    selected: Array<{ role: string; worker: Worker }>,
+    state: CandidateState,
+  ): WorkerSelection {
+    const implementerFamilies = selectedImplementerFamilies(selected, (roleId) => this.roles.get(roleId));
+    if (implementerFamilies.length === 0) {
+      return { worker: this.sortedCandidates(role, selected, state, "normal")[0] ?? null };
+    }
+
+    const oppositeCandidates = this.sortedCandidates(role, selected, state, "normal");
+    const sameFamilyCandidates = this.sortedCandidates(role, selected, state, "ignore_opposite_constraint")
+      .filter((worker) => implementerFamilies.includes(worker.family) && !selected.some((entry) => entry.worker.id === worker.id));
+    const opposite = oppositeCandidates[0];
+    if (opposite) {
+      return {
+        worker: opposite,
+        explanation: explainReviewPolicy({
+          role: role.id,
+          policy: this.reviewPolicy,
+          implementerFamilies,
+          oppositeCandidates,
+          sameFamilyCandidates,
+          selectedWorker: opposite,
+          decision: "opposite_family_selected",
+        }),
+      };
+    }
+
+    const fallback = sameFamilyCandidates[0];
+    if (fallback && this.reviewPolicy.sameFamilyReviewerFallback) {
+      return {
+        worker: fallback,
+        explanation: explainReviewPolicy({
+          role: role.id,
+          policy: this.reviewPolicy,
+          implementerFamilies,
+          oppositeCandidates,
+          sameFamilyCandidates,
+          selectedWorker: fallback,
+          decision: "same_family_fallback_used",
+        }),
+      };
+    }
+
+    return {
+      worker: null,
+      explanation: explainReviewPolicy({
+        role: role.id,
+        policy: this.reviewPolicy,
+        implementerFamilies,
+        oppositeCandidates,
+        sameFamilyCandidates,
+        decision: sameFamilyCandidates.length > 0 ? "same_family_fallback_forbidden" : "no_qualified_reviewer",
+      }),
+    };
+  }
+
+  private sortedCandidates(
+    role: RoleDefinition,
+    selected: Array<{ role: string; worker: Worker }>,
+    state: CandidateState,
+    familyMode: "normal" | "ignore_opposite_constraint",
+  ): Worker[] {
+    return this.workers
+      .filter((worker) => this.workerQualifies(worker, role, selected, state, familyMode))
       .sort((a, b) => compareWorkers(a, b, role));
-    return candidates[0] ?? null;
   }
 
   private workerQualifies(
@@ -275,6 +368,7 @@ export class MatrixScheduler {
     role: RoleDefinition,
     selected: Array<{ role: string; worker: Worker }>,
     state: CandidateState,
+    familyMode: "normal" | "ignore_opposite_constraint",
   ): boolean {
     if (role.allowedFamilies && !role.allowedFamilies.includes(worker.family)) return false;
     if (!role.requiredCapabilities.every((capability) => worker.capabilities.includes(capability))) return false;
@@ -282,6 +376,7 @@ export class MatrixScheduler {
     if ((state.workerLeaseCounts.get(worker.id) ?? 0) >= worker.maxConcurrentTasks) return false;
     if (!this.quotaAllows("providers", worker.provider, state.providerCounts)) return false;
     if (!this.quotaAllows("families", worker.family, state.familyCounts)) return false;
+    if (familyMode === "ignore_opposite_constraint" && role.familyConstraint === "opposite_of_implementer") return true;
     return this.familyConstraintAllows(worker, role, selected);
   }
 
@@ -465,12 +560,6 @@ function compareQueueItems(a: QueueItem, b: QueueItem): number {
   const time = Date.parse(a.blockedSince) - Date.parse(b.blockedSince);
   if (time !== 0) return time;
   return a.taskId.localeCompare(b.taskId);
-}
-
-function isImplementerRole(roleId: string, role: RoleDefinition | undefined): boolean {
-  if (roleId.includes("implementer")) return true;
-  if (!role) return false;
-  return role.requiredCapabilities.includes("repo_edit") || role.requiredCapabilities.includes("coding");
 }
 
 function sanitizeId(value: string): string {

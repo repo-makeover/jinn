@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkers } from "../schemas.js";
-import { MatrixScheduler } from "../scheduler.js";
+import { MatrixScheduler, type SchedulerOptions } from "../scheduler.js";
 import type { AllocationRequest, OrchestrationConfig, RoleDefinition, Worker } from "../types.js";
 
 const fixedNow = new Date("2026-06-23T12:00:00.000Z");
@@ -73,8 +73,8 @@ function request(overrides: Partial<AllocationRequest> = {}): AllocationRequest 
   };
 }
 
-function scheduler(cfg: OrchestrationConfig): MatrixScheduler {
-  return new MatrixScheduler(cfg, { now: () => fixedNow });
+function scheduler(cfg: OrchestrationConfig, opts: Omit<SchedulerOptions, "now"> = {}): MatrixScheduler {
+  return new MatrixScheduler(cfg, { now: () => fixedNow, ...opts });
 }
 
 describe("orchestration schemas", () => {
@@ -165,6 +165,118 @@ describe("MatrixScheduler", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.allocation.leases.find((lease) => lease.role === "independentReviewer")?.workerId).toBe("haikuReviewer");
+    expect(result.reviewPolicy.explanations[0]).toMatchObject({
+      role: "independentReviewer",
+      decision: "opposite_family_selected",
+      selectedWorkerId: "haikuReviewer",
+      sameFamilyReviewerFallback: false,
+    });
+  });
+
+  it("blocks same-family-only reviewers when fallback is forbidden", () => {
+    const s = scheduler(config([
+      worker({
+        id: "openaiImplementer",
+        provider: "openai",
+        family: "openai",
+        capabilities: ["repo_edit", "coding"],
+        tools: ["git", "filesystem"],
+      }),
+      worker({
+        id: "openaiReviewer",
+        provider: "openai",
+        family: "openai",
+        capabilities: ["code_review"],
+        tools: ["filesystem"],
+      }),
+    ]));
+    const result = s.requestAllocation(request({
+      requiredRoles: ["seniorImplementer", "independentReviewer"],
+    }));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.queueItem.missingRoles).toEqual(["independentReviewer"]);
+    expect(result.reviewPolicy.explanations[0]).toMatchObject({
+      role: "independentReviewer",
+      decision: "same_family_fallback_forbidden",
+      sameFamilyReviewerFallback: false,
+      implementerFamilies: ["openai"],
+      sameFamilyCandidateIds: ["openaiReviewer"],
+    });
+    expect(s.listLeases()).toHaveLength(0);
+  });
+
+  it("uses explicit same-family reviewer fallback when no opposite-family reviewer is qualified", () => {
+    const s = scheduler(config([
+      worker({
+        id: "openaiImplementer",
+        provider: "openai",
+        family: "openai",
+        capabilities: ["repo_edit", "coding"],
+        tools: ["git", "filesystem"],
+      }),
+      worker({
+        id: "openaiReviewer",
+        provider: "openai",
+        family: "openai",
+        capabilities: ["code_review"],
+        tools: ["filesystem"],
+      }),
+    ]), { reviewPolicy: { sameFamilyReviewerFallback: true } });
+    const result = s.requestAllocation(request({
+      requiredRoles: ["seniorImplementer", "independentReviewer"],
+    }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.allocation.leases.find((lease) => lease.role === "independentReviewer")?.workerId).toBe("openaiReviewer");
+    expect(result.reviewPolicy.explanations[0]).toMatchObject({
+      role: "independentReviewer",
+      decision: "same_family_fallback_used",
+      sameFamilyReviewerFallback: true,
+      selectedWorkerId: "openaiReviewer",
+    });
+  });
+
+  it("prefers an opposite-family reviewer even when same-family fallback is enabled", () => {
+    const s = scheduler(config([
+      worker({
+        id: "openaiImplementer",
+        provider: "openai",
+        family: "openai",
+        capabilities: ["repo_edit", "coding"],
+        tools: ["git", "filesystem"],
+      }),
+      worker({
+        id: "openaiReviewer",
+        provider: "openai",
+        family: "openai",
+        capabilities: ["code_review"],
+        tools: ["filesystem"],
+        costClass: "near_zero",
+      }),
+      worker({
+        id: "anthropicReviewer",
+        provider: "anthropic",
+        family: "anthropic",
+        capabilities: ["code_review"],
+        tools: ["filesystem"],
+        costClass: "medium",
+      }),
+    ]), { reviewPolicy: { sameFamilyReviewerFallback: true } });
+    const result = s.requestAllocation(request({
+      requiredRoles: ["seniorImplementer", "independentReviewer"],
+    }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.allocation.leases.find((lease) => lease.role === "independentReviewer")?.workerId).toBe("anthropicReviewer");
+    expect(result.reviewPolicy.explanations[0]).toMatchObject({
+      decision: "opposite_family_selected",
+      oppositeFamilyCandidateIds: ["anthropicReviewer"],
+      sameFamilyCandidateIds: ["openaiReviewer"],
+    });
   });
 
   it("blocks atomically when provider quota is exhausted by the required team", () => {

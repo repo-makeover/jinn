@@ -82,7 +82,81 @@ describe("runOrchestrationTask", () => {
     if (!result.ok) return;
     expect(result.sessions.map((session) => session.role)).toEqual(["seniorImplementer", "independentReviewer"]);
     expect(engine.prompts[1]).toContain("Review-only pass");
+    expect(result.reviewPolicy.explanations[0]).toMatchObject({
+      decision: "opposite_family_selected",
+      selectedWorkerId: "mockReviewer",
+    });
     expect(runtime.listLeases().map((lease) => lease.state)).toEqual(["released", "released"]);
+    runtime.close();
+  });
+
+  it("blocks live review runs when only same-family reviewers qualify and fallback is disabled", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
+    const engine = new RecordingEngine();
+    const runtime = new OrchestrationRuntime({ config: sameFamilyReviewConfig(), dbPath: ":memory:", startReaper: false });
+    const ctx = makeContext(runtime, engine);
+
+    const result = await runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-same-family-blocked",
+        coordinatorId: "coord-same-family-blocked",
+        coordinatorTemplate: "withReview",
+        mode: "single_worker_with_review",
+        prompt: "Implement and review a same-family-only task",
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.queueItem.missingRoles).toEqual(["independentReviewer"]);
+    expect(result.reviewPolicy.explanations[0]).toMatchObject({
+      decision: "same_family_fallback_forbidden",
+      sameFamilyCandidateIds: ["mockReviewer"],
+    });
+    expect(engine.run).not.toHaveBeenCalled();
+    runtime.close();
+  });
+
+  it("runs same-family reviewer fallback only when explicitly configured and records session metadata", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime, getSession } = await loadModules();
+    const engine = new RecordingEngine();
+    const runtime = new OrchestrationRuntime({
+      config: sameFamilyReviewConfig(),
+      dbPath: ":memory:",
+      startReaper: false,
+      reviewPolicy: { sameFamilyReviewerFallback: true },
+    });
+    const cfg = jinnConfig({ sameFamilyReviewerFallback: true });
+    const ctx = makeContext(runtime, engine, cfg);
+
+    const result = await runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-same-family-fallback",
+        coordinatorId: "coord-same-family-fallback",
+        coordinatorTemplate: "withReview",
+        mode: "single_worker_with_review",
+        prompt: "Implement and review with explicit fallback",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.reviewPolicy.explanations[0]).toMatchObject({
+      decision: "same_family_fallback_used",
+      selectedWorkerId: "mockReviewer",
+      sameFamilyReviewerFallback: true,
+    });
+    const reviewerSession = result.sessions.find((session) => session.role === "independentReviewer");
+    expect(reviewerSession?.reviewPolicy?.decision).toBe("same_family_fallback_used");
+    expect(getSession(reviewerSession?.sessionId ?? "")?.transportMeta).toMatchObject({
+      orchestrationReviewPolicy: {
+        decision: "same_family_fallback_used",
+        selectedWorkerId: "mockReviewer",
+      },
+    });
+    expect(engine.run).toHaveBeenCalledTimes(2);
     runtime.close();
   });
 
@@ -165,8 +239,7 @@ class RecordingEngine implements Engine {
   });
 }
 
-function makeContext(runtime: unknown, engine: Engine): ApiContext {
-  const cfg = jinnConfig();
+function makeContext(runtime: unknown, engine: Engine, cfg: JinnConfig = jinnConfig()): ApiContext {
   return {
     config: cfg,
     getConfig: () => cfg,
@@ -226,6 +299,14 @@ function reviewConfig(): OrchestrationConfig {
   };
 }
 
+function sameFamilyReviewConfig(): OrchestrationConfig {
+  const cfg = reviewConfig();
+  return {
+    ...cfg,
+    workers: cfg.workers.map((entry) => ({ ...entry, family: "local" })),
+  };
+}
+
 function reviewWorktreeConfig(): OrchestrationConfig {
   const cfg = reviewConfig();
   return {
@@ -237,7 +318,7 @@ function reviewWorktreeConfig(): OrchestrationConfig {
   };
 }
 
-function jinnConfig(): JinnConfig {
+function jinnConfig(orchestration: Partial<NonNullable<JinnConfig["orchestration"]>> = {}): JinnConfig {
   return {
     gateway: { port: 7777, host: "127.0.0.1" },
     engines: {
@@ -247,7 +328,7 @@ function jinnConfig(): JinnConfig {
     },
     connectors: {},
     logging: { file: false, stdout: false, level: "error" },
-    orchestration: { enabled: true },
+    orchestration: { enabled: true, ...orchestration },
   } as JinnConfig;
 }
 

@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { createSession, getSession, insertMessage, updateSession } from "../sessions/registry.js";
 import { logger } from "../shared/logger.js";
-import type { Engine } from "../shared/types.js";
+import type { Engine, JsonObject } from "../shared/types.js";
 import type { ApiContext } from "../gateway/api.js";
 import { dispatchWebSessionRun } from "../gateway/api/session-dispatch.js";
 import { buildCoordinatorTaskBrief, coordinatorModeSchema, type CoordinatorMode } from "./coordinator.js";
+import { isReviewerRole } from "./cross-family.js";
 import { toLeaseTransportMeta } from "./lease-meta.js";
 import { resolveLiveLeaseDurationMs } from "./runtime.js";
-import type { Allocation, Lease, QueueItem, Worker } from "./types.js";
+import type { Allocation, Lease, QueueItem, ReviewPolicyExplanation, ReviewPolicySummary, RoleDefinition, Worker } from "./types.js";
 import {
   cleanupWorktree,
   createImplementationWorktree,
@@ -45,8 +46,8 @@ export interface RunOrchestrationTaskOptions {
 }
 
 export type OrchestrationRunTaskResult =
-  | { ok: false; state: "blocked_resource"; mode: LiveRunMode; queueItem: QueueItem }
-  | { ok: true; state: "completed"; mode: LiveRunMode; allocation: Allocation; sessions: OrchestrationRunSession[] };
+  | { ok: false; state: "blocked_resource"; mode: LiveRunMode; queueItem: QueueItem; reviewPolicy: ReviewPolicySummary }
+  | { ok: true; state: "completed"; mode: LiveRunMode; allocation: Allocation; sessions: OrchestrationRunSession[]; reviewPolicy: ReviewPolicySummary };
 
 export interface OrchestrationRunSession {
   sessionId: string;
@@ -58,6 +59,7 @@ export interface OrchestrationRunSession {
   cwd: string;
   workspaceMode: LeaseWorkspace["mode"];
   worktreePath?: string;
+  reviewPolicy?: ReviewPolicyExplanation;
 }
 
 type LeaseWorkspace =
@@ -85,19 +87,25 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
   };
   const brief = buildCoordinatorTaskBrief(requestInput, runtime.config);
   const allocationResult = runtime.requestAllocation(brief.request);
-  if (!allocationResult.ok) return { ok: false, state: "blocked_resource", mode, queueItem: allocationResult.queueItem };
+  if (!allocationResult.ok) {
+    return { ok: false, state: "blocked_resource", mode, queueItem: allocationResult.queueItem, reviewPolicy: allocationResult.reviewPolicy };
+  }
 
   const sessions: OrchestrationRunSession[] = [];
   const baseCwd = resolveTaskBaseCwd(parsed.cwd, opts.context.getConfig());
   const laneWorktrees = new Map<string, WorktreeHandle>();
+  const roleDefinitions = new Map(runtime.config.roles.map((role) => [role.id, role]));
+  const reviewPolicyByRole = new Map(allocationResult.reviewPolicy.explanations.map((explanation) => [explanation.role, explanation]));
   try {
     for (const lease of allocationResult.allocation.leases) {
       const worker = requireWorker(runtime.listWorkers(), lease.workerId);
+      const role = roleDefinitions.get(lease.role);
       let turnStarted = false;
       try {
         const workspace = prepareLeaseWorkspace({
           baseCwd,
           lease,
+          role,
           worker,
           worktrees: laneWorktrees,
           runtime,
@@ -109,7 +117,8 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
           lease,
           worker,
           workspace,
-          prompt: promptForRole(parsed.prompt, lease.role),
+          reviewPolicy: reviewPolicyByRole.get(lease.role),
+          prompt: promptForRole(parsed.prompt, lease.role, role),
           title: parsed.title,
           model: parsed.model,
           effortLevel: parsed.effortLevel,
@@ -129,7 +138,7 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
     }
   }
 
-  return { ok: true, state: "completed", mode, allocation: allocationResult.allocation, sessions };
+  return { ok: true, state: "completed", mode, allocation: allocationResult.allocation, sessions, reviewPolicy: allocationResult.reviewPolicy };
 }
 
 async function runLeaseTurn(opts: {
@@ -138,6 +147,7 @@ async function runLeaseTurn(opts: {
   lease: Lease;
   worker: Worker;
   workspace: LeaseWorkspace;
+  reviewPolicy?: ReviewPolicyExplanation;
   prompt: string;
   title?: string;
   model?: string;
@@ -167,6 +177,9 @@ async function runLeaseTurn(opts: {
     readOnly: opts.workspace.mode === "review_read_only_worktree",
     downgradeReason: opts.workspace.mode === "shared" ? opts.workspace.downgradeReason ?? null : null,
   };
+  if (opts.reviewPolicy) {
+    transportMeta["orchestrationReviewPolicy"] = opts.reviewPolicy as unknown as JsonObject;
+  }
   const session = createSession({
     engine: opts.worker.provider,
     source: "web",
@@ -214,17 +227,19 @@ async function runLeaseTurn(opts: {
     cwd: opts.workspace.cwd,
     workspaceMode: opts.workspace.mode,
     worktreePath: "handle" in opts.workspace ? opts.workspace.handle.path : undefined,
+    reviewPolicy: opts.reviewPolicy,
   };
 }
 
 function prepareLeaseWorkspace(opts: {
   baseCwd: string;
   lease: Lease;
+  role?: RoleDefinition;
   worker: Worker;
   worktrees: Map<string, WorktreeHandle>;
   runtime: { getWorktreeOptions(): WorktreeOptions };
 }): LeaseWorkspace {
-  if (isReviewRole(opts.lease.role)) {
+  if (isReviewerRole(opts.lease.role, opts.role)) {
     const implementation = firstWorktree(opts.worktrees);
     if (implementation) return { mode: "review_read_only_worktree", cwd: implementation.path, handle: implementation };
     return { mode: "shared", cwd: opts.baseCwd };
@@ -253,10 +268,6 @@ function firstWorktree(worktrees: Map<string, WorktreeHandle>): WorktreeHandle |
   return worktrees.values().next().value;
 }
 
-function isReviewRole(role: string): boolean {
-  return role.toLowerCase().includes("review");
-}
-
 function releaseLeaseSafely(runtime: { releaseLease(leaseId: string, coordinatorId?: string): Lease }, lease: Lease): void {
   try {
     runtime.releaseLease(lease.leaseId, lease.coordinatorId);
@@ -275,8 +286,8 @@ function requireWorker(workers: Worker[], workerId: string): Worker {
   return worker;
 }
 
-function promptForRole(prompt: string, role: string): string {
-  if (!role.toLowerCase().includes("review")) return prompt;
+function promptForRole(prompt: string, roleId: string, role: RoleDefinition | undefined): string {
+  if (!isReviewerRole(roleId, role)) return prompt;
   return [
     "Review-only pass. Do not modify files. Inspect the completed work and report issues, risks, and missing validation.",
     "",

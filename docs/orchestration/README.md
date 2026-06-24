@@ -5,7 +5,9 @@ scheduler-state, provider-adapter contract modules, opt-in live-adapter
 plumbing, coordinator planning, observe surfaces, and the first opt-in live run
 modes. The live modes are daemon-gated by `orchestration.enabled` and route
 through the existing Jinn session path. Git worktree execution is implemented
-for isolated implementation lanes plus read-only review access. Dashboard
+for isolated implementation lanes plus read-only review access. Live
+cross-family reviewer policy is implemented with fail-closed same-family
+fallback and structured explanations. Dashboard
 controls, board-worker dispatch, dual lanes, and org-worker mapping remain
 later milestones.
 
@@ -108,6 +110,9 @@ does not open the scheduler DB directly; it posts the task to
 its single runtime scheduler, creates normal Jinn sessions with lease metadata in
 `transportMeta`, heartbeats the lease on the existing 5s session heartbeat, and
 releases leases in `finally` after each role turn settles.
+For `single_worker_with_review`, JSON output includes `reviewPolicy.explanations`.
+Text output prints the reviewer policy decision so same-family fallback or a
+blocked reviewer is not silent.
 
 `jinn worktree create|diff|cleanup` uses the live `config.yaml`
 `orchestration.worktreeRoot` and `orchestration.maxWorktrees` settings. The
@@ -134,6 +139,8 @@ not create dashboard controls. When an implementation worker has
 `workspacePolicy: isolated_worktree` and the resolved task `cwd` is inside a git
 repo, the run path creates a task/lane-scoped worktree and passes that path as
 the session `cwd`. Non-supported methods return `405`.
+Run responses include structured `reviewPolicy.explanations` when reviewer
+family policy selects, falls back, or blocks a reviewer.
 
 ## Scheduler Behavior
 
@@ -145,10 +152,30 @@ the session `cwd`. Non-supported methods return `405`.
 - Default routing is deterministic: preferred tier/cost first when configured,
   otherwise lower cost class first, then lexical worker id.
 - Opposite-family reviewers compare against already selected implementer roles.
+- Same-family reviewer fallback is forbidden by default. Setting
+  `orchestration.sameFamilyReviewerFallback: true` lets live review allocation
+  use a same-family reviewer only after no qualified opposite-family reviewer is
+  available. Opposite-family candidates still win when present.
+- Reviewer selection and blocked-reviewer allocation return structured
+  explanations with candidate ids, implementer families, the selected worker
+  when any, and the policy decision.
 - Queued tasks do not keep a model running. They resume only when the scheduler
   is asked to retry after a resource event such as release or expiry.
 - Lease validation rejects missing, expired, released, foreign-worker,
   foreign-task, and foreign-coordinator leases.
+
+## Runtime Policy Config
+
+The live daemon runtime reads these optional `config.yaml` keys:
+
+```yaml
+orchestration:
+  enabled: true
+  sameFamilyReviewerFallback: false
+```
+
+`sameFamilyReviewerFallback` defaults to `false`. It is a boolean only; invalid
+types are rejected by config validation.
 
 ## Durable State
 
@@ -237,16 +264,18 @@ simulation remain deterministic.
 - Corrupt DB recovery quarantines the DB and surfaces recovery telemetry instead
   of silently presenting an ordinary empty state.
 - Adapter start rejects invalid leases before any inert engine can run.
+- Same-family reviewer fallback is never implicit. If fallback is disabled and
+  only same-family reviewers qualify, allocation returns `blocked_resource` with
+  a `same_family_fallback_forbidden` explanation.
 - Observe-only API routes reject mutating HTTP methods and return existing
   workers/leases/queue/allocations only.
 - Durable scheduler state, adapter contracts, opt-in live adapters, headroom
   predicates, daemon runtime ownership, first live run modes, and git worktree
-  isolation are implemented. Persistent telemetry aggregation, dual-lane
-  routing, board-worker integration, and dashboard controls are not implemented
-  yet.
+  isolation are implemented. Live cross-family reviewer policy is implemented.
+  Persistent telemetry aggregation, dual-lane routing, board-worker integration,
+  and dashboard controls are not implemented yet.
 
 ## Later Milestones
 
-- Cross-family review policy for live runs.
 - Dual provider lanes and integration selection.
 - Durable telemetry and dashboard control surfaces.
