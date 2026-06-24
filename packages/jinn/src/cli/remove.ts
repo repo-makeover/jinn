@@ -22,12 +22,14 @@ export async function runRemove(name: string, opts: { force?: boolean }): Promis
   }
 
   const instance = instances[index];
-  let safeHome: string;
-  try {
-    safeHome = assertSafeManagedInstanceHome(instance);
-  } catch (err) {
-    console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
+  let safeHome: string | null = null;
+  if (opts.force) {
+    try {
+      safeHome = assertSafeManagedInstanceHome(instance);
+    } catch (err) {
+      console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
   }
 
   // Check if running
@@ -47,13 +49,17 @@ export async function runRemove(name: string, opts: { force?: boolean }): Promis
   instances.splice(index, 1);
   saveInstances(instances);
 
-  if (opts.force && fs.existsSync(safeHome)) {
-    fs.rmSync(safeHome, { recursive: true, force: true });
-    console.log(`${GREEN}Instance "${name}" removed.${RESET} Home directory ${DIM}${safeHome}${RESET} deleted.`);
+  if (opts.force) {
+    if (safeHome && fs.existsSync(safeHome)) {
+      fs.rmSync(safeHome, { recursive: true, force: true });
+      console.log(`${GREEN}Instance "${name}" removed.${RESET} Home directory ${DIM}${safeHome}${RESET} deleted.`);
+    } else {
+      console.log(`${GREEN}Instance "${name}" removed.${RESET} Home directory ${DIM}${safeHome}${RESET} was already absent.`);
+    }
   } else {
     console.log(`${GREEN}Instance "${name}" removed from registry.${RESET}`);
-    if (fs.existsSync(safeHome)) {
-      console.log(`  ${YELLOW}Note:${RESET} Home directory ${DIM}${safeHome}${RESET} still exists. Use --force to delete it.`);
+    if (fs.existsSync(instance.home)) {
+      console.log(`  ${YELLOW}Note:${RESET} Home directory ${DIM}${instance.home}${RESET} still exists. Use --force to delete it.`);
     }
   }
 }

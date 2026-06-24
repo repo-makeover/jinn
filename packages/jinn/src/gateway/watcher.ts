@@ -133,7 +133,14 @@ export function startWatchers(callbacks: WatcherCallbacks): void {
 }
 
 export async function stopWatchers(): Promise<void> {
-  await Promise.all(watchers.map((w) => w.close()));
+  const activeWatchers = watchers;
   watchers = [];
+  const results = await Promise.allSettled(activeWatchers.map((w) => w.close()));
+  const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failures.length > 0) {
+    const summary = failures.map((f) => f.reason instanceof Error ? f.reason.message : String(f.reason)).join("; ");
+    logger.warn(`File watcher shutdown had ${failures.length} failure(s): ${summary}`);
+    throw new Error(`failed to close ${failures.length} file watcher(s): ${summary}`);
+  }
   logger.info("File watchers stopped");
 }
