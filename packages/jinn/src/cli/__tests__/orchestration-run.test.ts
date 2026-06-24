@@ -116,6 +116,52 @@ describe("jinn run orchestration client", () => {
     expect(String(logSpy.mock.calls[0][0])).toContain("Orchestration run failed");
     expect(String(logSpy.mock.calls[0][0])).toContain("independentReviewer failed");
   });
+
+  it("lists durable continuations through the gateway", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      continuations: [{
+        taskId: "cli-task-queued",
+        coordinatorId: "cli-coord-queued",
+        mode: "single_worker",
+        state: "failed",
+        retryCount: 2,
+        updatedAt: "2026-06-24T12:00:00.000Z",
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    const { runContinuationsList } = await import("../orchestration.js");
+    await runContinuationsList({});
+
+    expect(String(logSpy.mock.calls[0][0])).toContain("cli-task-queued");
+    expect(String(logSpy.mock.calls[0][0])).toContain("failed");
+  });
+
+  it("retries a failed continuation through the gateway", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      state: "dispatching",
+      continuation: {
+        taskId: "cli-task-retry",
+        coordinatorId: "cli-coord-retry",
+      },
+      allocation: {
+        allocationId: "alloc-retry",
+      },
+      reviewPolicy: { explanations: [] },
+    }), { status: 202, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { runContinuationRetry } = await import("../orchestration.js");
+    await runContinuationRetry({ taskId: "cli-task-retry", coordinatorId: "cli-coord-retry" });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      taskId: "cli-task-retry",
+      coordinatorId: "cli-coord-retry",
+    });
+    expect(String(logSpy.mock.calls[0][0])).toContain("Continuation cli-task-retry/cli-coord-retry dispatched");
+  });
 });
 
 function writeGatewayFiles(dir: string): void {

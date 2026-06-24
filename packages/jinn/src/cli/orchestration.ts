@@ -37,6 +37,12 @@ export interface OrchestrationRunOptions {
   json?: boolean;
 }
 
+export interface OrchestrationContinuationRetryOptions {
+  taskId: string;
+  coordinatorId: string;
+  json?: boolean;
+}
+
 export interface WorktreeCliOptions {
   lane?: string;
   json?: boolean;
@@ -134,6 +140,22 @@ function formatQueue(queue: QueueItem[]): string {
   return lines.join("\n");
 }
 
+function formatContinuations(continuations: Array<Record<string, unknown>>): string {
+  if (continuations.length === 0) return "No durable orchestration continuations.";
+  const lines = ["Task                Coordinator         Mode                      State        Retries  Updated"];
+  for (const continuation of continuations) {
+    lines.push([
+      String(continuation.taskId ?? "").padEnd(19),
+      String(continuation.coordinatorId ?? "").padEnd(19),
+      String(continuation.mode ?? "").padEnd(25),
+      String(continuation.state ?? "").padEnd(12),
+      String(continuation.retryCount ?? 0).padEnd(8),
+      String(continuation.updatedAt ?? ""),
+    ].join(" "));
+  }
+  return lines.join("\n");
+}
+
 function formatRunResult(result: any): string {
   if (result?.ok === false && result?.state === "blocked_resource") {
     const lines = [
@@ -167,6 +189,25 @@ function formatRunResult(result: any): string {
   for (const session of sessions) {
     lines.push(`- ${session.role}: ${session.workerId} (${session.sessionId}) ${session.status}${session.error ? `: ${session.error}` : ""}`);
   }
+  lines.push(...formatReviewPolicy(result?.reviewPolicy));
+  return lines.join("\n");
+}
+
+function formatContinuationRetryResult(result: any): string {
+  if (result?.ok !== true) return String(result?.error ?? "continuation retry failed");
+  if (result.state === "blocked_resource") {
+    const lines = [
+      `Continuation ${result?.continuation?.taskId ?? "(unknown)"}/${result?.continuation?.coordinatorId ?? "(unknown)"} remains blocked_resource`,
+      `Missing roles: ${(result?.queueItem?.missingRoles ?? []).join(", ")}`,
+      `Resume on: ${(result?.queueItem?.resumeOn ?? []).join(", ")}`,
+    ];
+    lines.push(...formatReviewPolicy(result?.reviewPolicy));
+    return lines.join("\n");
+  }
+  const lines = [
+    `Continuation ${result?.continuation?.taskId ?? "(unknown)"}/${result?.continuation?.coordinatorId ?? "(unknown)"} dispatched`,
+    `Allocation: ${result?.allocation?.allocationId ?? "(unknown)"}`,
+  ];
   lines.push(...formatReviewPolicy(result?.reviewPolicy));
   return lines.join("\n");
 }
@@ -271,16 +312,8 @@ export async function runSchedulerSimulate(scenarioFile: string, opts: ConfigDir
 export async function runOrchestrationRun(opts: OrchestrationRunOptions): Promise<void> {
   const mode = liveRunModeSchema.parse(opts.mode);
   const task = readTaskYaml(opts.task);
-  const config = loadConfig();
-  const gateway = readGatewayInfo(GATEWAY_INFO_FILE);
-  if (!gateway?.apiToken) throw new Error("gateway is not running or gateway token is unavailable");
-
-  const res = await fetch(`http://${config.gateway.host}:${gateway.port || config.gateway.port}/api/orchestration/run`, {
+  const res = await fetchGatewayOrchestration("/api/orchestration/run", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${gateway.apiToken}`,
-    },
     body: JSON.stringify({ mode, task }),
   });
   const body = await res.json().catch(() => null);
@@ -292,6 +325,35 @@ export async function runOrchestrationRun(opts: OrchestrationRunOptions): Promis
     throw new Error(`orchestration run failed (${res.status})${detail}`);
   }
   print(opts.json ? body : formatRunResult(body), opts.json);
+}
+
+export async function runContinuationsList(opts: { json?: boolean }): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/continuations", { method: "GET" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = body && typeof body === "object" && "detail" in body ? `: ${(body as { detail?: unknown }).detail}` : "";
+    throw new Error(`failed to list orchestration continuations (${res.status})${detail}`);
+  }
+  const continuations = Array.isArray((body as { continuations?: unknown })?.continuations)
+    ? (body as { continuations: Array<Record<string, unknown>> }).continuations
+    : [];
+  print(opts.json ? body : formatContinuations(continuations), opts.json);
+}
+
+export async function runContinuationRetry(opts: OrchestrationContinuationRetryOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/continuations/retry", {
+    method: "POST",
+    body: JSON.stringify({ taskId: opts.taskId, coordinatorId: opts.coordinatorId }),
+  });
+  const body = await res.json().catch(() => null);
+  if (res.status === 404 || res.status === 409) {
+    throw new Error(String((body as { error?: unknown } | null)?.error ?? "continuation retry rejected"));
+  }
+  if (!res.ok) {
+    const detail = body && typeof body === "object" && "detail" in body ? `: ${(body as { detail?: unknown }).detail}` : "";
+    throw new Error(`continuation retry failed (${res.status})${detail}`);
+  }
+  print(opts.json ? body : formatContinuationRetryResult(body), opts.json);
 }
 
 export async function runWorktreeCreate(taskFile: string, opts: WorktreeCliOptions): Promise<void> {
@@ -328,4 +390,26 @@ function formatWorktreeCreate(result: ReturnType<typeof createImplementationWork
 
 function formatWorktreeCleanup(result: { path: string; removed: boolean }): string {
   return result.removed ? `Removed worktree ${result.path}` : `No worktree found at ${result.path}`;
+}
+
+function getGatewayFetchBase(): { baseUrl: string; apiToken: string } {
+  const config = loadConfig();
+  const gateway = readGatewayInfo(GATEWAY_INFO_FILE);
+  if (!gateway?.apiToken) throw new Error("gateway is not running or gateway token is unavailable");
+  return {
+    baseUrl: `http://${config.gateway.host}:${gateway.port || config.gateway.port}`,
+    apiToken: gateway.apiToken,
+  };
+}
+
+async function fetchGatewayOrchestration(pathname: string, init: { method: string; body?: string }): Promise<Response> {
+  const gateway = getGatewayFetchBase();
+  return fetch(`${gateway.baseUrl}${pathname}`, {
+    method: init.method,
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${gateway.apiToken}`,
+    },
+    body: init.body,
+  });
 }

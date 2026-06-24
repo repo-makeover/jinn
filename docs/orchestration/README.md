@@ -89,6 +89,8 @@ jinn scheduler plan docs/orchestration/examples/task-standard.yaml \
 
 jinn run --mode single_worker --task docs/orchestration/examples/task-live.yaml
 jinn run --mode single_worker_with_review --task docs/orchestration/examples/task-live.yaml --json
+jinn continuations list
+jinn continuations retry --task-id task-live --coordinator-id task-live-review
 
 jinn worktree create docs/orchestration/examples/task-live.yaml --lane seniorImplementer
 jinn worktree diff docs/orchestration/examples/task-live.yaml --lane seniorImplementer
@@ -114,6 +116,10 @@ For `single_worker_with_review`, JSON output includes `reviewPolicy.explanations
 Text output prints the reviewer policy decision so same-family fallback or a
 blocked reviewer is not silent. If any leased role session errors, the live run
 returns `ok: false, state: "failed"` with the session evidence preserved.
+`jinn continuations list` inspects durable blocked/failed continuation records
+through the live gateway. `jinn continuations retry` re-attempts a continuation
+only when it is already in `failed` state; queued continuations remain
+scheduler-owned and resume on resource events.
 
 `jinn worktree create|diff|cleanup` uses the live `config.yaml`
 `orchestration.worktreeRoot` and `orchestration.maxWorktrees` settings. The
@@ -128,6 +134,8 @@ gateway token gate.
 - `GET /api/orchestration/leases`
 - `GET /api/orchestration/queue`
 - `GET /api/orchestration/allocations`
+- `GET /api/orchestration/continuations`
+- `POST /api/orchestration/continuations/retry`
 - `POST /api/orchestration/run`
 
 The GET routes return the configured workers and scheduler state. When the
@@ -145,6 +153,9 @@ Non-supported methods return `405`.
 Run responses include structured `reviewPolicy.explanations` when reviewer
 family policy selects, falls back, or blocks a reviewer. Blocked live runs
 persist a durable continuation and auto-resume on later resource availability.
+Failed continuations remain inspectable and can be retried explicitly through
+the continuation routes. Manual retry does not target still-queued
+continuations, which continue to resume only on scheduler resource events.
 
 ## Scheduler Behavior
 

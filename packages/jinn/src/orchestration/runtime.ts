@@ -2,6 +2,7 @@ import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_WORKTREE_ROOT } from "../shared/paths.js
 import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import { loadOrchestrationConfig } from "./config.js";
+import { buildCoordinatorTaskBrief, type CoordinatorMode } from "./coordinator.js";
 import { resolveCrossFamilyReviewPolicy, type CrossFamilyReviewPolicy } from "./cross-family.js";
 import type { LiveRunContinuationRecord } from "./live-run.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
@@ -14,6 +15,7 @@ import {
   type Lease,
   type LeaseValidationResult,
   type OrchestrationConfig,
+  type QueueItem,
   type ReviewPolicySummary,
 } from "./types.js";
 import { DEFAULT_MAX_WORKTREES, reapOrphanedWorktrees, type WorktreeHandle, type WorktreeOptions } from "./worktree.js";
@@ -37,6 +39,23 @@ export interface ResumeQueuedRun {
   allocation: Allocation;
   reviewPolicy: ReviewPolicySummary;
 }
+
+export type RetryLiveContinuationResult =
+  | { ok: false; reason: "not_found" | "invalid_state"; message: string }
+  | {
+    ok: true;
+    state: "blocked_resource";
+    continuation: LiveRunContinuationRecord;
+    queueItem: QueueItem;
+    reviewPolicy: ReviewPolicySummary;
+  }
+  | {
+    ok: true;
+    state: "dispatching";
+    continuation: LiveRunContinuationRecord;
+    allocation: Allocation;
+    reviewPolicy: ReviewPolicySummary;
+  };
 
 type ResumeQueuedRunHandler = (run: ResumeQueuedRun) => Promise<void>;
 
@@ -144,6 +163,57 @@ export class OrchestrationRuntime {
 
   listLiveContinuations() {
     return this.store.listLiveContinuations();
+  }
+
+  retryFailedLiveContinuation(taskId: string, coordinatorId: string): RetryLiveContinuationResult {
+    const current = this.store.getLiveContinuation(taskId, coordinatorId);
+    if (!current) {
+      return {
+        ok: false,
+        reason: "not_found",
+        message: `no live continuation found for ${taskId}/${coordinatorId}`,
+      };
+    }
+    if (current.state !== "failed") {
+      return {
+        ok: false,
+        reason: "invalid_state",
+        message: `live continuation ${taskId}/${coordinatorId} is ${current.state}; only failed continuations can be retried manually`,
+      };
+    }
+
+    const queued = this.store.markLiveContinuationState(taskId, coordinatorId, "queued", {
+      allocationId: null,
+      lastError: null,
+    });
+    if (!queued) {
+      return {
+        ok: false,
+        reason: "not_found",
+        message: `live continuation ${taskId}/${coordinatorId} disappeared before retry`,
+      };
+    }
+
+    const result = this.scheduler.requestAllocation(buildContinuationRequest(queued, this.config));
+    if (!result.ok) {
+      const blocked = this.store.getLiveContinuation(taskId, coordinatorId) ?? queued;
+      return {
+        ok: true,
+        state: "blocked_resource",
+        continuation: blocked,
+        queueItem: result.queueItem,
+        reviewPolicy: result.reviewPolicy,
+      };
+    }
+
+    this.dispatchRetryResults([result]);
+    return {
+      ok: true,
+      state: "dispatching",
+      continuation: this.store.getLiveContinuation(taskId, coordinatorId) ?? queued,
+      allocation: result.allocation,
+      reviewPolicy: result.reviewPolicy,
+    };
   }
 
   hasActiveWork(): boolean {
@@ -258,4 +328,18 @@ export function resolveLiveLeaseDurationMs(config: JinnConfig): number {
   return typeof configured === "number" && Number.isFinite(configured) && configured > 0
     ? Math.floor(configured)
     : DEFAULT_LEASE_DURATION_MS;
+}
+
+function buildContinuationRequest(record: LiveRunContinuationRecord, config: OrchestrationConfig): AllocationRequest {
+  const brief = buildCoordinatorTaskBrief({
+    taskId: record.task.taskId,
+    coordinatorId: record.task.coordinatorId,
+    coordinatorTemplate: record.task.coordinatorTemplate ?? record.task.template,
+    requiredRoles: record.task.requiredRoles,
+    optionalRoles: record.task.optionalRoles,
+    priority: record.task.priority,
+    leaseDurationMs: record.task.leaseDurationMs,
+    mode: record.mode as CoordinatorMode,
+  }, config);
+  return brief.request;
 }

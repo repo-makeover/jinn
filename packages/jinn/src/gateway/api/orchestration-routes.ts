@@ -4,6 +4,7 @@ import { loadDefaultOrchestrationConfig, loadOrchestrationConfig } from "../../o
 import { liveRunModeSchema, runOrchestrationTask } from "../../orchestration/run-mode.js";
 import { formatZodError } from "../../orchestration/schemas.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
+import { OrchestrationStore } from "../../orchestration/store.js";
 import { ORCH_DB } from "../../shared/paths.js";
 import { readJsonBody } from "../http-helpers.js";
 import type { ApiContext } from "./context.js";
@@ -14,6 +15,8 @@ const ROUTES = new Set([
   "/api/orchestration/leases",
   "/api/orchestration/queue",
   "/api/orchestration/allocations",
+  "/api/orchestration/continuations",
+  "/api/orchestration/continuations/retry",
   "/api/orchestration/run",
 ]);
 
@@ -25,6 +28,39 @@ export async function handleOrchestrationRoutes(
   req?: HttpRequest,
 ): Promise<boolean> {
   if (!ROUTES.has(pathname)) return false;
+  if (pathname === "/api/orchestration/continuations/retry") {
+    if (method !== "POST") {
+      json(res, { error: "Method not allowed" }, 405);
+      return true;
+    }
+    if (context.getConfig().orchestration?.enabled !== true) {
+      json(res, { error: "orchestration is disabled" }, 409);
+      return true;
+    }
+    const runtime = context.orchestration?.runtime;
+    if (!runtime) {
+      json(res, { error: "orchestration runtime is not enabled" }, 409);
+      return true;
+    }
+    if (!req) {
+      json(res, { error: "continuation retry requires an HTTP request body" }, 400);
+      return true;
+    }
+    const parsed = await readJsonBody(req, res);
+    if (!parsed.ok) return true;
+    const body = parsed.body as { taskId?: unknown; coordinatorId?: unknown } | null;
+    if (typeof body?.taskId !== "string" || typeof body?.coordinatorId !== "string") {
+      json(res, { error: "taskId and coordinatorId are required" }, 400);
+      return true;
+    }
+    const result = runtime.retryFailedLiveContinuation(body.taskId, body.coordinatorId);
+    if (!result.ok) {
+      json(res, { error: result.message }, result.reason === "not_found" ? 404 : 409);
+      return true;
+    }
+    json(res, result, result.state === "dispatching" ? 202 : 409);
+    return true;
+  }
   if (pathname === "/api/orchestration/run") {
     if (method !== "POST") {
       json(res, { error: "Method not allowed" }, 405);
@@ -64,6 +100,7 @@ export async function handleOrchestrationRoutes(
       if (pathname === "/api/orchestration/workers") json(res, { workers: runtime.listWorkers() });
       else if (pathname === "/api/orchestration/leases") json(res, { leases: runtime.listLeases() });
       else if (pathname === "/api/orchestration/queue") json(res, { queue: runtime.listQueue() });
+      else if (pathname === "/api/orchestration/continuations") json(res, { continuations: runtime.listLiveContinuations() });
       else json(res, { allocations: runtime.listAllocations() });
       return true;
     }
@@ -82,7 +119,18 @@ export async function handleOrchestrationRoutes(
     if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) {
       if (pathname === "/api/orchestration/leases") json(res, { leases: [] });
       else if (pathname === "/api/orchestration/queue") json(res, { queue: [] });
+      else if (pathname === "/api/orchestration/continuations") json(res, { continuations: [] });
       else json(res, { allocations: [] });
+      return true;
+    }
+
+    if (pathname === "/api/orchestration/continuations") {
+      const store = OrchestrationStore.open(dbPath);
+      try {
+        json(res, { continuations: store.listLiveContinuations() });
+      } finally {
+        store.close();
+      }
       return true;
     }
 

@@ -116,6 +116,30 @@ program
   });
 
 {
+  const continuationsCmd = program
+    .command("continuations")
+    .description("Inspect or resume durable orchestration continuations through the live gateway");
+
+  continuationsCmd
+    .command("list")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const { runContinuationsList } = await import("../src/cli/orchestration.js");
+      await runContinuationsList(opts);
+    });
+
+  continuationsCmd
+    .command("retry")
+    .requiredOption("--task-id <id>", "Task id of the failed continuation")
+    .requiredOption("--coordinator-id <id>", "Coordinator id of the failed continuation")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { taskId: string; coordinatorId: string; json?: boolean }) => {
+      const { runContinuationRetry } = await import("../src/cli/orchestration.js");
+      await runContinuationRetry(opts);
+    });
+}
+
+{
   const workersCmd = program
     .command("workers")
     .description("Inspect inert matrix-orchestration worker configs");

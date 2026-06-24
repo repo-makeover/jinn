@@ -59,17 +59,42 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     expect(runtime.listLiveContinuations()).toEqual([]);
     runtime.close();
   });
+
+  it("retries a failed live continuation by reallocating and dispatching it", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    runtime.queueLiveContinuation(continuation("task-3", "coord-3", {
+      state: "failed",
+      lastError: "forced engine failure",
+      allocationId: "alloc-old",
+    }));
+    const resumed: Array<{ taskId: string; allocationId: string }> = [];
+    runtime.setResumeQueuedRunHandler(async ({ continuation, allocation }) => {
+      resumed.push({ taskId: continuation.taskId, allocationId: allocation.allocationId });
+    });
+
+    const result = runtime.retryFailedLiveContinuation("task-3", "coord-3");
+
+    expect(result).toMatchObject({ ok: true, state: "dispatching" });
+    await waitFor(() => resumed.length === 1);
+    expect(resumed[0]).toMatchObject({ taskId: "task-3" });
+    runtime.close();
+  });
 });
 
-function continuation(taskId: string, coordinatorId: string): LiveRunContinuationRecord {
+function continuation(
+  taskId: string,
+  coordinatorId: string,
+  overrides: Partial<LiveRunContinuationRecord> = {},
+): LiveRunContinuationRecord {
   return {
     taskId,
     coordinatorId,
     mode: "single_worker",
-    state: "queued",
+    state: overrides.state ?? "queued",
     task: {
       taskId,
       coordinatorId,
+      requiredRoles: ["seniorImplementer"],
       priority: "normal",
       leaseDurationMs: 60_000,
       prompt: `Resume ${taskId}`,
@@ -77,6 +102,9 @@ function continuation(taskId: string, coordinatorId: string): LiveRunContinuatio
     enqueuedAt: "2026-06-24T10:00:00.000Z",
     updatedAt: "2026-06-24T10:00:00.000Z",
     retryCount: 0,
+    lastDispatchedAt: overrides.lastDispatchedAt,
+    allocationId: overrides.allocationId,
+    lastError: overrides.lastError,
   };
 }
 
