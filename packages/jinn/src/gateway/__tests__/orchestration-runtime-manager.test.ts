@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { refreshOrchestrationRuntimeForOrgReload, swapOrchestrationRuntime } from "../orchestration-runtime-manager.js";
+import {
+  refreshDeferredOrchestrationRuntimeIfDrained,
+  refreshOrchestrationRuntimeForOrgReload,
+  swapOrchestrationRuntime,
+} from "../orchestration-runtime-manager.js";
 import type { ApiContext } from "../api/context.js";
 import type { JinnConfig } from "../../shared/types.js";
 
@@ -27,6 +31,25 @@ describe("swapOrchestrationRuntime", () => {
     expect(current.close).not.toHaveBeenCalled();
   });
 
+  it("defers enabled runtime replacement while active work is running", () => {
+    const current = runtime(true);
+    const next = runtime(false);
+    const createRuntime = vi.fn(() => next.instance);
+    const refreshState = { pending: false };
+    const ctx = makeContext(current.instance);
+
+    const bound = swapOrchestrationRuntime(ctx, config(true), current.instance, createRuntime, {
+      refreshState,
+      reason: "config_reload",
+    });
+
+    expect(bound).toBe(current.instance);
+    expect(ctx.orchestration?.runtime).toBe(current.instance);
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(current.close).not.toHaveBeenCalled();
+    expect(refreshState).toEqual({ pending: true, reason: "config_reload" });
+  });
+
   it("unbinds and closes the runtime when orchestration is disabled and there is no active work", () => {
     const current = runtime(false);
     const ctx = makeContext(current.instance);
@@ -51,6 +74,20 @@ describe("refreshOrchestrationRuntimeForOrgReload", () => {
     expect(ctx.orchestration?.runtime).toBe(current.instance);
     expect(current.close).not.toHaveBeenCalled();
     expect(next.close).not.toHaveBeenCalled();
+  });
+
+  it("replays a deferred refresh after active work drains", () => {
+    const current = runtime(false);
+    const next = runtime(false);
+    const refreshState = { pending: true, reason: "org_reload" as const };
+    const ctx = makeContext(current.instance);
+
+    const bound = refreshDeferredOrchestrationRuntimeIfDrained(ctx, config(true), current.instance, refreshState, () => next.instance);
+
+    expect(bound).toBe(next.instance);
+    expect(ctx.orchestration?.runtime).toBe(next.instance);
+    expect(current.close).toHaveBeenCalledOnce();
+    expect(refreshState).toEqual({ pending: false, reason: undefined });
   });
 
   it("swaps to a fresh runtime on org reload after drain", () => {

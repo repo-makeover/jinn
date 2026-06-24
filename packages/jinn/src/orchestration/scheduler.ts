@@ -44,6 +44,7 @@ export interface SchedulerOptions {
 
 export interface AllocationRequestOptions {
   queueOnBlock?: boolean;
+  allowedWorkerIds?: Iterable<string>;
 }
 
 interface CandidateState {
@@ -82,6 +83,7 @@ export class MatrixScheduler {
 
   requestAllocation(request: AllocationRequest, opts: AllocationRequestOptions = {}): AllocationResult {
     const queueOnBlock = opts.queueOnBlock !== false;
+    const allowedWorkerIds = opts.allowedWorkerIds ? new Set(opts.allowedWorkerIds) : undefined;
     this.expireLeases(this.now());
     const activeState = this.activeState();
     const selected: Array<{ role: string; worker: Worker }> = [];
@@ -90,7 +92,7 @@ export class MatrixScheduler {
 
     for (const roleId of request.requiredRoles) {
       const role = this.requireRole(roleId);
-      const selection = this.selectWorker(role, selected, activeState);
+      const selection = this.selectWorker(role, selected, activeState, allowedWorkerIds);
       if (selection.explanation) explanations.push(selection.explanation);
       const worker = selection.worker;
       if (!worker) {
@@ -118,7 +120,7 @@ export class MatrixScheduler {
     const optionalRolesSkipped: string[] = [];
     for (const roleId of request.optionalRoles) {
       const role = this.requireRole(roleId);
-      const selection = this.selectWorker(role, selected, activeState);
+      const selection = this.selectWorker(role, selected, activeState, allowedWorkerIds);
       if (selection.explanation) explanations.push(selection.explanation);
       const worker = selection.worker;
       if (!worker) {
@@ -218,11 +220,13 @@ export class MatrixScheduler {
     return { ok: true };
   }
 
-  retryQueued(): AllocationResult[] {
+  retryQueued(opts: AllocationRequestOptions = {}): AllocationResult[] {
     const ordered = [...this.queue].sort(compareQueueItems);
     const results: AllocationResult[] = [];
     for (const item of ordered) {
-      const result = this.requestAllocation(item.request);
+      const result = this.requestAllocation(item.request, {
+        allowedWorkerIds: opts.allowedWorkerIds,
+      });
       if (result.ok) {
         const index = this.queue.indexOf(item);
         if (index >= 0) this.queue.splice(index, 1);
@@ -299,25 +303,27 @@ export class MatrixScheduler {
     role: RoleDefinition,
     selected: Array<{ role: string; worker: Worker }>,
     state: CandidateState,
+    allowedWorkerIds: Set<string> | undefined,
   ): WorkerSelection {
     if (role.familyConstraint === "opposite_of_implementer") {
-      return this.selectOppositeFamilyReviewer(role, selected, state);
+      return this.selectOppositeFamilyReviewer(role, selected, state, allowedWorkerIds);
     }
-    return { worker: this.sortedCandidates(role, selected, state, "normal")[0] ?? null };
+    return { worker: this.sortedCandidates(role, selected, state, "normal", allowedWorkerIds)[0] ?? null };
   }
 
   private selectOppositeFamilyReviewer(
     role: RoleDefinition,
     selected: Array<{ role: string; worker: Worker }>,
     state: CandidateState,
+    allowedWorkerIds: Set<string> | undefined,
   ): WorkerSelection {
     const implementerFamilies = selectedImplementerFamilies(selected, (roleId) => this.roles.get(roleId));
     if (implementerFamilies.length === 0) {
-      return { worker: this.sortedCandidates(role, selected, state, "normal")[0] ?? null };
+      return { worker: this.sortedCandidates(role, selected, state, "normal", allowedWorkerIds)[0] ?? null };
     }
 
-    const oppositeCandidates = this.sortedCandidates(role, selected, state, "normal");
-    const sameFamilyCandidates = this.sortedCandidates(role, selected, state, "ignore_opposite_constraint")
+    const oppositeCandidates = this.sortedCandidates(role, selected, state, "normal", allowedWorkerIds);
+    const sameFamilyCandidates = this.sortedCandidates(role, selected, state, "ignore_opposite_constraint", allowedWorkerIds)
       .filter((worker) => implementerFamilies.includes(worker.family) && !selected.some((entry) => entry.worker.id === worker.id));
     const opposite = oppositeCandidates[0];
     if (opposite) {
@@ -369,9 +375,10 @@ export class MatrixScheduler {
     selected: Array<{ role: string; worker: Worker }>,
     state: CandidateState,
     familyMode: "normal" | "ignore_opposite_constraint",
+    allowedWorkerIds: Set<string> | undefined,
   ): Worker[] {
     return this.workers
-      .filter((worker) => this.workerQualifies(worker, role, selected, state, familyMode))
+      .filter((worker) => this.workerQualifies(worker, role, selected, state, familyMode, allowedWorkerIds))
       .sort((a, b) => compareWorkers(a, b, role, this.workerScores));
   }
 
@@ -381,7 +388,9 @@ export class MatrixScheduler {
     selected: Array<{ role: string; worker: Worker }>,
     state: CandidateState,
     familyMode: "normal" | "ignore_opposite_constraint",
+    allowedWorkerIds: Set<string> | undefined,
   ): boolean {
+    if (allowedWorkerIds && !allowedWorkerIds.has(worker.id)) return false;
     if (role.allowedFamilies && !role.allowedFamilies.includes(worker.family)) return false;
     if (!role.requiredCapabilities.every((capability) => worker.capabilities.includes(capability))) return false;
     if (!role.requiredTools.every((tool) => worker.tools.includes(tool))) return false;

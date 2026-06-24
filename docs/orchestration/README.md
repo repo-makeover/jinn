@@ -257,12 +257,14 @@ explicit temp database paths and do not write live `~/.jinn`.
 `MatrixScheduler` from stored rows, persists mutations with incremental
 upserts/deletes, and expires stale leases deterministically on hydrate. The
 daemon constructs one runtime scheduler when `orchestration.enabled: true`,
-starts an expiry/retry timer, and closes the scheduler on shutdown. Plain CLI
-inspection still uses explicit temp paths or read-only fallbacks. On config
-reload, the gateway swaps to a freshly constructed orchestration runtime when
-settings stay enabled; if orchestration is disabled while work is active, the
-existing runtime stays bound only long enough to drain leases and queued
-continuations.
+starts an expiry/retry timer, and prepares the scheduler before shutdown by
+stopping new queued resumes, marking in-flight continuations failed, and releasing
+running leases before closing the store. Plain CLI inspection still uses explicit
+temp paths or read-only fallbacks. On config or org reload, the gateway keeps an
+active runtime bound and defers replacement until active leases, queued work, and
+dispatching continuations drain; the deferred refresh is replayed by the status
+reconciler after drain. Stale `dispatching` continuations from a prior daemon are
+recovered on boot so they cannot keep the runtime permanently active.
 
 ## Durable Telemetry
 
@@ -283,7 +285,10 @@ Worker scores are derived from historical dispositions when
 `orchestration.empiricalRouting: true`: completed and selected work improves the
 score; failed, blocked, discarded, blocker-heavy, or regression-heavy records
 degrade it. Corrupt telemetry lines do not block runtime startup; they are
-skipped and counted. Hash-chained `audit.jsonl` integration remains deferred.
+skipped and counted. Runtime score loading reads a bounded tail of the JSONL log,
+while CLI stats can still read an explicit full file. Hot-path run telemetry
+append avoids per-record fsync stalls but keeps private append-only JSONL records.
+Hash-chained `audit.jsonl` integration remains deferred.
 
 ## Worktrees
 

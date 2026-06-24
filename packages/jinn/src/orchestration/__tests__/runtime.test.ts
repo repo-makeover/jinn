@@ -187,6 +187,76 @@ describe("OrchestrationRuntime continuation dispatch", () => {
       vi.resetModules();
     }
   });
+
+  it("recovers stale dispatching continuations on boot and releases their leases", () => {
+    const runtime1 = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const allocation = runtime1.requestAllocation(request("stale-task", "stale-coord"));
+    expect(allocation.ok).toBe(true);
+    if (!allocation.ok) return;
+    runtime1.queueLiveContinuation(continuation("stale-task", "stale-coord", {
+      state: "dispatching",
+      allocationId: allocation.allocation.allocationId,
+      updatedAt: "1970-01-01T00:00:00.000Z",
+    }));
+    runtime1.close();
+
+    const runtime2 = new OrchestrationRuntime({
+      config: config(),
+      dbPath,
+      startReaper: false,
+      staleDispatchingContinuationMs: 0,
+    });
+
+    expect(runtime2.listLiveContinuations()).toMatchObject([{
+      taskId: "stale-task",
+      state: "failed",
+      lastError: expect.stringContaining("Recovered stale dispatching continuation"),
+    }]);
+    expect(runtime2.listLeases()).toMatchObject([{ state: "released" }]);
+    runtime2.close();
+  });
+
+  it("prepareForShutdown fails dispatching continuations and releases running leases", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const allocation = runtime.requestAllocation(request("shutdown-task", "shutdown-coord"));
+    expect(allocation.ok).toBe(true);
+    if (!allocation.ok) return;
+    runtime.queueLiveContinuation(continuation("shutdown-task", "shutdown-coord", {
+      state: "dispatching",
+      allocationId: allocation.allocation.allocationId,
+    }));
+
+    await runtime.prepareForShutdown("test shutdown", 1);
+
+    expect(runtime.listLiveContinuations()).toMatchObject([{ taskId: "shutdown-task", state: "failed", lastError: "test shutdown" }]);
+    expect(runtime.listLeases()).toMatchObject([{ state: "released" }]);
+    runtime.close();
+  });
+
+  it("applies live headroom before allocating a worker", async () => {
+    const runtime = new OrchestrationRuntime({
+      config: twoWorkerConfig(),
+      dbPath,
+      startReaper: false,
+      jinnConfig: jinnConfig(dbPath),
+      headroomFilter: async (workers) => ({
+        allowed: workers.filter((worker) => worker.id === "betaImplementer"),
+        rejected: workers
+          .filter((worker) => worker.id !== "betaImplementer")
+          .map((worker) => ({
+            worker,
+            headroom: { ok: false, provider: worker.provider, reason: "usage_exhausted" },
+          })),
+      }),
+    });
+
+    const result = await runtime.requestAllocationWithLiveHeadroom(request("headroom-task", "headroom-coord"));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.allocation.leases[0].workerId).toBe("betaImplementer");
+    runtime.close();
+  });
 });
 
 function continuation(
@@ -208,7 +278,7 @@ function continuation(
       prompt: `Resume ${taskId}`,
     },
     enqueuedAt: "2026-06-24T10:00:00.000Z",
-    updatedAt: "2026-06-24T10:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-06-24T10:00:00.000Z",
     retryCount: 0,
     lastDispatchedAt: overrides.lastDispatchedAt,
     allocationId: overrides.allocationId,

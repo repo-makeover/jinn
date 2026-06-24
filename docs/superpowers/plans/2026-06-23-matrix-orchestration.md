@@ -1,6 +1,7 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 and M1–M10 are **complete** (Codex, 2026-06-24).
+> **Status:** Phase 1 and M1–M10.5 are **complete** (Codex, 2026-06-24);
+> M11 dashboard/control work remains next.
 > This is the **full-capability roadmap** from inert scaffold to real,
 > daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
@@ -9,7 +10,7 @@
 > (Gates 0–7: orient → plan → skeleton → core → interface/IO/persistence → hardening
 > → docs → final QA/QC), with a per-gate audit, a defect ledger, and the 800-line
 > file limit enforced via `tools/line_count_check.sh`. The *roadmap* is the milestone
-> sequence M1–M11; the *gate loop* is how each milestone is implemented.
+> sequence M1–M10, M10.5, M11; the *gate loop* is how each milestone is implemented.
 >
 > **Authority model (from the source brief):** one strong implementer per slice +
 > strict written brief + small patch slices + deterministic tests + manual review.
@@ -319,7 +320,7 @@ Forbidden in `packages/jinn/src/orchestration/**`: `Employee`, `Manager`,
 
 ---
 
-## 5. Milestone roadmap (M1–M11)
+## 5. Milestone roadmap (M1–M11 plus M10.5 hardening interlock)
 
 Each milestone is one `plan-prototype-build` run (Gates 0–7, §8) by **one implementer**,
 preceded by a Giles Job Plan/waiver, followed by the designated review. Milestones are
@@ -539,13 +540,65 @@ the source brief.
   focused typecheck.
 - **Remaining boundary:** M10 deliberately skips optional hash-chained `audit.jsonl`
   integration; JSONL is the durable telemetry surface for this milestone. Dashboard
-  controls remain M11.
+  controls remain M11. The post-M10 static audit
+  `docs/audits/2026-06-24-matrix-orchestration-m1-m10-audit.md` found lifecycle
+  hardening work that is now a blocking M10.5 interlock before M11.
 - **Team:** implementer; can use a **local-heavy (Pi/Ollama) worker** for log triage.
+
+### M10.5 — Lifecycle hardening and zero-known-defect gate (blocking before M11)
+
+- **Goal:** close the known M1–M10 timing/path/connectivity/concurrency defects before
+  building dashboard controls or presenting orchestration as operator-safe. Source
+  audit: `docs/audits/2026-06-24-matrix-orchestration-m1-m10-audit.md`.
+- **Delivered:** active config/org reload keeps the current runtime bound and records a
+  deferred refresh until drain; gateway shutdown now prepares the runtime before close
+  by stopping new resumes, marking dispatching continuations failed, and releasing
+  running leases; stale `dispatching` live continuations are recovered on boot; live
+  `single_worker`, review, queued resume, and dual-lane allocation apply engine
+  headroom before creating leases; pre-dispatch setup failures release still-running
+  leases; empirical-routing startup reads a bounded telemetry tail and hot-path
+  telemetry appends avoid per-record fsync stalls.
+- **Deliverables:**
+  1. **Runtime lifecycle safety:** config reload must not replace/close an active
+     orchestration runtime; graceful shutdown must stop new dispatch, settle/interrupt
+     active runs, release/expire owned leases, mark in-flight continuations recoverable,
+     then close the runtime. Close must account for fire-and-forget queued-resume
+     promises.
+  2. **Lease-release invariant:** every allocated lease has a deterministic terminal
+     owner on pre-dispatch failures, including invalid lease validation, missing engine,
+     `createSession()`, `insertMessage()`, and `updateSession()` failures. Failed launch
+     paths must release the lease and emit visible failure/telemetry where possible.
+  3. **Continuation recovery:** stale `dispatching` live continuations from a prior
+     daemon process must become retryable or failed on boot after a bounded threshold,
+     without keeping `hasActiveWork()` true forever.
+  4. **Live headroom before leasing:** live orchestration allocation must apply
+     engine-availability/usage headroom before creating leases, while preserving pure
+     simulation determinism and scheduler hard constraints.
+  5. **Deferred org refresh replay:** an org-worker refresh deferred for active work must
+     be remembered and applied automatically after drain; stale synthesized workers must
+     not survive indefinitely after the blocking run finishes.
+  6. **Bound telemetry IO:** empirical routing must not synchronously read unbounded
+     historical JSONL on every runtime boot/config reload, and run telemetry append must
+     avoid unbounded event-loop stalls while preserving private append-only records.
+- **Findings closed:** `FSR-MATRIX-001`, `FSR-MATRIX-002`, `FSR-MATRIX-003`,
+  `RRR-MATRIX-004`, `ONR-MATRIX-005`, `ONR-MATRIX-006`, `FSR-MATRIX-007`.
+- **Exit gate:** all seven audit findings are `fixed` or `verified-not-a-defect` with
+  deterministic tests; `pnpm --filter jinn-cli typecheck`, targeted lifecycle/telemetry
+  vitest, relevant full orchestration/board slice, `git diff --check`, and focused
+  touched-source line-count evidence are recorded. The broad helper is known noisy in
+  this checkout because it counts nested `node_modules`, `.turbo`, assets, and docs; do
+  not treat that tooling output as source-size evidence without filtering. No M11
+  control surface may start while any finding remains open or deferred.
+- **Team:** architecture-mode single implementer; **review:** fail-safe/recovery
+  reviewer plus department integration review focused on runtime lifecycle and shutdown.
 
 ### M11 — Dashboard / control surface (brief Phase 10)
 
 - **Goal:** expose workers/leases/queue/quotas/worktrees/review/QA/cost in the web UI
   with **concrete** labels (no "AI team / smart mode / auto magic").
+- **Blocking precondition:** M10.5 is complete and the M1–M10 audit has zero known open
+  defects. Dashboard work must not add controls over a runtime whose lifecycle/recovery
+  invariants are still defective.
 - **Deliverables:** `packages/web` views consuming the M4 `/api/orchestration/` routes;
   read-first, then guarded controls (pause queue, cancel lease) reusing existing
   approval patterns.
@@ -603,6 +656,11 @@ Split before a file approaches the limit. New runtime state under `JINN_HOME` on
 | `gateway/org-worker-bridge.ts` | M9 | read org → synthesize workers/roles | ≤250 |
 | `gateway/orchestration-runtime-factory.ts` | M9 | augment runtime config with org workers | ≤100 |
 | `orchestration/telemetry.ts` | M10 | jsonl emit + summarize + score | ≤300 |
+| `gateway/orchestration-runtime-manager.ts` (modify or split) | M10.5 | active-work-safe runtime swap + deferred refresh replay | keep small |
+| `orchestration/runtime.ts` (modify or split) | M10.5 | tracked resume dispatch, shutdown/drain hooks, stale continuation recovery | split before growth |
+| `orchestration/run-mode.ts` (modify or split) | M10.5 | pre-dispatch lease release invariant | split before growth |
+| `orchestration/routing-headroom.ts` + runtime wiring | M10.5 | live headroom before lease creation | small |
+| `orchestration/telemetry.ts` (modify or split) | M10.5 | bounded score reads/append behavior | split if needed |
 | `scripts/orchestration-smoke.mjs` | M3+ | opt-in real-provider smoke | ≤200 |
 | `shared/paths.ts` (modify) | M1 | add `ORCH_DB`, orchestration dirs | small |
 | `packages/web/...` | M11 | dashboard views | per-file ≤800 |
@@ -703,6 +761,10 @@ high-priority queued behind normal resumes first · atomic allocation prevents d
 - **M9:** no double-dispatch (board-worker + scheduler); org YAML never mutated; disable
   → exact prior behavior.
 - **M10:** every run emits a telemetry line; summarizer aggregates; no secrets in output.
+- **M10.5:** active config reload does not close active runtime; graceful shutdown
+  drains/releases before runtime close; pre-dispatch failures release leases; stale
+  `dispatching` continuations recover on boot; live headroom filters before leasing;
+  deferred org refresh applies after drain; empirical routing uses bounded telemetry IO.
 
 ### 9.4 Failsafes & error-checking (cross-cutting)
 
@@ -740,6 +802,13 @@ high-priority queued behind normal resumes first · atomic allocation prevents d
 | R13 | Building too much before first simulation | No real execution until M2 sim/contract green; smoke opt-in (D8) | gate ordering; CI excludes smoke |
 | R14 | `pnpm test` flakiness (known jinn-cli timeouts) masks real failures | Rerun failing file in isolation; record both; never declare green on a flake | Gate 7 evidence discipline |
 | R15 | Self-hosting recursion (department rebuilds its own coordinator) | One implementer per slice; department review-only until M5+ | execution-strategy adherence |
+| R16 | Config reload closes an active orchestration runtime | M10.5 active-work-safe runtime swap + pending refresh replay | config-reload-with-running-lease test |
+| R17 | Shutdown closes runtime before active turns can release leases | M10.5 ordered shutdown/drain and tracked in-flight orchestration work | graceful-shutdown-during-run test |
+| R18 | Pre-dispatch launch failure leaks allocated leases | M10.5 release invariant for all allocated leases before/after dispatch setup | missing-engine/session-write-failure lease-release tests |
+| R19 | Stale `dispatching` continuation blocks recovery/drain forever | M10.5 boot reconciliation for stale dispatching continuations | crash-after-claim restart test |
+| R20 | Live allocation leases rate-limited/unavailable engines | M10.5 headroom filter before live lease creation | exhausted-engine no-lease test |
+| R21 | Deferred org-worker refresh is never applied after active work drains | M10.5 pending-org-refresh replay after drain | org-reload-during-active-work test |
+| R22 | Empirical telemetry IO grows into daemon startup/hot-path stalls | M10.5 bounded telemetry scoring reads and bounded append behavior | large-telemetry startup budget test |
 
 ---
 
@@ -774,7 +843,9 @@ Under pressure, preserve the **primary end-to-end path** (allocate → lease →
 release → telemetry) and cut secondary scope in this order: dual-lane (M8) → dashboard
 controls (M11, ship read-only views) → org bridge (M9) → empirical-routing scoring
 (keep raw telemetry). Never cut: atomicity, lease exclusivity, billing-path safety,
-worktree isolation, deterministic tests. Document every deferral with residual risk.
+worktree isolation, deterministic tests, or M10.5 lifecycle hardening. M11 dashboard
+controls are explicitly lower priority than closing known runtime lifecycle defects.
+Document every deferral with residual risk.
 
 ---
 
@@ -787,7 +858,9 @@ queues; leases are exclusive and TTL-bounded; turns run through the existing eng
 explainable; dual-lane competition produces a comparison + explicit selection; every run
 emits durable telemetry; state survives restart; the dashboard reflects real state with
 concrete labels; **existing tests stay green and the subscription billing path is
-intact.**
+intact.** Before any operator-facing control surface is added, the M1–M10 audit
+findings must be closed or explicitly reclassified as non-defects with evidence; the
+target end state is **zero known open defects**.
 
 **Per milestone:** the Exit gate listed in §5, validated by §9 and closed in the
 milestone's defect ledger.
@@ -853,6 +926,17 @@ Milestone-specific emphasis to append to the template:
   selection by default; archive the loser."
 - **M9:** "OrgWorkerAdapter is read-only over scanOrg; prove no double-dispatch with
   board-worker; disabling orchestration restores exact prior behavior."
+- **M10.5:** "Close `docs/audits/2026-06-24-matrix-orchestration-m1-m10-audit.md`
+  findings FSR-MATRIX-001/002/003, RRR-MATRIX-004, ONR-MATRIX-005/006, and
+  FSR-MATRIX-007 before any M11 work. Prove active config reload keeps the current
+  runtime bound until drain; graceful shutdown releases or marks leases/continuations
+  recoverable before runtime close; missing-engine/session setup failures release
+  leases; stale `dispatching` continuations recover on boot; live headroom is applied
+  before lease creation; deferred org refresh replays after drain; empirical routing
+  uses bounded telemetry IO. Do not add dashboard controls in this slice."
+- **M11:** "Start only after M10.5 is green and the M1–M10 audit has zero known open
+  defects. Controls must reflect real runtime state and must not mask lifecycle,
+  recovery, or telemetry degradation."
 
 ---
 
@@ -870,6 +954,25 @@ Milestone-specific emphasis to append to the template:
 - This plan assumes the inert Phase-1 scaffold remains the decision core; if a later
   milestone needs to change `MatrixScheduler` semantics, re-run the §9.2 simulation
   suite as a non-regression gate.
+- **Post-M10 lifecycle audit (2026-06-24)** found seven known defects that block M11
+  controls. Treat them as M10.5 blockers, not optional cleanup.
+
+### M10.5 carry-forward blockers (closed 2026-06-24)
+
+Source audit: `docs/audits/2026-06-24-matrix-orchestration-m1-m10-audit.md`.
+
+- `FSR-MATRIX-001` — fixed by active-work-safe runtime swap and deferred config refresh.
+- `FSR-MATRIX-002` — fixed by gateway shutdown runtime preparation before store close.
+- `FSR-MATRIX-003` — fixed by releasing still-running leases on every setup/dispatch
+  exception path.
+- `RRR-MATRIX-004` — fixed by boot recovery for stale `dispatching` continuations.
+- `ONR-MATRIX-005` — fixed by headroom-aware live allocation before lease creation.
+- `ONR-MATRIX-006` — fixed by deferred org/config refresh replay after drain.
+- `FSR-MATRIX-007` — fixed by bounded telemetry score reads and non-fsync hot-path
+  appends.
+
+M11 may start only after M10.5 validation remains green and no new known blockers are
+identified.
 
 ### M1 carry-forward residuals (verified 2026-06-23; track in the defect ledger)
 

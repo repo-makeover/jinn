@@ -158,6 +158,68 @@ describe("runOrchestrationTask", () => {
     runtime.close();
   });
 
+  it("blocks before leasing when live headroom rejects every worker", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
+    const engine = new RecordingEngine();
+    const cfg = jinnConfig();
+    const runtime = new OrchestrationRuntime({
+      config: config(),
+      dbPath: ":memory:",
+      startReaper: false,
+      jinnConfig: cfg,
+      headroomFilter: async (workers) => ({
+        allowed: [],
+        rejected: workers.map((worker) => ({
+          worker,
+          headroom: { ok: false, provider: worker.provider, reason: "usage_exhausted" },
+        })),
+      }),
+    });
+    const ctx = makeContext(runtime, engine, cfg);
+
+    const result = await runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-no-headroom",
+        coordinatorId: "coord-no-headroom",
+        requiredRoles: ["seniorImplementer"],
+        mode: "single_worker",
+        prompt: "Do not lease an exhausted worker",
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok || result.state !== "blocked_resource") return;
+    expect(runtime.listLeases()).toEqual([]);
+    expect(runtime.listLiveContinuations()).toMatchObject([{ taskId: "task-no-headroom", state: "queued" }]);
+    expect(engine.run).not.toHaveBeenCalled();
+    runtime.close();
+  });
+
+  it("releases an allocated lease when session setup cannot resolve the engine", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
+    const missingEngineConfig = {
+      ...config(),
+      workers: config().workers.map((entry) => ({ ...entry, provider: "missing-engine" })),
+    };
+    const runtime = new OrchestrationRuntime({ config: missingEngineConfig, dbPath: ":memory:", startReaper: false });
+    const ctx = makeContext(runtime, new RecordingEngine());
+
+    await expect(runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-missing-engine",
+        coordinatorId: "coord-missing-engine",
+        requiredRoles: ["seniorImplementer"],
+        mode: "single_worker",
+        prompt: "This should release on setup failure",
+      },
+    })).rejects.toThrow("engine for worker provider missing-engine is not available");
+
+    expect(runtime.listLeases()).toMatchObject([{ taskId: "task-missing-engine", state: "released" }]);
+    runtime.close();
+  });
+
   it("runs same-family reviewer fallback only when explicitly configured and records session metadata", async () => {
     const { runOrchestrationTask, OrchestrationRuntime, getSession } = await loadModules();
     const engine = new RecordingEngine();

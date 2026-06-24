@@ -7,6 +7,7 @@ import { resolveCrossFamilyReviewPolicy, type CrossFamilyReviewPolicy } from "./
 import { listProtectedDualLaneTaskIds } from "./dual-lane-state.js";
 import type { LiveRunContinuationRecord } from "./live-run.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
+import { filterWorkersWithHeadroom, type HeadroomFilterResult } from "./routing-headroom.js";
 import { OrchestrationStore } from "./store.js";
 import { computeWorkerScores, readOrchestrationTelemetry } from "./telemetry.js";
 import {
@@ -23,6 +24,12 @@ import {
 import { DEFAULT_MAX_WORKTREES, reapOrphanedWorktrees, type WorktreeHandle, type WorktreeOptions } from "./worktree.js";
 
 const DEFAULT_REAPER_INTERVAL_MS = 5_000;
+const DEFAULT_STALE_DISPATCHING_CONTINUATION_MS = 10 * 60 * 1_000;
+const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+const EMPIRICAL_ROUTING_MAX_BYTES = 1_000_000;
+const EMPIRICAL_ROUTING_MAX_RECORDS = 5_000;
+
+type HeadroomFilter = (workers: OrchestrationConfig["workers"], config: JinnConfig) => Promise<HeadroomFilterResult>;
 
 export interface OrchestrationRuntimeOptions {
   config?: OrchestrationConfig;
@@ -35,6 +42,9 @@ export interface OrchestrationRuntimeOptions {
   maxWorktrees?: number;
   reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
   workerScores?: Record<string, number>;
+  jinnConfig?: JinnConfig;
+  headroomFilter?: HeadroomFilter;
+  staleDispatchingContinuationMs?: number;
 }
 
 export interface ResumeQueuedRun {
@@ -69,8 +79,13 @@ export class OrchestrationRuntime {
   private readonly scheduler: PersistentMatrixScheduler;
   private readonly reaperIntervalMs: number;
   private readonly worktrees: WorktreeOptions;
+  private readonly jinnConfig?: JinnConfig;
+  private readonly headroomFilter: HeadroomFilter;
+  private readonly staleDispatchingContinuationMs: number;
+  private readonly resumeDispatches = new Set<Promise<void>>();
   private resumeQueuedRunHandler?: ResumeQueuedRunHandler;
   private reaper: ReturnType<typeof setInterval> | null = null;
+  private closing = false;
 
   constructor(opts: OrchestrationRuntimeOptions) {
     this.config = opts.config ?? loadOrchestrationConfig(opts.configDir ?? ORCH_CONFIG_DIR);
@@ -83,25 +98,45 @@ export class OrchestrationRuntime {
       workerScores: opts.workerScores,
     });
     this.reaperIntervalMs = Math.max(1, Math.floor(opts.reaperIntervalMs ?? DEFAULT_REAPER_INTERVAL_MS));
+    this.jinnConfig = opts.jinnConfig;
+    this.headroomFilter = opts.headroomFilter ?? filterWorkersWithHeadroom;
+    this.staleDispatchingContinuationMs = Math.max(
+      0,
+      Math.floor(opts.staleDispatchingContinuationMs ?? DEFAULT_STALE_DISPATCHING_CONTINUATION_MS),
+    );
     this.worktrees = {
       root: opts.worktreeRoot ?? ORCH_WORKTREE_ROOT,
       maxWorktrees: typeof opts.maxWorktrees === "number" && Number.isFinite(opts.maxWorktrees) && opts.maxWorktrees > 0
         ? Math.floor(opts.maxWorktrees)
         : DEFAULT_MAX_WORKTREES,
     };
+    this.recoverStaleDispatchingContinuations();
     if (opts.startReaper !== false) this.startReaper();
   }
 
   setResumeQueuedRunHandler(handler: ResumeQueuedRunHandler | undefined): void {
     this.resumeQueuedRunHandler = handler;
+    if (handler && !this.closing) void this.retryQueuedWithLiveHeadroom();
   }
 
   requestAllocation(request: AllocationRequest): AllocationResult {
     return this.scheduler.requestAllocation(request);
   }
 
+  async requestAllocationWithLiveHeadroom(request: AllocationRequest): Promise<AllocationResult> {
+    return this.scheduler.requestAllocation(request, {
+      allowedWorkerIds: await this.resolveLiveHeadroomWorkerIds(),
+    });
+  }
+
   tryAllocationNow(request: AllocationRequest): AllocationResult {
     return this.scheduler.tryAllocationNow(request);
+  }
+
+  async tryAllocationNowWithLiveHeadroom(request: AllocationRequest): Promise<AllocationResult> {
+    return this.scheduler.tryAllocationNow(request, {
+      allowedWorkerIds: await this.resolveLiveHeadroomWorkerIds(),
+    });
   }
 
   heartbeatLease(leaseId: string, coordinatorId?: string): Lease {
@@ -110,18 +145,29 @@ export class OrchestrationRuntime {
 
   releaseLease(leaseId: string, coordinatorId?: string): Lease {
     const lease = this.scheduler.releaseLease(leaseId, coordinatorId);
-    this.dispatchRetryResults(this.scheduler.retryQueued());
+    void this.retryQueuedWithLiveHeadroom();
     return lease;
   }
 
   expireLeases(now?: Date): Lease[] {
     const expired = this.scheduler.expireLeases(now);
-    if (expired.length > 0) this.dispatchRetryResults(this.scheduler.retryQueued());
+    if (expired.length > 0) void this.retryQueuedWithLiveHeadroom();
     return expired;
   }
 
   retryQueued(): AllocationResult[] {
     const results = this.scheduler.retryQueued();
+    this.dispatchRetryResults(results);
+    return results;
+  }
+
+  async retryQueuedWithLiveHeadroom(): Promise<AllocationResult[]> {
+    if (this.closing) return [];
+    const allowedWorkerIds = await this.resolveLiveHeadroomWorkerIds();
+    if (this.closing) return [];
+    const results = this.scheduler.retryQueued({
+      allowedWorkerIds,
+    });
     this.dispatchRetryResults(results);
     return results;
   }
@@ -227,7 +273,8 @@ export class OrchestrationRuntime {
   hasActiveWork(): boolean {
     return this.scheduler.listLeases().some((lease) => lease.state === "running")
       || this.scheduler.listQueue().length > 0
-      || this.store.listLiveContinuations(["queued", "dispatching"]).length > 0;
+      || this.store.listLiveContinuations(["queued", "dispatching"]).length > 0
+      || this.resumeDispatches.size > 0;
   }
 
   getWorktreeOptions(): WorktreeOptions {
@@ -245,6 +292,7 @@ export class OrchestrationRuntime {
   }
 
   close(): void {
+    this.closing = true;
     if (this.reaper) {
       clearInterval(this.reaper);
       this.reaper = null;
@@ -253,10 +301,35 @@ export class OrchestrationRuntime {
     this.store.close();
   }
 
+  async prepareForShutdown(reason = "gateway shutting down gracefully", timeoutMs = DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS): Promise<void> {
+    this.closing = true;
+    const wait = this.waitForResumeDispatches(timeoutMs);
+    if (wait) await wait;
+    for (const continuation of this.store.listLiveContinuations(["dispatching"])) {
+      this.markLiveContinuationFailed(continuation.taskId, continuation.coordinatorId, reason, continuation.allocationId);
+    }
+    for (const lease of this.scheduler.listLeases()) {
+      if (lease.state !== "running") continue;
+      try {
+        this.scheduler.releaseLease(lease.leaseId, lease.coordinatorId);
+      } catch (err) {
+        logger.warn(`Orchestration shutdown release failed for lease ${lease.leaseId}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  }
+
   private dispatchRetryResults(results: AllocationResult[]): void {
     for (const result of results) {
       if (!result.ok) continue;
-      void this.resumeQueuedAllocation(result.allocation, result.reviewPolicy);
+      if (this.closing) {
+        this.releaseAllocationLeases(result.allocation, { retryQueued: false });
+        continue;
+      }
+      const dispatch = this.resumeQueuedAllocation(result.allocation, result.reviewPolicy).catch((err) => {
+        logger.error(`Queued orchestration resume crashed for ${result.allocation.taskId}/${result.allocation.coordinatorId}: ${err instanceof Error ? err.message : err}`);
+      });
+      this.resumeDispatches.add(dispatch);
+      dispatch.finally(() => this.resumeDispatches.delete(dispatch));
     }
   }
 
@@ -293,7 +366,7 @@ export class OrchestrationRuntime {
     }
   }
 
-  private releaseAllocationLeases(allocation: Allocation): void {
+  private releaseAllocationLeases(allocation: Allocation, opts: { retryQueued?: boolean } = {}): void {
     for (const lease of allocation.leases) {
       try {
         this.scheduler.releaseLease(lease.leaseId, lease.coordinatorId);
@@ -301,7 +374,56 @@ export class OrchestrationRuntime {
         logger.warn(`Orchestration invariant cleanup failed for lease ${lease.leaseId}: ${err instanceof Error ? err.message : err}`);
       }
     }
-    this.dispatchRetryResults(this.scheduler.retryQueued());
+    if (opts.retryQueued !== false && !this.closing) void this.retryQueuedWithLiveHeadroom();
+  }
+
+  private recoverStaleDispatchingContinuations(): void {
+    const cutoff = Date.now() - this.staleDispatchingContinuationMs;
+    for (const continuation of this.store.listLiveContinuations(["dispatching"])) {
+      const updatedAt = Date.parse(continuation.updatedAt);
+      if (Number.isFinite(updatedAt) && updatedAt > cutoff) continue;
+      const error = `Recovered stale dispatching continuation after runtime restart`;
+      logger.warn(`Orchestration ${error}: ${continuation.taskId}/${continuation.coordinatorId}`);
+      this.markLiveContinuationFailed(continuation.taskId, continuation.coordinatorId, error, continuation.allocationId);
+      const allocation = continuation.allocationId
+        ? this.scheduler.listAllocations().find((candidate) => candidate.allocationId === continuation.allocationId)
+        : undefined;
+      if (allocation) this.releaseAllocationLeases(allocation, { retryQueued: false });
+    }
+  }
+
+  private waitForResumeDispatches(timeoutMs: number): Promise<void> | undefined {
+    if (this.resumeDispatches.size === 0) return undefined;
+    const pending = Promise.allSettled([...this.resumeDispatches]).then(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        logger.warn(`Timed out waiting for ${this.resumeDispatches.size} orchestration resume dispatch(es) during shutdown`);
+        resolve();
+      }, Math.max(0, timeoutMs));
+      timer.unref?.();
+    });
+    return Promise.race([pending, timeout]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  }
+
+  private async resolveLiveHeadroomWorkerIds(): Promise<Set<string> | undefined> {
+    if (!this.jinnConfig) return undefined;
+    try {
+      const result = await this.headroomFilter(this.config.workers, this.jinnConfig);
+      if (result.rejected.length > 0) {
+        logger.debug(
+          `Orchestration headroom filtered ${result.rejected.length} worker(s): ${
+            result.rejected.map(({ worker, headroom }) => `${worker.id}:${headroom.reason}`).join(", ")
+          }`,
+        );
+      }
+      return new Set(result.allowed.map((worker) => worker.id));
+    } catch (err) {
+      logger.warn(`Orchestration headroom filter failed closed: ${err instanceof Error ? err.message : String(err)}`);
+      return new Set();
+    }
   }
 
   private startReaper(): void {
@@ -328,6 +450,7 @@ export function createOrchestrationRuntimeFromConfig(
     worktreeRoot: config.orchestration.worktreeRoot,
     maxWorktrees: config.orchestration.maxWorktrees,
     reviewPolicy: resolveCrossFamilyReviewPolicy(config.orchestration),
+    jinnConfig: config,
     workerScores: opts.workerScores ?? resolveEmpiricalWorkerScores(config),
     ...opts,
   });
@@ -367,7 +490,10 @@ function buildContinuationRequest(record: LiveRunContinuationRecord, config: Orc
 function resolveEmpiricalWorkerScores(config: JinnConfig): Record<string, number> | undefined {
   if (config.orchestration?.empiricalRouting !== true) return undefined;
   try {
-    const telemetry = readOrchestrationTelemetry();
+    const telemetry = readOrchestrationTelemetry(undefined, {
+      maxBytes: EMPIRICAL_ROUTING_MAX_BYTES,
+      maxRecords: EMPIRICAL_ROUTING_MAX_RECORDS,
+    });
     if (telemetry.skippedLines > 0) {
       logger.warn(`Orchestration empirical routing skipped ${telemetry.skippedLines} malformed telemetry line(s)`);
     }

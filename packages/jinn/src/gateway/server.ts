@@ -59,7 +59,12 @@ import { syncBoardForEvent } from "./board-sync.js";
 import { logBoardSummary } from "./board-service.js";
 import { startBoardWorker } from "./board-worker.js";
 import { reconcileOrphanedTickets } from "./orphaned-ticket-reconciler.js";
-import { refreshOrchestrationRuntimeForOrgReload, swapOrchestrationRuntime } from "./orchestration-runtime-manager.js";
+import {
+  refreshDeferredOrchestrationRuntimeIfDrained,
+  refreshOrchestrationRuntimeForOrgReload,
+  swapOrchestrationRuntime,
+  type OrchestrationRuntimeRefreshState,
+} from "./orchestration-runtime-manager.js";
 import { createGatewayOrchestrationRuntime } from "./orchestration-runtime-factory.js";
 
 
@@ -828,6 +833,7 @@ export async function startGateway(
   };
   refreshDynamicModels(currentConfig);
   let orchestrationRuntime: OrchestrationRuntime | undefined;
+  const orchestrationRefreshState: OrchestrationRuntimeRefreshState = { pending: false };
 
   // Synchronously re-scan org/ into the in-memory registry and drop warm PTYs so the
   // next turn respawns with a fresh system prompt. Shared by the API employee-update
@@ -852,6 +858,7 @@ export async function startGateway(
       currentConfig,
       orchestrationRuntime,
       (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
+      { refreshState: orchestrationRefreshState, reason: "org_reload" },
     );
     bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
     emit("org:changed", {});
@@ -925,6 +932,7 @@ export async function startGateway(
         currentConfig,
         orchestrationRuntime,
         (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
+        { refreshState: orchestrationRefreshState, reason: "config_reload" },
       );
       bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
       logger.info("Config reloaded successfully");
@@ -933,6 +941,17 @@ export async function startGateway(
     } catch (err) {
       logger.error(`Failed to reload config: ${err instanceof Error ? err.message : err}`);
     }
+  };
+  const replayDeferredOrchestrationRuntimeRefresh = (): void => {
+    if (!orchestrationRefreshState.pending) return;
+    orchestrationRuntime = refreshDeferredOrchestrationRuntimeIfDrained(
+      apiContext,
+      currentConfig,
+      orchestrationRuntime,
+      orchestrationRefreshState,
+      (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
+    );
+    bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
   };
   apiContext.reloadConfig = reloadConfig;
 
@@ -962,6 +981,7 @@ export async function startGateway(
         listSessions,
         emit,
       });
+      replayDeferredOrchestrationRuntimeRefresh();
     },
   });
   const stopBoardWorker = startBoardWorker({ context: apiContext, orgDir: ORG_DIR });
@@ -1223,7 +1243,6 @@ export async function startGateway(
     // interrupted below — a mid-shutdown sweep must not race the teardown.
     stopStatusReconciler();
     stopBoardWorker();
-    orchestrationRuntime?.close();
 
     // Stop caffeinate
     if (caffeinate && caffeinate.exitCode === null) {
@@ -1254,6 +1273,9 @@ export async function startGateway(
     hermesInteractiveEngine.killAll();
     piEngine.killAll();
     kiroEngine.killAll();
+
+    await orchestrationRuntime?.prepareForShutdown("Interrupted: gateway shutting down gracefully");
+    orchestrationRuntime?.close();
 
     // Dispose the PTY lifecycle manager.
     try {

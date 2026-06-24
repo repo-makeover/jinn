@@ -1,4 +1,4 @@
-import { MatrixScheduler, type SchedulerOptions } from "./scheduler.js";
+import { MatrixScheduler, type AllocationRequestOptions, type SchedulerOptions } from "./scheduler.js";
 import { OrchestrationStore } from "./store.js";
 import type { Allocation, AllocationRequest, AllocationResult, Lease, LeaseValidationResult, OrchestrationConfig, QueueItem, SchedulerSnapshot, TelemetryEvent } from "./types.js";
 
@@ -42,12 +42,12 @@ export class PersistentMatrixScheduler {
     if (this.ownsStore) this.store.close();
   }
 
-  requestAllocation(request: AllocationRequest): AllocationResult {
-    return this.commitMutation(() => this.scheduler.requestAllocation(request));
+  requestAllocation(request: AllocationRequest, opts: AllocationRequestOptions = {}): AllocationResult {
+    return this.commitMutation(() => this.scheduler.requestAllocation(request, opts));
   }
 
-  tryAllocationNow(request: AllocationRequest): AllocationResult {
-    return this.commitMutation(() => this.scheduler.requestAllocation(request, { queueOnBlock: false }));
+  tryAllocationNow(request: AllocationRequest, opts: AllocationRequestOptions = {}): AllocationResult {
+    return this.commitMutation(() => this.scheduler.requestAllocation(request, { ...opts, queueOnBlock: false }));
   }
 
   heartbeatLease(leaseId: string, coordinatorId?: string): Lease {
@@ -62,8 +62,8 @@ export class PersistentMatrixScheduler {
     return this.commitMutation(() => this.scheduler.expireLeases(now));
   }
 
-  retryQueued(): AllocationResult[] {
-    return this.commitMutation(() => this.scheduler.retryQueued());
+  retryQueued(opts: AllocationRequestOptions = {}): AllocationResult[] {
+    return this.commitMutation(() => this.scheduler.retryQueued(opts));
   }
 
   validateLeaseForWorker(workerId: string, leaseId: string, taskId: string, coordinatorId: string): LeaseValidationResult {

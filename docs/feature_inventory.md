@@ -47,12 +47,13 @@
 - Fidelity gaps:
   - A SQLite store, persistent scheduler wrapper, and daemon runtime now exist for leases, allocations, queue items, and telemetry events.
   - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, `mock`, and opt-in live adapters for existing Jinn engine ids via an injected engine map. The default registry used by dry-runs remains inert-only.
-  - Usage-aware headroom helpers can filter unavailable, exhausted, or below-threshold live engines when future live orchestration opts in; simulation mode does not call this filter.
+  - Live orchestration allocation applies usage-aware headroom before creating leases, filtering unavailable, exhausted, or below-threshold engines while simulation mode stays deterministic.
   - Worktree execution is task/lane-scoped: implementation lanes can run in isolated git worktrees, reviewers inspect generated diff bundles instead of the implementation tree, and the runtime reaper removes abandoned managed worktrees.
   - Dual-lane mode allocates OpenAI and Anthropic implementer roles atomically, sends both lanes an identical prompt in isolated worktrees, returns a deterministic comparison report, and requires explicit human selection. It does not apply the selected patch to the base repo.
   - Board-originated ticket dispatch is scheduler-aware when `orchestration.enabled: true`: manual dispatch and the board worker allocate an exact synthesized org worker role before session launch and release the lease after the run settles.
   - Durable telemetry is appended to `~/.jinn/logs/orchestration-telemetry.jsonl` for scheduler-owned live runs, dual-lane selection outcomes, and scheduler-owned board/manual ticket dispatch. Prompts, raw model output, raw diffs, cwd/worktree paths, credentials, headers, and env are not logged.
   - `orchestration.empiricalRouting: true` lets runtime startup use historical telemetry scores as a deterministic worker tie-break after hard constraints and explicit tier/cost preferences.
+  - Runtime reload/shutdown paths preserve active orchestration work, replay deferred org/config refresh after drain, recover stale `dispatching` continuations, and release owned leases before closing persistent state.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
   - Dashboard controls and automatic patch integration are later milestones.
 

@@ -123,7 +123,7 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
     leaseDurationMs: task.leaseDurationMs,
     mode: mode as CoordinatorMode,
   }, runtime.config);
-  const allocationResult = runtime.requestAllocation(brief.request);
+  const allocationResult = await runtime.requestAllocationWithLiveHeadroom(brief.request);
   if (!allocationResult.ok) {
     runtime.queueLiveContinuation(buildContinuationRecord(runtime.getLiveContinuation(task.taskId, task.coordinatorId), task, mode));
     return { ok: false, state: "blocked_resource", mode, queueItem: allocationResult.queueItem, reviewPolicy: allocationResult.reviewPolicy };
@@ -155,7 +155,6 @@ export async function runAllocatedOrchestrationTask(opts: RunAllocatedOrchestrat
     for (const lease of opts.allocation.leases) {
       const worker = requireWorker(runtime.listWorkers(), lease.workerId);
       const role = roleDefinitions.get(lease.role);
-      let turnStarted = false;
       try {
         const workspace = prepareLeaseWorkspace({
           baseCwd,
@@ -170,7 +169,6 @@ export async function runAllocatedOrchestrationTask(opts: RunAllocatedOrchestrat
         if (!isReviewerRole(lease.role, role) && (workspace.mode === "shared" || workspace.mode === "implementation_worktree")) {
           implementationWorkspace = workspace;
         }
-        turnStarted = true;
         const session = await runOrchestrationLeaseTurn({
           context: opts.context,
           mode: opts.mode,
@@ -196,7 +194,7 @@ export async function runAllocatedOrchestrationTask(opts: RunAllocatedOrchestrat
           };
         }
       } catch (err) {
-        if (!turnStarted) releaseLeaseSafely(runtime, lease);
+        releaseLeaseSafely(runtime, lease);
         throw err;
       }
     }
@@ -415,7 +413,7 @@ function workspaceTelemetryCounts(workspace: OrchestrationLeaseWorkspace): { fil
 
 function appendRunTelemetrySafely(record: OrchestrationRunTelemetryRecord): void {
   try {
-    appendOrchestrationTelemetry(record);
+    appendOrchestrationTelemetry(record, { fsync: false });
   } catch (err) {
     logger.warn(`Orchestration telemetry append failed for ${record.task_id}/${record.role}: ${err instanceof Error ? err.message : err}`);
   }
@@ -520,7 +518,9 @@ export function orchestrationSessionFailed(session: OrchestrationRunSession): bo
   return session.status === "error" || Boolean(session.error);
 }
 
-function releaseLeaseSafely(runtime: { releaseLease(leaseId: string, coordinatorId?: string): Lease }, lease: Lease): void {
+function releaseLeaseSafely(runtime: { listLeases(): Lease[]; releaseLease(leaseId: string, coordinatorId?: string): Lease }, lease: Lease): void {
+  const current = runtime.listLeases().find((candidate) => candidate.leaseId === lease.leaseId);
+  if (current && current.state !== "running") return;
   try {
     runtime.releaseLease(lease.leaseId, lease.coordinatorId);
   } catch (err) {

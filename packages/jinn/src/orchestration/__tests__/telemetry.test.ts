@@ -73,6 +73,20 @@ describe("orchestration telemetry", () => {
     expect(scores.loser).toBe(-3);
   });
 
+  it("supports bounded tail reads for runtime scoring", () => {
+    const logPath = path.join(tmpDir, "large-runs.jsonl");
+    const lines = [
+      JSON.stringify(record({ task_id: "old", worker_id: "old-worker" })),
+      JSON.stringify(record({ task_id: "new", worker_id: "new-worker" })),
+    ];
+    fs.writeFileSync(logPath, lines.join("\n"));
+
+    const read = readOrchestrationTelemetry(logPath, { maxBytes: lines[1].length + 8, maxRecords: 1 });
+
+    expect(read.records).toHaveLength(1);
+    expect(read.records[0].worker_id).toBe("new-worker");
+  });
+
   it("counts changed files and test files without exposing paths", () => {
     const counts = telemetryCountsFromDiff([
       "diff --git a/src/a.ts b/src/a.ts",

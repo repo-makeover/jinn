@@ -104,7 +104,7 @@ export async function runDualLaneTask(opts: {
 }): Promise<DualLaneRunResult> {
   const runtime = opts.context.orchestration?.runtime;
   if (!runtime) throw new Error("orchestration runtime is not enabled");
-  const allocationResult = runtime.requestAllocation(buildDualLaneAllocationRequest(opts.task));
+  const allocationResult = await runtime.requestAllocationWithLiveHeadroom(buildDualLaneAllocationRequest(opts.task));
   if (!allocationResult.ok) {
     runtime.queueLiveContinuation(buildDualLaneContinuation(runtime.getLiveContinuation(opts.task.taskId, opts.task.coordinatorId), opts.task));
     return {
@@ -304,7 +304,7 @@ function appendDualLaneSelectionTelemetrySafely(
   ];
   for (const record of records) {
     try {
-      appendOrchestrationTelemetry(record);
+      appendOrchestrationTelemetry(record, { fsync: false });
     } catch (err) {
       logger.warn(`Dual-lane telemetry append failed for ${record.task_id}/${record.worker_id}: ${err instanceof Error ? err.message : String(err)}`);
     }

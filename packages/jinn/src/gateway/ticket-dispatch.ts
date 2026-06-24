@@ -421,7 +421,7 @@ function buildBoardDispatchTelemetry(
 
 function appendBoardDispatchTelemetrySafely(record: OrchestrationRunTelemetryRecord): void {
   try {
-    appendOrchestrationTelemetry(record);
+    appendOrchestrationTelemetry(record, { fsync: false });
   } catch (err) {
     logger.warn(`[ticket-dispatch] orchestration telemetry append failed for ${record.task_id}: ${err instanceof Error ? err.message : String(err)}`);
   }

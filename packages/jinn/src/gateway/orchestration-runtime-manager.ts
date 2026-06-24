@@ -3,12 +3,30 @@ import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import type { ApiContext } from "./api/context.js";
 
+export interface OrchestrationRuntimeRefreshState {
+  pending: boolean;
+  reason?: "config_reload" | "org_reload";
+}
+
+export interface OrchestrationRuntimeSwapOptions {
+  refreshState?: OrchestrationRuntimeRefreshState;
+  reason?: OrchestrationRuntimeRefreshState["reason"];
+}
+
 export function swapOrchestrationRuntime(
   apiContext: ApiContext,
   config: JinnConfig,
   currentRuntime?: OrchestrationRuntime,
   createRuntime: (nextConfig: JinnConfig) => OrchestrationRuntime | undefined = createOrchestrationRuntimeFromConfig,
+  opts: OrchestrationRuntimeSwapOptions = {},
 ): OrchestrationRuntime | undefined {
+  if (currentRuntime?.hasActiveWork()) {
+    markRefreshDeferred(opts);
+    bindRuntime(apiContext, currentRuntime);
+    logger.warn("Orchestration runtime refresh deferred until active work drains");
+    return currentRuntime;
+  }
+
   if (config.orchestration?.enabled === true) {
     const nextRuntime = createRuntime(config);
     if (nextRuntime) {
@@ -16,11 +34,6 @@ export function swapOrchestrationRuntime(
       currentRuntime?.close();
       return nextRuntime;
     }
-  }
-
-  if (currentRuntime?.hasActiveWork()) {
-    bindRuntime(apiContext, currentRuntime);
-    return currentRuntime;
   }
 
   currentRuntime?.close();
@@ -33,13 +46,37 @@ export function refreshOrchestrationRuntimeForOrgReload(
   config: JinnConfig,
   currentRuntime: OrchestrationRuntime | undefined,
   createRuntime: (nextConfig: JinnConfig) => OrchestrationRuntime | undefined = createOrchestrationRuntimeFromConfig,
+  opts: OrchestrationRuntimeSwapOptions = {},
 ): OrchestrationRuntime | undefined {
   if (config.orchestration?.enabled !== true) return currentRuntime;
   if (currentRuntime?.hasActiveWork()) {
+    markRefreshDeferred(opts);
     logger.warn("Orchestration org-worker bridge refresh deferred until active work drains");
     return currentRuntime;
   }
+  return swapOrchestrationRuntime(apiContext, config, currentRuntime, createRuntime, opts);
+}
+
+export function refreshDeferredOrchestrationRuntimeIfDrained(
+  apiContext: ApiContext,
+  config: JinnConfig,
+  currentRuntime: OrchestrationRuntime | undefined,
+  refreshState: OrchestrationRuntimeRefreshState,
+  createRuntime: (nextConfig: JinnConfig) => OrchestrationRuntime | undefined = createOrchestrationRuntimeFromConfig,
+): OrchestrationRuntime | undefined {
+  if (!refreshState.pending) return currentRuntime;
+  if (currentRuntime?.hasActiveWork()) return currentRuntime;
+  const reason = refreshState.reason;
+  refreshState.pending = false;
+  refreshState.reason = undefined;
+  logger.info(`Applying deferred orchestration runtime refresh${reason ? ` after ${reason}` : ""}`);
   return swapOrchestrationRuntime(apiContext, config, currentRuntime, createRuntime);
+}
+
+function markRefreshDeferred(opts: OrchestrationRuntimeSwapOptions): void {
+  if (!opts.refreshState) return;
+  opts.refreshState.pending = true;
+  opts.refreshState.reason = opts.reason;
 }
 
 function bindRuntime(apiContext: ApiContext, runtime: OrchestrationRuntime): void {

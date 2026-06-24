@@ -41,6 +41,11 @@ export interface TelemetryReadResult {
   skippedLines: number;
 }
 
+export interface TelemetryReadOptions {
+  maxBytes?: number;
+  maxRecords?: number;
+}
+
 export interface TelemetryBucket {
   count: number;
   dispositions: Record<string, number>;
@@ -93,10 +98,13 @@ export function appendOrchestrationTelemetry(
   if (!existed) fs.chmodSync(logPath, 0o600);
 }
 
-export function readOrchestrationTelemetry(logPath = ORCHESTRATION_TELEMETRY_LOG): TelemetryReadResult {
+export function readOrchestrationTelemetry(
+  logPath = ORCHESTRATION_TELEMETRY_LOG,
+  opts: TelemetryReadOptions = {},
+): TelemetryReadResult {
   let raw: string;
   try {
-    raw = fs.readFileSync(logPath, "utf-8");
+    raw = readTelemetryLog(logPath, opts);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { records: [], skippedLines: 0 };
     throw err;
@@ -110,6 +118,9 @@ export function readOrchestrationTelemetry(logPath = ORCHESTRATION_TELEMETRY_LOG
     } catch {
       skippedLines += 1;
     }
+  }
+  if (typeof opts.maxRecords === "number" && Number.isFinite(opts.maxRecords) && opts.maxRecords >= 0 && records.length > opts.maxRecords) {
+    records.splice(0, records.length - Math.floor(opts.maxRecords));
   }
   return { records, skippedLines };
 }
@@ -255,6 +266,25 @@ function changedFilesFromDiff(diff: string): string[] {
 
 function isTestPath(filePath: string): boolean {
   return /(^|\/)(__tests__|tests?)\//i.test(filePath) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(filePath);
+}
+
+function readTelemetryLog(logPath: string, opts: TelemetryReadOptions): string {
+  const maxBytes = typeof opts.maxBytes === "number" && Number.isFinite(opts.maxBytes) && opts.maxBytes > 0
+    ? Math.floor(opts.maxBytes)
+    : undefined;
+  if (!maxBytes) return fs.readFileSync(logPath, "utf-8");
+  const stat = fs.statSync(logPath);
+  if (stat.size <= maxBytes) return fs.readFileSync(logPath, "utf-8");
+  const start = stat.size - maxBytes;
+  const fd = fs.openSync(logPath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(maxBytes);
+    const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, start);
+    const raw = buffer.subarray(0, bytesRead).toString("utf-8");
+    return raw.replace(/^[^\n]*(?:\r?\n|$)/, "");
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function stringField(value: Record<string, unknown>, key: string): string {
