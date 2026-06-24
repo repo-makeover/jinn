@@ -61,6 +61,57 @@ describe("coordinator allocation planning", () => {
       resumeOn: ["worker_released", "quota_available", "lease_expired"],
     });
   });
+
+  it("plans architecture mode with all required semantic roles", () => {
+    const brief = buildCoordinatorTaskBrief({
+      taskId: "task-arch",
+      coordinatorId: "coord-arch",
+      coordinatorTemplate: "architectureChange",
+      mode: "architecture",
+    }, config());
+
+    expect(brief.request.requiredRoles).toEqual([
+      "architect",
+      "seniorImplementer",
+      "independentReviewer",
+      "adversarialReviewer",
+      "qaGate",
+    ]);
+    expect(brief.request.optionalRoles).toEqual([]);
+  });
+
+  it("rejects architecture mode when a semantic role is missing", () => {
+    expect(() => buildCoordinatorTaskBrief({
+      taskId: "task-arch",
+      coordinatorId: "coord-arch",
+      coordinatorTemplate: "standardImplementation",
+      mode: "architecture",
+    }, config())).toThrow("architecture mode requires architect, implementer, independent reviewer, adversarial reviewer, and QA roles");
+  });
+
+  it("restricts local_heavy mode to low-cost non-editing workers", () => {
+    const brief = buildCoordinatorTaskBrief({
+      taskId: "task-local",
+      coordinatorId: "coord-local",
+      coordinatorTemplate: "localTriage",
+      mode: "local_heavy",
+    }, config());
+    const plan = planCoordinatorAllocation(brief, config());
+
+    expect(brief.request.requiredRoles).toEqual(["triage", "qaGate"]);
+    expect(brief.request.allowedWorkerIds).toEqual(["localQa", "localTriage"]);
+    expect(plan.summary).toMatchObject({ state: "allocated", allocatedRoles: ["triage", "qaGate"] });
+    expect(plan.result.ok && plan.result.allocation.leases.map((lease) => lease.workerId).sort()).toEqual(["localQa", "localTriage"]);
+  });
+
+  it("rejects editing roles in local_heavy mode", () => {
+    expect(() => buildCoordinatorTaskBrief({
+      taskId: "task-local",
+      coordinatorId: "coord-local",
+      coordinatorTemplate: "standardImplementation",
+      mode: "local_heavy",
+    }, config())).toThrow("local_heavy mode cannot allocate editing role seniorImplementer");
+  });
 });
 
 function config(opts: { reviewerFamily?: string } = {}): OrchestrationConfig {
@@ -99,8 +150,24 @@ function config(opts: { reviewerFamily?: string } = {}): OrchestrationConfig {
         costClass: "near_zero",
         workspacePolicy: "shared",
       },
+      {
+        id: "localTriage",
+        provider: "ollama",
+        family: "local",
+        tier: "local",
+        capabilities: ["triage"],
+        tools: ["filesystem"],
+        maxConcurrentTasks: 1,
+        costClass: "near_zero",
+        workspacePolicy: "read_only",
+      },
     ],
     roles: [
+      {
+        id: "architect",
+        requiredCapabilities: ["architecture"],
+        requiredTools: ["filesystem"],
+      },
       {
         id: "seniorImplementer",
         requiredCapabilities: ["repo_edit", "coding"],
@@ -117,12 +184,34 @@ function config(opts: { reviewerFamily?: string } = {}): OrchestrationConfig {
         requiredCapabilities: ["validation"],
         requiredTools: ["shell"],
       },
+      {
+        id: "adversarialReviewer",
+        requiredCapabilities: ["adversarial_review"],
+        requiredTools: ["filesystem"],
+      },
+      {
+        id: "triage",
+        requiredCapabilities: ["triage"],
+        requiredTools: ["filesystem"],
+      },
     ],
     coordinatorTemplates: [
       {
         id: "standardImplementation",
         purpose: "feature work",
         requiredRoles: ["seniorImplementer", "independentReviewer"],
+        optionalRoles: ["qaGate"],
+      },
+      {
+        id: "architectureChange",
+        purpose: "self-referential architecture work",
+        requiredRoles: ["architect", "seniorImplementer", "independentReviewer", "adversarialReviewer", "qaGate"],
+        optionalRoles: [],
+      },
+      {
+        id: "localTriage",
+        purpose: "local heavy triage",
+        requiredRoles: ["triage"],
         optionalRoles: ["qaGate"],
       },
     ],

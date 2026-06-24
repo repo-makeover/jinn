@@ -19,6 +19,28 @@ afterEach(() => {
 });
 
 describe("jinn run orchestration client", () => {
+  it("prints read-only recovery notices from the local recovery directory", async () => {
+    const recoveryDir = path.join(tmpHome, "orchestration-recovery");
+    fs.mkdirSync(recoveryDir, { recursive: true });
+    fs.writeFileSync(path.join(recoveryDir, "2026-06-24T12-00-00-000Z-orchestration-db-recovery.json"), JSON.stringify({
+      recoveredAt: "2026-06-24T12:00:00.000Z",
+      originalDbPath: path.join(tmpHome, "orchestration.db"),
+      corruptDbPath: path.join(tmpHome, "orchestration.db.corrupt-20260624T120000000Z"),
+      message: "orchestration state could not be trusted",
+      operatorGuidance: "Inspect the quarantined database manually.",
+    }));
+
+    const { runRecoveryNotices } = await import("../orchestration.js");
+    await runRecoveryNotices({ json: true });
+
+    expect(JSON.parse(String(logSpy.mock.calls[0][0]))).toMatchObject({
+      recoveryNotices: [{
+        recoveredAt: "2026-06-24T12:00:00.000Z",
+        corruptDbPath: path.join(tmpHome, "orchestration.db.corrupt-20260624T120000000Z"),
+      }],
+    });
+  });
+
   it("posts a task file to the running gateway with token auth", async () => {
     const taskFile = path.join(tmpHome, "task.yaml");
     fs.writeFileSync(taskFile, [

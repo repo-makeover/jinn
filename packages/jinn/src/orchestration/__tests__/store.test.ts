@@ -57,6 +57,17 @@ describe("OrchestrationStore", () => {
 
     expect(store.loadSnapshot().leases).toEqual([]);
     expect(fs.readdirSync(tmpDir).some((name) => name.startsWith("orchestration.db.corrupt.2026-06-23T12-00-00-000Z"))).toBe(true);
+    const recoveryDir = path.join(tmpDir, "orchestration-recovery");
+    const manifestPath = path.join(recoveryDir, fs.readdirSync(recoveryDir)[0]);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    expect(manifest).toMatchObject({
+      recoveredAt: fixedNow.toISOString(),
+      originalDbPath: dbPath,
+      message: expect.stringContaining("orchestration state could not be trusted"),
+    });
+    expect(store.loadSnapshot().telemetry[0].detail).toMatchObject({
+      recoveryManifestPath: manifestPath,
+    });
     store.close();
     warnSpy.mockRestore();
   });
@@ -130,6 +141,7 @@ function exampleSnapshot(): SchedulerSnapshot {
         leases: [lease],
         optionalRolesSkipped: ["optionalReviewer"],
         createdAt: fixedNow.toISOString(),
+        updatedAt: fixedNow.toISOString(),
       },
     ],
     leases: [lease],

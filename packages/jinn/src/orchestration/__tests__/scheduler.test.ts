@@ -333,6 +333,21 @@ describe("MatrixScheduler", () => {
     expect(retried[0].allocation.taskId).toBe("task-2");
   });
 
+  it("marks allocations completed after all leases are released", () => {
+    const s = scheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]));
+    const result = s.requestAllocation(request());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    s.releaseLease(result.allocation.leases[0].leaseId, "coord-1");
+
+    expect(s.listAllocations()).toMatchObject([{
+      allocationId: result.allocation.allocationId,
+      state: "completed",
+      updatedAt: fixedNow.toISOString(),
+    }]);
+  });
+
   it("expires leases deterministically and rejects expired lease validation", () => {
     const s = new MatrixScheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]), {
       now: () => fixedNow,
@@ -346,6 +361,66 @@ describe("MatrixScheduler", () => {
 
     expect(expired.map((lease) => lease.leaseId)).toEqual([leaseId]);
     expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-1", "coord-1")).toEqual({ ok: false, reason: "lease_expired" });
+    expect(s.listAllocations()).toMatchObject([{ state: "expired" }]);
+  });
+
+  it("prunes old terminal allocations without pruning running allocations", () => {
+    let now = fixedNow;
+    const s = new MatrixScheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]), {
+      now: () => now,
+      retention: {
+        terminalAllocationRetentionMs: 500,
+        terminalAllocationLimit: 10,
+      },
+    });
+    const first = s.requestAllocation(request({ taskId: "terminal" }));
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    s.releaseLease(first.allocation.leases[0].leaseId, "coord-1");
+
+    now = new Date(fixedNow.getTime() + 1_000);
+    const second = s.requestAllocation(request({ taskId: "running", coordinatorId: "coord-running" }));
+    expect(second.ok).toBe(true);
+
+    expect(s.listAllocations().map((allocation) => allocation.taskId)).toEqual(["running"]);
+  });
+
+  it("caps retained terminal allocations by newest updatedAt", () => {
+    let now = fixedNow;
+    const s = new MatrixScheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]), {
+      now: () => now,
+      retention: {
+        terminalAllocationRetentionMs: 60_000,
+        terminalAllocationLimit: 1,
+      },
+    });
+    for (const taskId of ["old-terminal", "new-terminal"]) {
+      const result = s.requestAllocation(request({ taskId, coordinatorId: `coord-${taskId}` }));
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      s.releaseLease(result.allocation.leases[0].leaseId, `coord-${taskId}`);
+      now = new Date(now.getTime() + 1);
+    }
+
+    expect(s.listAllocations().map((allocation) => allocation.taskId)).toEqual(["new-terminal"]);
+  });
+
+  it("bounds scheduler internal telemetry while preserving allocation behavior", () => {
+    let now = fixedNow;
+    const s = new MatrixScheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]), {
+      now: () => now,
+      retention: { telemetryRetentionMs: 60_000, telemetryEventLimit: 2 },
+    });
+    for (const taskId of ["one", "two", "three"]) {
+      const result = s.requestAllocation(request({ taskId, coordinatorId: `coord-${taskId}` }));
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      s.releaseLease(result.allocation.leases[0].leaseId, `coord-${taskId}`);
+      now = new Date(now.getTime() + 1);
+    }
+
+    expect(s.listTelemetry()).toHaveLength(2);
+    expect(s.listTelemetry().map((event) => event.type)).toEqual(["allocation_created", "lease_released"]);
   });
 
   it("renews lease expiry on heartbeat with the original lease duration", () => {

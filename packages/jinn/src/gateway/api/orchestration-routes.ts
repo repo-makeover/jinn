@@ -11,7 +11,8 @@ import type { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { formatZodError } from "../../orchestration/schemas.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import { OrchestrationStore } from "../../orchestration/store.js";
-import { ORCH_DB } from "../../shared/paths.js";
+import { listRecoveryNotices } from "../../orchestration/store-recovery.js";
+import { ORCH_DB, ORCH_RECOVERY_DIR } from "../../shared/paths.js";
 import { readOrchestrationTelemetry, summarizeOrchestrationTelemetry } from "../../orchestration/telemetry.js";
 import { listManagedWorktrees, resolveWorktreeOptions } from "../../orchestration/worktree.js";
 import { readJsonBody } from "../http-helpers.js";
@@ -277,6 +278,7 @@ export async function handleOrchestrationRoutes(
 function buildStatusPayload(context: ApiContext, runtime: OrchestrationRuntime | undefined) {
   const enabled = context.getConfig().orchestration?.enabled === true;
   const controlState = runtime?.getControlState() ?? { queuePaused: false, pausedAt: null, pauseReason: null };
+  const recoveryNotices = listRecoveryNotices(context.orchestration?.recoveryDir ?? ORCH_RECOVERY_DIR);
   const counts = runtime
     ? {
       workers: runtime.listWorkers().length,
@@ -303,6 +305,7 @@ function buildStatusPayload(context: ApiContext, runtime: OrchestrationRuntime |
     pauseReason: controlState.pauseReason,
     disabledReason: enabled ? null : "orchestration is disabled",
     degradedReason: enabled && !runtime ? "orchestration runtime is not bound; observe routes may use durable fallback state" : null,
+    recoveryNotices,
     counts,
   };
 }

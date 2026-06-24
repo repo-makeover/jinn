@@ -85,7 +85,16 @@ describe("GET /api/orchestration/*", () => {
       startReaper: false,
     });
     const ctx = makeCtx(config());
-    ctx.orchestration = { runtime };
+    const recoveryDir = path.join(tmpDir, "orchestration-recovery");
+    fs.mkdirSync(recoveryDir, { recursive: true });
+    fs.writeFileSync(path.join(recoveryDir, "2026-06-24T12-00-00-000Z-orchestration-db-recovery.json"), JSON.stringify({
+      recoveredAt: "2026-06-24T12:00:00.000Z",
+      originalDbPath: dbPath,
+      corruptDbPath: `${dbPath}.corrupt-20260624T120000000Z`,
+      message: "orchestration state could not be trusted",
+      operatorGuidance: "Inspect the quarantined database manually.",
+    }));
+    ctx.orchestration = { runtime, recoveryDir };
     const allocated = runtime.requestAllocation(request("status-task", "status-coord"));
     expect(allocated.ok).toBe(true);
 
@@ -101,6 +110,11 @@ describe("GET /api/orchestration/*", () => {
         runningLeases: 1,
         activeWork: true,
       },
+      recoveryNotices: [{
+        recoveredAt: "2026-06-24T12:00:00.000Z",
+        originalDbPath: dbPath,
+        corruptDbPath: `${dbPath}.corrupt-20260624T120000000Z`,
+      }],
     });
     runtime.close();
   });

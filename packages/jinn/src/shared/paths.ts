@@ -19,6 +19,7 @@ export interface JinnPaths {
   ORCH_DB: string;
   ORCH_CONFIG_DIR: string;
   ORCH_WORKTREE_ROOT: string;
+  ORCH_RECOVERY_DIR: string;
   CRON_JOBS: string;
   AUDIT_LOG: string;
   APPROVALS_FILE: string;
@@ -53,6 +54,7 @@ function buildJinnPaths(home: string): JinnPaths {
     ORCH_DB: path.join(home, "orchestration.db"),
     ORCH_CONFIG_DIR: path.join(home, "orchestration"),
     ORCH_WORKTREE_ROOT: path.join(home, "worktrees"),
+    ORCH_RECOVERY_DIR: path.join(home, "orchestration-recovery"),
     CRON_JOBS: path.join(home, "cron", "jobs.json"),
     AUDIT_LOG: path.join(home, "audit.jsonl"),
     APPROVALS_FILE: path.join(home, "approvals.json"),
@@ -85,6 +87,7 @@ function applyRuntimePaths(paths: JinnPaths): void {
   ORCH_DB = paths.ORCH_DB;
   ORCH_CONFIG_DIR = paths.ORCH_CONFIG_DIR;
   ORCH_WORKTREE_ROOT = paths.ORCH_WORKTREE_ROOT;
+  ORCH_RECOVERY_DIR = paths.ORCH_RECOVERY_DIR;
   CRON_JOBS = paths.CRON_JOBS;
   AUDIT_LOG = paths.AUDIT_LOG;
   APPROVALS_FILE = paths.APPROVALS_FILE;
@@ -135,6 +138,8 @@ export let ORCH_DB = initialPaths.ORCH_DB;
 export let ORCH_CONFIG_DIR = initialPaths.ORCH_CONFIG_DIR;
 /** Default root for temporary matrix orchestration git worktrees. */
 export let ORCH_WORKTREE_ROOT = initialPaths.ORCH_WORKTREE_ROOT;
+/** Operator-visible recovery manifests for quarantined orchestration databases. */
+export let ORCH_RECOVERY_DIR = initialPaths.ORCH_RECOVERY_DIR;
 export let CRON_JOBS = initialPaths.CRON_JOBS;
 /** Hash-chained, append-only integrity ledger for safe-write file mutations. */
 export let AUDIT_LOG = initialPaths.AUDIT_LOG;

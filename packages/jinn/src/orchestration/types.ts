@@ -4,7 +4,7 @@ export type Capability = string;
 export type CostClass = "near_zero" | "low" | "medium" | "high";
 export type LeaseState = "running" | "released" | "expired";
 export type QueueState = "blocked_resource";
-export type AllocationState = "allocated" | "blocked_resource";
+export type AllocationState = "allocated" | "completed" | "expired" | "blocked_resource";
 export type TaskPriority = "low" | "normal" | "high";
 export type FamilyConstraint = "opposite_of_implementer" | "same_as_implementer";
 export type WorkspacePolicy = "shared" | "read_only" | "isolated_worktree";
@@ -56,6 +56,7 @@ export interface AllocationRequest {
   coordinatorTemplate?: string;
   requiredRoles: string[];
   optionalRoles: string[];
+  allowedWorkerIds?: string[];
   priority: TaskPriority;
   leaseDurationMs: number;
 }
@@ -86,6 +87,7 @@ export interface Allocation {
   leases: Lease[];
   optionalRolesSkipped: string[];
   createdAt: string;
+  updatedAt: string;
 }
 
 export type ReviewPolicyDecision =

@@ -498,6 +498,7 @@ export function buildDualLaneAllocationRequest(task: LiveRunTaskPayload): Alloca
     coordinatorId: task.coordinatorId,
     requiredRoles: [task.openaiRole ?? "openaiImplementer", task.anthropicRole ?? "anthropicImplementer"],
     optionalRoles: [],
+    allowedWorkerIds: task.allowedWorkerIds,
     priority: task.priority,
     leaseDurationMs: task.leaseDurationMs,
   };

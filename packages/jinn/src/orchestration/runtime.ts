@@ -500,6 +500,7 @@ function buildContinuationRequest(record: LiveRunContinuationRecord, config: Orc
       coordinatorId: record.task.coordinatorId,
       requiredRoles: [record.task.openaiRole ?? "openaiImplementer", record.task.anthropicRole ?? "anthropicImplementer"],
       optionalRoles: [],
+      allowedWorkerIds: record.task.allowedWorkerIds,
       priority: record.task.priority,
       leaseDurationMs: record.task.leaseDurationMs,
     };
@@ -510,6 +511,7 @@ function buildContinuationRequest(record: LiveRunContinuationRecord, config: Orc
     coordinatorTemplate: record.task.coordinatorTemplate ?? record.task.template,
     requiredRoles: record.task.requiredRoles,
     optionalRoles: record.task.optionalRoles,
+    allowedWorkerIds: record.task.allowedWorkerIds,
     priority: record.task.priority,
     leaseDurationMs: record.task.leaseDurationMs,
     mode: record.mode as CoordinatorMode,

@@ -72,6 +72,7 @@ export const allocationRequestFileSchema = z.object({
   template: z.string().min(1).optional(),
   requiredRoles: z.array(z.string().min(1)).optional(),
   optionalRoles: z.array(z.string().min(1)).optional(),
+  allowedWorkerIds: z.array(z.string().min(1)).optional(),
   priority: prioritySchema.default("normal"),
   leaseDurationMs: z.number().int().positive().default(60 * 60 * 1000),
 }).strict();
@@ -143,6 +144,7 @@ export function buildAllocationRequest(
     coordinatorTemplate,
     requiredRoles,
     optionalRoles: parsed.optionalRoles ?? template?.optionalRoles ?? [],
+    allowedWorkerIds: parsed.allowedWorkerIds,
     priority: parsed.priority,
     leaseDurationMs: parsed.leaseDurationMs,
   };

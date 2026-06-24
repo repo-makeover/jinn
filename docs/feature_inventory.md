@@ -56,11 +56,13 @@
 - `jinn scheduler plan <task-file> --config-dir <dir> [--db-path <path>] [--json]` expands a coordinator template into an observe-only allocation plan.
 - `jinn leases list --config-dir <dir> [--db-path <path>] [--json]` lists durable orchestration leases when a DB exists.
 - `jinn queue list --config-dir <dir> [--db-path <path>] [--json]` lists durable blocked-resource queue items when a DB exists.
-- `jinn run --mode single_worker|single_worker_with_review|dual_lane --task <file> [--json]` posts a live task brief to the running gateway; the daemon must have `orchestration.enabled: true`.
+- `jinn run --mode single_worker|single_worker_with_review|dual_lane|architecture|local_heavy --task <file> [--json]` posts a live task brief to the running gateway; the daemon must have `orchestration.enabled: true`.
 - `jinn dual-lane select --task-id <id> --winner openai|anthropic [--json]` explicitly selects a completed dual-lane winner, archives the loser diff/metadata, and removes the loser worktree.
 - `jinn continuations list [--json]` lists durable blocked/failed continuation records through the running gateway.
 - `jinn continuations retry --task-id <id> --coordinator-id <id> [--json]` re-attempts a previously failed live continuation through the running gateway.
 - `jinn scheduler stats [--path <file>] [--json]` summarizes append-only orchestration run telemetry by provider, family, role, worker, and disposition.
+- `jinn recovery notices [--json]` lists recent corrupt orchestration DB recovery manifests. It is read-only and does not restore or requeue work.
+- `scripts/orchestration-smoke.mjs` is an opt-in live-daemon smoke script; without `JINN_ORCHESTRATION_SMOKE=1`, it prints a skip message and exits 0.
 - `jinn worktree create <task-file> [--lane <name>] [--json]` creates a managed git worktree for a task/lane when the task cwd is inside a git repo.
 - `jinn worktree diff <task-file> [--lane <name>] [--json]` prints the diff for a managed task/lane worktree.
 - `jinn worktree cleanup <task-file> [--lane <name>] [--json]` removes a managed task/lane worktree.
@@ -77,6 +79,8 @@
   - Durable telemetry is appended to `~/.jinn/logs/orchestration-telemetry.jsonl` for scheduler-owned live runs, dual-lane selection outcomes, and scheduler-owned board/manual ticket dispatch. Prompts, raw model output, raw diffs, cwd/worktree paths, credentials, headers, and env are not logged.
   - `orchestration.empiricalRouting: true` lets runtime startup use historical telemetry scores as a deterministic worker tie-break after hard constraints and explicit tier/cost preferences.
   - Runtime reload/shutdown paths preserve active orchestration work, replay deferred org/config refresh after drain, recover stale `dispatching` continuations, and release owned leases before closing persistent state.
+  - Allocation lifecycle and retention are bounded: running allocations remain protected, terminal allocations default to 24-hour retention with a 1,000-record cap, and internal scheduler telemetry defaults to 24-hour retention with a 2,000-event cap. Append-only JSONL run telemetry is unchanged.
+  - `architecture` mode requires architect, implementer, independent reviewer, adversarial reviewer, and QA roles in the resolved request. `local_heavy` rejects editing/coding roles and restricts allocation to local, near-zero, or low-cost workers.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
   - The `/orchestration` dashboard exposes failed-continuation retry, explicit dual-lane selection, global queue pause/resume, and strict running-lease stop. Per-task queue pause, raw diff viewing, and automatic patch integration remain deferred.
 
@@ -85,7 +89,7 @@
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
 - `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded
-  reason, queue pause state, and active counts.
+  reason, queue pause state, active counts, and recent corrupt-DB recovery notices.
 - `GET /api/orchestration/workers` returns configured workers.
 - `GET /api/orchestration/leases` returns existing durable orchestration leases.
 - `GET /api/orchestration/queue` returns blocked-resource queue items, including missing roles and resume triggers.
@@ -101,7 +105,7 @@
 - `POST /api/orchestration/queue/pause` persists a global queue pause with an optional reason.
 - `POST /api/orchestration/queue/resume` clears the global queue pause and retries queued work through live headroom.
 - `POST /api/orchestration/leases/stop` interrupts the Jinn session mapped to a running lease, or releases immediately when the mapped session is terminal.
-- `POST /api/orchestration/run` executes `single_worker`, `single_worker_with_review`, and `dual_lane` tasks through the daemon runtime.
+- `POST /api/orchestration/run` executes `single_worker`, `single_worker_with_review`, `dual_lane`, `architecture`, and `local_heavy` tasks through the daemon runtime.
 - `POST /api/orchestration/dual-lane/select` selects a completed dual-lane winner and archives/discards the loser lane.
 - Run responses include `reviewPolicy.explanations` for reviewer selection, explicit same-family fallback, and blocked reviewer allocation.
 - Blocked live runs persist a durable continuation keyed by task/coordinator and auto-resume on later resource availability.
@@ -110,6 +114,7 @@
   - GET routes observe state only; POST controls require an enabled live runtime.
   - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, passes isolated worktree cwd values to eligible implementation sessions, hands reviewers diff bundles, and releases leases on terminal paths.
   - If no orchestration runtime exists, state routes retain the no-daemon/test fallback; the run route fails instead of opening its own live scheduler.
+  - Corrupt orchestration DB recovery quarantines the DB/WAL/SHM sidecars, writes an operator manifest under `~/.jinn/orchestration-recovery/`, includes the manifest path in `store_corrupt_recovered` telemetry, and starts from an empty trusted store.
   - Lease stop does not release a running lease directly; the mapped run/session `finally` path remains release owner after interruption.
   - No per-task queue pause, raw diff view, raw prompt/model-output view, or automatic dual-lane patch application is wired yet.
 

@@ -67,7 +67,7 @@ program
 program
   .command("run")
   .description("Run an opt-in matrix orchestration task through the live gateway")
-  .requiredOption("--mode <mode>", "Run mode: single_worker, single_worker_with_review, or dual_lane")
+  .requiredOption("--mode <mode>", "Run mode: single_worker, single_worker_with_review, dual_lane, architecture, or local_heavy")
   .requiredOption("--task <file>", "YAML task file containing prompt and allocation fields")
   .option("--json", "Print raw JSON")
   .action(async (opts: { mode: string; task: string; json?: boolean }) => {
@@ -152,6 +152,20 @@ program
     .action(async (opts: { taskId: string; coordinatorId: string; json?: boolean }) => {
       const { runContinuationRetry } = await import("../src/cli/orchestration.js");
       await runContinuationRetry(opts);
+    });
+}
+
+{
+  const recoveryCmd = program
+    .command("recovery")
+    .description("Inspect read-only orchestration recovery notices");
+
+  recoveryCmd
+    .command("notices")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const { runRecoveryNotices } = await import("../src/cli/orchestration.js");
+      await runRecoveryNotices(opts);
     });
 }
 

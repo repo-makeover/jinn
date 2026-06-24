@@ -32,6 +32,7 @@ describe("PersistentMatrixScheduler", () => {
     expect(reopened.listLeases()).toHaveLength(1);
     expect(reopened.listLeases()[0]).toMatchObject({ taskId: "task-1", state: "running" });
     expect(reopened.listAllocations()).toHaveLength(1);
+    expect(reopened.listAllocations()[0]).toMatchObject({ state: "allocated", updatedAt: fixedNow.toISOString() });
     expect(reopened.validateLeaseForWorker("codexSenior", reopened.listLeases()[0].leaseId, "task-1", "coord-1")).toEqual({ ok: true });
     reopened.close();
   });
@@ -70,6 +71,7 @@ describe("PersistentMatrixScheduler", () => {
     const reopened = PersistentMatrixScheduler.open(config(), { dbPath, now: () => afterExpiry });
 
     expect(reopened.listLeases()[0]).toMatchObject({ taskId: "short", state: "expired" });
+    expect(reopened.listAllocations()[0]).toMatchObject({ taskId: "short", state: "expired" });
     const next = reopened.requestAllocation(request({ taskId: "next", coordinatorId: "coord-next" }));
     expect(next.ok).toBe(true);
     expect(reopened.listLeases().filter((lease) => lease.state === "running").map((lease) => lease.taskId)).toEqual(["next"]);
@@ -92,6 +94,32 @@ describe("PersistentMatrixScheduler", () => {
     expect(reopened.listLeases()[0]).toMatchObject({ leaseId, state: "expired" });
     expect(reopened.listTelemetry().map((event) => event.type)).toContain("lease_heartbeat");
     expect(reopened.listTelemetry().map((event) => event.type)).toContain("lease_expired");
+    reopened.close();
+  });
+
+  it("persists terminal allocation pruning across reopen", () => {
+    let now = fixedNow;
+    const first = PersistentMatrixScheduler.open(config(), {
+      dbPath,
+      now: () => now,
+      retention: { terminalAllocationRetentionMs: 500, terminalAllocationLimit: 10 },
+    });
+    const terminal = first.requestAllocation(request({ taskId: "terminal" }));
+    expect(terminal.ok).toBe(true);
+    if (!terminal.ok) return;
+    first.releaseLease(terminal.allocation.leases[0].leaseId, "coord-1");
+
+    now = new Date(fixedNow.getTime() + 1_000);
+    const running = first.requestAllocation(request({ taskId: "running", coordinatorId: "coord-running" }));
+    expect(running.ok).toBe(true);
+    first.close();
+
+    const reopened = PersistentMatrixScheduler.open(config(), {
+      dbPath,
+      now: () => now,
+      retention: { terminalAllocationRetentionMs: 500, terminalAllocationLimit: 10 },
+    });
+    expect(reopened.listAllocations().map((allocation) => allocation.taskId)).toEqual(["running"]);
     reopened.close();
   });
 });

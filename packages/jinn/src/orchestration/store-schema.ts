@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { logger } from "../shared/logger.js";
+import { ORCH_DB, ORCH_RECOVERY_DIR } from "../shared/paths.js";
+import { writeRecoveryManifest } from "./store-recovery.js";
 import { DEFAULT_LEASE_DURATION_MS, type TelemetryEvent } from "./types.js";
 import { setMeta } from "./store-utils.js";
 
@@ -47,7 +49,8 @@ CREATE TABLE IF NOT EXISTS allocations (
   coordinator_id TEXT NOT NULL,
   state TEXT NOT NULL,
   optional_roles_skipped_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_orch_allocations_task ON allocations (task_id);
 
@@ -110,9 +113,19 @@ export function openStoreDatabase(dbPath: string, opts: StoreOpenOptions = {}): 
       throw err;
     }
     const now = opts.now ?? (() => new Date());
-    const corruptPath = moveCorruptDatabase(dbPath, now);
+    const quarantine = moveCorruptDatabase(dbPath, now);
     const recoveredAt = now().toISOString();
-    logger.warn(`orchestration store: moved corrupt DB to ${corruptPath}; starting empty and surfacing recovery telemetry`);
+    const message = "orchestration state could not be trusted; in-flight leases and queue require operator review";
+    const recoveryManifestPath = writeRecoveryManifest(resolveRecoveryDir(dbPath), {
+      recoveredAt,
+      originalDbPath: dbPath,
+      corruptDbPath: quarantine.corruptDbPath,
+      corruptWalPath: quarantine.corruptWalPath,
+      corruptShmPath: quarantine.corruptShmPath,
+      message,
+      operatorGuidance: "Inspect the quarantined database files manually if recovery is needed. Jinn started with an empty orchestration database and did not requeue work automatically.",
+    });
+    logger.warn(`orchestration store: moved corrupt DB to ${quarantine.corruptDbPath}; starting empty and surfacing recovery telemetry`);
     return {
       db: openDatabase(dbPath),
       recoveryEvent: {
@@ -120,8 +133,9 @@ export function openStoreDatabase(dbPath: string, opts: StoreOpenOptions = {}): 
         type: "store_corrupt_recovered",
         timestamp: recoveredAt,
         detail: {
-          corruptPath,
-          message: "orchestration state could not be trusted; in-flight leases and queue require operator review",
+          corruptPath: quarantine.corruptDbPath,
+          recoveryManifestPath,
+          message,
         },
       },
     };
@@ -138,6 +152,7 @@ function openDatabase(dbPath: string): Database.Database {
     db.pragma("foreign_keys = ON");
     db.exec(CREATE_SCHEMA);
     ensureLeaseDurationColumn(db);
+    ensureAllocationUpdatedAtColumn(db);
     setMeta(db, "schema_version", String(SCHEMA_VERSION));
     return db;
   } catch (err) {
@@ -152,12 +167,26 @@ function ensureLeaseDurationColumn(db: Database.Database): void {
   db.prepare(`ALTER TABLE leases ADD COLUMN lease_duration_ms INTEGER NOT NULL DEFAULT ${DEFAULT_LEASE_DURATION_MS}`).run();
 }
 
-function moveCorruptDatabase(dbPath: string, now: () => Date): string {
+function ensureAllocationUpdatedAtColumn(db: Database.Database): void {
+  const columns = db.pragma("table_info(allocations)") as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "updated_at")) return;
+  db.prepare("ALTER TABLE allocations ADD COLUMN updated_at TEXT").run();
+  db.prepare("UPDATE allocations SET updated_at = created_at WHERE updated_at IS NULL").run();
+}
+
+interface QuarantinedDatabasePaths {
+  corruptDbPath: string;
+  corruptWalPath?: string;
+  corruptShmPath?: string;
+}
+
+function moveCorruptDatabase(dbPath: string, now: () => Date): QuarantinedDatabasePaths {
   const basePath = nextCorruptPath(dbPath, now);
-  renameIfExists(dbPath, basePath);
-  renameIfExists(`${dbPath}-wal`, `${basePath}-wal`);
-  renameIfExists(`${dbPath}-shm`, `${basePath}-shm`);
-  return basePath;
+  return {
+    corruptDbPath: renameIfExists(dbPath, basePath) ?? basePath,
+    corruptWalPath: renameIfExists(`${dbPath}-wal`, `${basePath}-wal`),
+    corruptShmPath: renameIfExists(`${dbPath}-shm`, `${basePath}-shm`),
+  };
 }
 
 function nextCorruptPath(dbPath: string, now: () => Date): string {
@@ -170,7 +199,12 @@ function nextCorruptPath(dbPath: string, now: () => Date): string {
   return candidate;
 }
 
-function renameIfExists(source: string, target: string): void {
-  if (!fs.existsSync(source)) return;
+function renameIfExists(source: string, target: string): string | undefined {
+  if (!fs.existsSync(source)) return undefined;
   fs.renameSync(source, target);
+  return target;
+}
+
+function resolveRecoveryDir(dbPath: string): string {
+  return dbPath === ORCH_DB ? ORCH_RECOVERY_DIR : path.join(path.dirname(dbPath), "orchestration-recovery");
 }

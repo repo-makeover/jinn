@@ -14,7 +14,10 @@ human selection gate. Board-originated ticket dispatch is scheduler-aware when
 and optional empirical-routing tie-breaks are implemented. The operations
 dashboard exposes safe controls for failed-continuation retry, explicit
 dual-lane winner selection, global queue pause/resume, and strict running-lease
-stop.
+stop. Terminal allocation and internal scheduler telemetry retention are bounded
+by default. Corrupt orchestration DB recovery remains conservative: the DB is
+quarantined, an operator recovery manifest is written, and Jinn starts with an
+empty orchestration store rather than reconstructing from untrusted state.
 
 ## Intent
 
@@ -98,9 +101,12 @@ jinn scheduler plan docs/orchestration/examples/task-standard.yaml \
 jinn run --mode single_worker --task docs/orchestration/examples/task-live.yaml
 jinn run --mode single_worker_with_review --task docs/orchestration/examples/task-live.yaml --json
 jinn run --mode dual_lane --task docs/orchestration/examples/task-live.yaml
+jinn run --mode architecture --task docs/orchestration/examples/task-architecture.yaml
+jinn run --mode local_heavy --task docs/orchestration/examples/task-local-heavy.yaml
 jinn dual-lane select --task-id task-live --winner openai
 jinn continuations list
 jinn continuations retry --task-id task-live --coordinator-id task-live-review
+jinn recovery notices --json
 
 jinn worktree create docs/orchestration/examples/task-live.yaml --lane seniorImplementer
 jinn worktree diff docs/orchestration/examples/task-live.yaml --lane seniorImplementer
@@ -111,10 +117,10 @@ jinn worktree cleanup docs/orchestration/examples/task-live.yaml --lane seniorIm
 fails because real provider execution is out of scope for this slice.
 
 `scheduler plan` turns a task brief plus coordinator template into an allocation
-plan. It supports `matrix`, `single_worker`, and `single_worker_with_review`
-planning modes. It may account for persisted leases/queue when `--db-path`
-points to an existing orchestration database, but it does not persist the plan or
-run any provider.
+plan. It supports `matrix`, `single_worker`, `single_worker_with_review`,
+`architecture`, and `local_heavy` planning modes. It may account for persisted
+leases/queue when `--db-path` points to an existing orchestration database, but
+it does not persist the plan or run any provider.
 
 `jinn run` accepts task YAML containing allocation fields plus `prompt`. The CLI
 does not open the scheduler DB directly; it posts the task to
@@ -138,6 +144,16 @@ then remove the loser lane.
 through the live gateway. `jinn continuations retry` re-attempts a continuation
 only when it is already in `failed` state; queued continuations remain
 scheduler-owned and resume on resource events.
+`architecture` requires architect, implementer, independent reviewer,
+adversarial reviewer, and QA roles in the resolved task/template and runs those
+roles through the same session, lease, telemetry, queue, pause/resume, retry,
+and persistence paths as other live modes. `local_heavy` is limited to
+local/near-zero or low-cost non-editing roles; roles requiring `repo_edit` or
+`coding` are rejected before allocation.
+
+`jinn recovery notices` is read-only. It lists recent corrupt orchestration DB
+recovery manifests from `~/.jinn/orchestration-recovery/`; it does not restore
+state or requeue work.
 
 `jinn worktree create|diff|cleanup` uses the live `config.yaml`
 `orchestration.worktreeRoot` and `orchestration.maxWorktrees` settings. The
@@ -175,10 +191,14 @@ manifest summaries. They do not return prompts, raw model output, raw diffs,
 headers, secrets, or env values. When the daemon runtime exists, scheduler-state
 routes read that shared instance; otherwise they use the old no-daemon/test
 fallback that opens a scheduler for read-only inspection.
+`GET /api/orchestration/status` also includes `recoveryNotices`, a bounded list
+of recent corrupt-DB recovery manifests with paths and operator guidance
+metadata only.
 
 `POST /api/orchestration/run` executes `single_worker`,
-`single_worker_with_review`, and `dual_lane` tasks through the existing session
-runner. It does not create dashboard controls. When an implementation worker has
+`single_worker_with_review`, `dual_lane`, `architecture`, and `local_heavy`
+tasks through the existing session runner. It does not create dashboard
+controls. When an implementation worker has
 `workspacePolicy: isolated_worktree` and the resolved task `cwd` is inside a git
 repo, the run path creates a task/lane-scoped worktree and passes that path as
 the session `cwd`. Reviewer turns do not run in that worktree; they receive a
@@ -206,6 +226,36 @@ clears that session queue, marks the session `interrupted`, and leaves lease
 release to the run/session `finally` path. If the mapped session is already
 terminal, the route releases the lease immediately. Missing mappings or
 non-interruptible engines return `409` and leave the lease running.
+
+## Retention And Recovery
+
+Allocations stay `allocated` while any lease is running. Once all leases are
+terminal, an allocation becomes `completed` when all leases were released or
+`expired` when no lease is running and at least one lease expired. Terminal
+allocations are retained for 24 hours by default and capped at 1,000 newest
+terminal records. Running allocations are never pruned. Internal scheduler
+telemetry is retained for 24 hours and capped at 2,000 newest events. The
+append-only JSONL run telemetry file is unchanged.
+
+If the orchestration SQLite DB is corrupt, Jinn moves the DB plus any WAL/SHM
+sidecars to quarantine paths, writes a recovery manifest under
+`~/.jinn/orchestration-recovery/`, emits `store_corrupt_recovered` telemetry
+with the manifest path, and starts with an empty orchestration DB. Operators
+must inspect the manifest and quarantined files manually if recovery is needed.
+
+## Smoke Test
+
+`scripts/orchestration-smoke.mjs` is opt-in:
+
+```bash
+node scripts/orchestration-smoke.mjs
+JINN_ORCHESTRATION_SMOKE=1 node scripts/orchestration-smoke.mjs
+```
+
+Without `JINN_ORCHESTRATION_SMOKE=1`, it prints a skip message and exits 0.
+When enabled, it requires a running daemon with `orchestration.enabled: true`,
+uses `JINN_GATEWAY_URL`/`JINN_GATEWAY_TOKEN` or the existing gateway info file,
+and posts one `single_worker` smoke task to `/api/orchestration/run`.
 
 ## Web Dashboard
 

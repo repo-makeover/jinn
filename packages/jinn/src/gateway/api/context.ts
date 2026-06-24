@@ -46,5 +46,6 @@ export interface ApiContext {
     telemetryLogPath?: string;
     worktreeRoot?: string;
     dualLaneStateDir?: string;
+    recoveryDir?: string;
   };
 }

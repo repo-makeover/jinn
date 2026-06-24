@@ -632,22 +632,43 @@ the source brief.
 - **Remaining boundary:** per-task queue controls, raw diff viewing, raw prompt or
   model-output viewing, and automatic patch integration remain deferred.
 
+### M12.5 — Residual growth, mode, smoke, and recovery closure (implemented 2026-06-24)
+
+- **Goal:** close post-M12 live-growth residuals without implementing held-team
+  allocations or runtime-editable employees.
+- **Delivered:** allocation lifecycle transitions with `updatedAt`; terminal allocation
+  retention defaults of 24 hours and 1,000 newest records; internal scheduler telemetry
+  retention defaults of 24 hours and 2,000 newest events; corrupt DB recovery manifests
+  under `~/.jinn/orchestration-recovery/`; `GET /api/orchestration/status`
+  `recoveryNotices`; read-only `jinn recovery notices`; opt-in
+  `scripts/orchestration-smoke.mjs`; implemented `architecture` and `local_heavy`
+  coordinator/live run modes with examples.
+- **Boundary:** append-only JSONL run telemetry is unchanged. Corrupt DB recovery still
+  quarantines and starts empty; there is no automatic restore or requeue. Per-task pause,
+  raw diff/prompt/output viewing, automatic patch integration, held-team allocation, and
+  runtime employee mutation remain deferred.
+- **M13 design gate:** `docs/superpowers/specs/2026-06-24-m13-holds-auth-design.md`
+  records that holds must be durable TTL records separate from leases, must not dispatch
+  workers, must expire automatically, and must wait for an accepted auth model and
+  adversarial review before implementation.
+
 ---
 
 ## 6. Operating modes (assembled by coordinators)
 
-Risk-tiered team assembly (brief Modes 1–5), built incrementally (M5 → M8):
+Risk-tiered team assembly (brief Modes 1–5), built incrementally (M5 → M12.5):
 
 1. **single_worker** — implementer → deterministic QA → release (small changes).
 2. **single_worker_with_review** — implementer → opposite-family reviewer → fix → QA
    (the normal serious-work mode).
 3. **architecture** — architect → implementer → independent reviewer → adversarial
    reviewer → QA (orchestration/runtime/shell/persistence changes — *this program
-   itself* uses this mode).
+   itself* uses this mode; implemented M12.5).
 4. **dual_lane** — OpenAI lane ∥ Anthropic lane → comparison → integration selection →
    QA (high-risk/high-value only; M8).
 5. **local_heavy** — Ollama/Pi for summarize/triage/dedup/clustering/lint-explain/config-
-   validation; local workers reduce frontier load and never own high-risk judgment.
+   validation; local workers reduce frontier load and never own high-risk judgment
+   (implemented M12.5).
 
 Risk-based assembly prevents **review theater** (R6): small tasks do not get full teams.
 
@@ -1000,24 +1021,20 @@ Source audit: `docs/audits/2026-06-24-matrix-orchestration-m1-m10-audit.md`.
 M11 may start only after M10.5 validation remains green and no new known blockers are
 identified.
 
-### M1 carry-forward residuals (verified 2026-06-23; track in the defect ledger)
+### M1 carry-forward residuals (updated 2026-06-24)
 
 M1 passed its exit gate; these are *non-blocking-for-M1* items that **must** be resolved
 before the scheduler goes live (M5) or telemetry durably grows (M10):
 
-- **Snapshot write amplification.** `PersistentMatrixScheduler.commitMutation` does a
-  full delete-all + reinsert-all of every table after *every* mutation. Fine while inert;
-  O(total-state) per heartbeat once live. → incremental writes (M5 precondition).
-- **Telemetry coupled to the snapshot.** `this.telemetry` accumulates forever and is
-  re-serialized into the DB on every mutation. M10 moved durable *run* telemetry to
-  append-only JSONL; pruning or separating the scheduler's internal event list remains
-  future persistence hygiene.
-- **Unbounded `allocations` map.** Released/expired allocations are never pruned (and
-  `listAllocations()` returns all). → add allocation state transitions + a retention/prune
-  policy (mirror `board-service` auto-ticket pruning).
-- **Corrupt-recovery = data loss.** Quarantine-and-start-empty drops all leases/queue;
-  acceptable while inert, unsafe once live. → emit audit/telemetry on recovery, consider
-  re-queue, document the trust boundary (M5).
+- **Snapshot write amplification.** Closed before M12.5 by incremental snapshot deltas.
+- **Telemetry coupled to the snapshot.** Closed in M12.5 by internal scheduler telemetry
+  pruning. Durable run telemetry remains append-only JSONL.
+- **Unbounded `allocations` map.** Closed in M12.5 by allocation lifecycle states,
+  `updatedAt`, and terminal retention/count pruning. Running allocations are never pruned.
+- **Corrupt-recovery = data loss.** Partially mitigated in M12.5 by recovery manifests,
+  telemetry detail with manifest path, API status notices, and read-only CLI observation.
+  Automatic restore/requeue remains intentionally deferred because the corrupt DB is
+  untrusted.
 - **Not daemon-wired (expected).** M1 is code-level only; single-instance boot
   hydrate/close is owned by M4/M5, not a defect.
 ```

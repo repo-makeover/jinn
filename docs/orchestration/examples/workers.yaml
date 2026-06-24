@@ -16,6 +16,19 @@ workers:
     costClass: high
     workspacePolicy: isolated_worktree
 
+  codexArchitect:
+    provider: openai
+    family: openai
+    tier: frontier
+    capabilities:
+      - architecture
+      - system_design
+    tools:
+      - filesystem
+    maxConcurrentTasks: 1
+    costClass: high
+    workspacePolicy: read_only
+
   haikuReviewer:
     provider: anthropic
     family: anthropic
@@ -23,6 +36,7 @@ workers:
     capabilities:
       - code_review
       - checklist_review
+      - adversarial_review
       - bug_hunt
     tools:
       - filesystem
@@ -44,3 +58,17 @@ workers:
     costClass: near_zero
     workspacePolicy: shared
 
+  localTriage:
+    provider: ollama
+    family: local
+    tier: local
+    capabilities:
+      - triage
+      - duplicate_detection
+      - test_log_triage
+    tools:
+      - filesystem
+      - shell
+    maxConcurrentTasks: 4
+    costClass: near_zero
+    workspacePolicy: read_only

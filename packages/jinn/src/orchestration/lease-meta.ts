@@ -30,7 +30,13 @@ export function parseLeaseTransportMeta(value: unknown): OrchestrationLeaseMeta 
   const raw = record ? asRecord(record[ORCHESTRATION_LEASE_META_KEY]) : null;
   if (!raw) return null;
   const mode = raw.mode;
-  if (mode !== "single_worker" && mode !== "single_worker_with_review" && mode !== "dual_lane") return null;
+  if (
+    mode !== "single_worker"
+    && mode !== "single_worker_with_review"
+    && mode !== "dual_lane"
+    && mode !== "architecture"
+    && mode !== "local_heavy"
+  ) return null;
   const leaseId = stringValue(raw.leaseId);
   const taskId = stringValue(raw.taskId);
   const coordinatorId = stringValue(raw.coordinatorId);

@@ -1,4 +1,12 @@
 roles:
+  architect:
+    requiredCapabilities:
+      - architecture
+    requiredTools:
+      - filesystem
+    preferredTiers:
+      - frontier
+
   seniorImplementer:
     requiredCapabilities:
       - repo_edit
@@ -28,3 +36,21 @@ roles:
       - near_zero
       - low
 
+  adversarialReviewer:
+    requiredCapabilities:
+      - adversarial_review
+      - bug_hunt
+    requiredTools:
+      - filesystem
+    preferredCostClasses:
+      - low
+      - medium
+
+  localTriage:
+    requiredCapabilities:
+      - triage
+    requiredTools:
+      - filesystem
+    preferredCostClasses:
+      - near_zero
+      - low

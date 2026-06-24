@@ -21,6 +21,14 @@ import {
   selectedImplementerFamilies,
   type CrossFamilyReviewPolicy,
 } from "./cross-family.js";
+import {
+  pruneSchedulerTelemetry,
+  pruneTerminalAllocations,
+  refreshAllocationLifecycle,
+  resolveSchedulerRetentionOptions,
+  type SchedulerRetentionOptions,
+  type ResolvedSchedulerRetentionOptions,
+} from "./scheduler-retention.js";
 
 const COST_RANK: Record<string, number> = {
   near_zero: 0,
@@ -40,6 +48,7 @@ export interface SchedulerOptions {
   snapshot?: SchedulerSnapshot;
   reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
   workerScores?: Record<string, number>;
+  retention?: SchedulerRetentionOptions;
 }
 
 export interface AllocationRequestOptions {
@@ -68,6 +77,7 @@ export class MatrixScheduler {
   private readonly telemetry: TelemetryEvent[] = [];
   private readonly reviewPolicy: CrossFamilyReviewPolicy;
   private readonly workerScores: Record<string, number>;
+  private readonly retention: ResolvedSchedulerRetentionOptions;
   private nextSeq = 1;
 
   constructor(private readonly config: OrchestrationConfig, opts: SchedulerOptions = {}) {
@@ -78,12 +88,13 @@ export class MatrixScheduler {
       ? resolveCrossFamilyReviewPolicy(opts.reviewPolicy)
       : DEFAULT_CROSS_FAMILY_REVIEW_POLICY;
     this.workerScores = opts.workerScores ?? {};
+    this.retention = resolveSchedulerRetentionOptions(opts.retention);
     if (opts.snapshot) this.hydrate(opts.snapshot);
   }
 
   requestAllocation(request: AllocationRequest, opts: AllocationRequestOptions = {}): AllocationResult {
     const queueOnBlock = opts.queueOnBlock !== false;
-    const allowedWorkerIds = opts.allowedWorkerIds ? new Set(opts.allowedWorkerIds) : undefined;
+    const allowedWorkerIds = mergeAllowedWorkerIds(request.allowedWorkerIds, opts.allowedWorkerIds);
     this.expireLeases(this.now());
     const activeState = this.activeState();
     const selected: Array<{ role: string; worker: Worker }> = [];
@@ -142,6 +153,7 @@ export class MatrixScheduler {
       leases,
       optionalRolesSkipped,
       createdAt,
+      updatedAt: createdAt,
     };
     this.allocations.set(allocation.allocationId, allocation);
     this.record("allocation_created", {
@@ -178,12 +190,15 @@ export class MatrixScheduler {
       throw new Error(`lease ${leaseId} belongs to coordinator ${lease.coordinatorId}`);
     }
     lease.state = "released";
+    const releasedAt = this.isoNow();
     this.record("lease_released", {
       taskId: lease.taskId,
       workerId: lease.workerId,
       role: lease.role,
-      timestamp: this.isoNow(),
+      timestamp: releasedAt,
     });
+    this.refreshAllocationStates(releasedAt);
+    this.pruneRetainedState(new Date(releasedAt));
     return { ...lease };
   }
 
@@ -200,6 +215,10 @@ export class MatrixScheduler {
         role: lease.role,
         timestamp: now.toISOString(),
       });
+    }
+    if (expired.length > 0) {
+      this.refreshAllocationStates(now.toISOString());
+      this.pruneRetainedState(now);
     }
     return expired;
   }
@@ -506,6 +525,7 @@ export class MatrixScheduler {
         ...allocation,
         leases: allocation.leases.map((lease) => leasesById.get(lease.leaseId) ?? { ...lease }),
         optionalRolesSkipped: [...allocation.optionalRolesSkipped],
+        updatedAt: allocation.updatedAt ?? allocation.createdAt,
       });
     }
     this.queue.push(...snapshot.queue.map((item) => ({
@@ -522,6 +542,8 @@ export class MatrixScheduler {
       ...event,
       detail: event.detail ? { ...event.detail } : undefined,
     })));
+    this.refreshAllocationStates(this.isoNow());
+    this.pruneRetainedState(this.now());
   }
 
   private record(type: TelemetryEvent["type"], event: Omit<TelemetryEvent, "eventId" | "type">): void {
@@ -530,6 +552,20 @@ export class MatrixScheduler {
       type,
       ...event,
     });
+    this.pruneRetainedState(new Date(event.timestamp));
+  }
+
+  private refreshAllocationStates(updatedAt: string): void {
+    const leasesById = new Map(this.leases);
+    for (const allocation of this.allocations.values()) {
+      refreshAllocationLifecycle(allocation, leasesById, updatedAt);
+    }
+  }
+
+  private pruneRetainedState(now: Date): void {
+    this.refreshAllocationStates(now.toISOString());
+    pruneTerminalAllocations(this.allocations, now, this.retention);
+    pruneSchedulerTelemetry(this.telemetry, now, this.retention);
   }
 }
 
@@ -587,6 +623,17 @@ function compareQueueItems(a: QueueItem, b: QueueItem): number {
   const time = Date.parse(a.blockedSince) - Date.parse(b.blockedSince);
   if (time !== 0) return time;
   return a.taskId.localeCompare(b.taskId);
+}
+
+function mergeAllowedWorkerIds(
+  requestAllowed: readonly string[] | undefined,
+  optsAllowed: Iterable<string> | undefined,
+): Set<string> | undefined {
+  const requestSet = requestAllowed ? new Set(requestAllowed) : undefined;
+  if (!optsAllowed) return requestSet;
+  const optsSet = new Set(optsAllowed);
+  if (!requestSet) return optsSet;
+  return new Set([...requestSet].filter((workerId) => optsSet.has(workerId)));
 }
 
 function sanitizeId(value: string): string {

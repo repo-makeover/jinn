@@ -23,6 +23,7 @@ interface AllocationRow {
   state: Allocation["state"];
   optional_roles_skipped_json: string;
   created_at: string;
+  updated_at: string;
 }
 
 interface AllocationLeaseRow {
@@ -84,8 +85,8 @@ export function replaceSnapshotInDb(db: Database.Database, snapshot: SchedulerSn
 
     const insertAllocation = db.prepare(`
       INSERT INTO allocations (
-        allocation_id, task_id, coordinator_id, state, optional_roles_skipped_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        allocation_id, task_id, coordinator_id, state, optional_roles_skipped_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     const insertAllocationLease = db.prepare(`
       INSERT INTO allocation_leases (allocation_id, lease_id) VALUES (?, ?)
@@ -98,6 +99,7 @@ export function replaceSnapshotInDb(db: Database.Database, snapshot: SchedulerSn
         allocation.state,
         JSON.stringify(allocation.optionalRolesSkipped),
         allocation.createdAt,
+        allocation.updatedAt,
       );
       for (const lease of allocation.leases) {
         insertAllocationLease.run(allocation.allocationId, lease.leaseId);
@@ -227,14 +229,15 @@ function upsertAllocations(
 ): void {
   const upsertAllocation = db.prepare(`
     INSERT INTO allocations (
-      allocation_id, task_id, coordinator_id, state, optional_roles_skipped_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      allocation_id, task_id, coordinator_id, state, optional_roles_skipped_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(allocation_id) DO UPDATE SET
       task_id = excluded.task_id,
       coordinator_id = excluded.coordinator_id,
       state = excluded.state,
       optional_roles_skipped_json = excluded.optional_roles_skipped_json,
-      created_at = excluded.created_at
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
   `);
   const insertAllocationLease = db.prepare(`
     INSERT INTO allocation_leases (allocation_id, lease_id) VALUES (?, ?)
@@ -249,6 +252,7 @@ function upsertAllocations(
       allocation.state,
       JSON.stringify(allocation.optionalRolesSkipped),
       allocation.createdAt,
+      allocation.updatedAt,
     );
     deleteAllocationLease.run(allocation.allocationId);
     for (const lease of allocation.leases) {
@@ -347,6 +351,7 @@ function loadAllocations(db: Database.Database, leaseById: Map<string, Lease>): 
       state: row.state,
       optionalRolesSkipped: parseDbJson<string[]>(row.optional_roles_skipped_json, "allocation optional roles"),
       createdAt: row.created_at,
+      updatedAt: row.updated_at ?? row.created_at,
       leases: leaseIds.map((leaseRow) => {
         const lease = leaseById.get(leaseRow.lease_id);
         if (!lease) throw new Error(`orchestration DB references missing lease ${leaseRow.lease_id}`);
@@ -438,6 +443,7 @@ function allocationRecord(allocation: Allocation): unknown {
     state: allocation.state,
     optionalRolesSkipped: allocation.optionalRolesSkipped,
     createdAt: allocation.createdAt,
+    updatedAt: allocation.updatedAt,
     leaseIds: allocation.leases.map((lease) => lease.leaseId),
   };
 }

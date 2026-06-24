@@ -14,7 +14,8 @@ import {
   resolveWorktreeOptions,
 } from "../orchestration/worktree.js";
 import { readOrchestrationTelemetry, summarizeOrchestrationTelemetry, type OrchestrationTelemetrySummary } from "../orchestration/telemetry.js";
-import { GATEWAY_INFO_FILE, ORCH_DB } from "../shared/paths.js";
+import { listRecoveryNotices, type OrchestrationRecoveryNotice } from "../orchestration/store-recovery.js";
+import { GATEWAY_INFO_FILE, ORCH_DB, ORCH_RECOVERY_DIR } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
 import { readGatewayInfo } from "../gateway/gateway-info.js";
 import type { AllocationResult, Lease, OrchestrationConfig, QueueItem, SchedulerSnapshot, Worker } from "../orchestration/types.js";
@@ -165,6 +166,16 @@ function formatContinuations(continuations: Array<Record<string, unknown>>): str
       String(continuation.updatedAt ?? ""),
     ].join(" "));
   }
+  return lines.join("\n");
+}
+
+function formatRecoveryNotices(notices: OrchestrationRecoveryNotice[]): string {
+  if (notices.length === 0) return "No orchestration recovery notices.";
+  const lines = ["Recovered at                  Corrupt DB path"];
+  for (const notice of notices) {
+    lines.push(`${notice.recoveredAt.padEnd(29)} ${notice.corruptDbPath}`);
+  }
+  lines.push("Inspect manifestPath from --json output for operator guidance.");
   return lines.join("\n");
 }
 
@@ -412,6 +423,11 @@ export async function runContinuationsList(opts: { json?: boolean }): Promise<vo
     ? (body as { continuations: Array<Record<string, unknown>> }).continuations
     : [];
   print(opts.json ? body : formatContinuations(continuations), opts.json);
+}
+
+export async function runRecoveryNotices(opts: { json?: boolean }): Promise<void> {
+  const recoveryNotices = listRecoveryNotices(ORCH_RECOVERY_DIR);
+  print(opts.json ? { recoveryNotices } : formatRecoveryNotices(recoveryNotices), opts.json);
 }
 
 export async function runContinuationRetry(opts: OrchestrationContinuationRetryOptions): Promise<void> {

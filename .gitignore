@@ -13,6 +13,7 @@ packages/jinn/.npmrc
 .DS_Store
 
 # Local agent/session tooling artifacts — never published
+.fissure/
 .dory/
 .giles/
 .remember/

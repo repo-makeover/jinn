@@ -1,4 +1,4 @@
-export const LIVE_RUN_MODES = ["single_worker", "single_worker_with_review", "dual_lane"] as const;
+export const LIVE_RUN_MODES = ["single_worker", "single_worker_with_review", "dual_lane", "architecture", "local_heavy"] as const;
 
 export type LiveRunMode = typeof LIVE_RUN_MODES[number];
 export type LiveRunContinuationState = "queued" | "dispatching" | "completed" | "failed";
@@ -10,6 +10,7 @@ export interface LiveRunTaskPayload {
   template?: string;
   requiredRoles?: string[];
   optionalRoles?: string[];
+  allowedWorkerIds?: string[];
   priority: "low" | "normal" | "high";
   leaseDurationMs: number;
   prompt: string;
