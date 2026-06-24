@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf out dist"
+    "clean": "node -e \"const{rmSync}=require('node:fs');['out','dist'].forEach(d=>rmSync(d,{recursive:true,force:true}))\""
   },
   "dependencies": {
     "@dagrejs/dagre": "^2.0.4",
