@@ -290,12 +290,8 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> 
 }
 
 function resolvePort(): number {
-  try {
-    const config = loadConfig();
-    return config.gateway?.port || 7777;
-  } catch {
-    return 7777;
-  }
+  const config = loadConfig();
+  return config.gateway?.port || 7777;
 }
 
 function findPidOnPort(port: number): number | null {
@@ -366,10 +362,17 @@ export async function waitForPortListening(port: number, host = "127.0.0.1", tim
 export interface GatewayStatus {
   running: boolean;
   pid: number | null;
+  error?: string;
 }
 
 export function getStatus(): GatewayStatus {
-  const targetPort = resolvePort();
+  let targetPort: number;
+  try {
+    targetPort = resolvePort();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { running: false, pid: null, error: message };
+  }
 
   if (fs.existsSync(PID_FILE)) {
     const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);

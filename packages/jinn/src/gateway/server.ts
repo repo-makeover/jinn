@@ -585,7 +585,9 @@ export async function startGateway(
                 logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
               });
             });
-            await discord.start();
+            void discord.start().catch((err) => {
+              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+            });
             connector = discord;
             break;
           }
@@ -602,7 +604,9 @@ export async function startGateway(
                 logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
               });
             });
-            await slack.start();
+            void slack.start().catch((err) => {
+              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+            });
             connector = slack;
             break;
           }
@@ -618,7 +622,9 @@ export async function startGateway(
                 logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
               });
             });
-            await whatsapp.start();
+            void whatsapp.start().catch((err) => {
+              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+            });
             connector = whatsapp;
             break;
           }
@@ -635,7 +641,9 @@ export async function startGateway(
                 logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
               });
             });
-            await tg.start();
+            void tg.start().catch((err) => {
+              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+            });
             connector = tg;
             break;
           }
@@ -710,7 +718,11 @@ export async function startGateway(
                   logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
                 });
               });
-              await discord.start();
+              void discord.start().catch((err) => {
+                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
+                errors.push(msg);
+                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+              });
               connector = discord;
               break;
             }
@@ -727,7 +739,11 @@ export async function startGateway(
                   logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
                 });
               });
-              await slack.start();
+              void slack.start().catch((err) => {
+                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
+                errors.push(msg);
+                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+              });
               connector = slack;
               break;
             }
@@ -743,7 +759,11 @@ export async function startGateway(
                   logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
                 });
               });
-              await whatsapp.start();
+              void whatsapp.start().catch((err) => {
+                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
+                errors.push(msg);
+                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+              });
               connector = whatsapp;
               break;
             }
@@ -760,7 +780,11 @@ export async function startGateway(
                   logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
                 });
               });
-              await tg.start();
+              void tg.start().catch((err) => {
+                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
+                errors.push(msg);
+                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
+              });
               connector = tg;
               break;
             }

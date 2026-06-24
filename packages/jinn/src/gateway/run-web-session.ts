@@ -477,7 +477,7 @@ export async function runWebSession(
         const labelled = `(recovered — this supersedes the earlier reported failure)\n\n${lateText}`;
         if (recovered) {
           notifyParentSession(recovered, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
-          void deliverConnectorReply(recovered, labelled, context.connectors);
+          void deliverConnectorReply(recovered, labelled, context.connectors, { emit: context.emit });
         }
         context.emit("session:completed", {
           sessionId: currentSession.id,
@@ -528,7 +528,7 @@ export async function runWebSession(
       maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
       if (stalledSession) {
         notifyParentSession(stalledSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
-        void deliverConnectorReply(stalledSession, `⛔ ${errMsg}`, context.connectors);
+        void deliverConnectorReply(stalledSession, `⛔ ${errMsg}`, context.connectors, { emit: context.emit });
       }
       return;
     }
@@ -609,7 +609,7 @@ export async function runWebSession(
             });
             if (completedFallback) {
               notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
-              if (fallbackResult.result) void deliverConnectorReply(completedFallback, fallbackResult.result, context.connectors);
+              if (fallbackResult.result) void deliverConnectorReply(completedFallback, fallbackResult.result, context.connectors, { emit: context.emit });
             }
 
             context.emit("session:completed", {
@@ -675,7 +675,7 @@ export async function runWebSession(
                 { sink: context.notificationSink },
               );
               notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
-              if (retryResult.result) void deliverConnectorReply(completedAfterRetry, retryResult.result, context.connectors);
+              if (retryResult.result) void deliverConnectorReply(completedAfterRetry, retryResult.result, context.connectors, { emit: context.emit });
             }
 
             context.emit("session:completed", {
@@ -751,7 +751,7 @@ export async function runWebSession(
     }
 
     if (completedSession && !quietPreempted && result.result) {
-      await deliverConnectorReply(completedSession, result.result, context.connectors);
+      await deliverConnectorReply(completedSession, result.result, context.connectors, { emit: context.emit });
     }
 
     context.emit("session:completed", {

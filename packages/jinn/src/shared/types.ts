@@ -732,7 +732,7 @@ export interface JinnConfig {
     maxCostUsd?: number;
     interruptOnNewMessage?: boolean;
     rateLimitStrategy?: "wait" | "fallback";
-    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro";
+    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro" | "hermes";
     autoResumeOnBoot?: boolean;
   };
   boardWorker?: BoardWorkerConfig;

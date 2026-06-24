@@ -40,13 +40,17 @@ function makeFakePty(): FakePty {
   return p;
 }
 
-vi.mock("node-pty", () => ({
-  spawn: vi.fn((bin: string, args: string[]) => {
+vi.mock("../pty-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pty-stream.js")>();
+  return {
+    ...actual,
+    spawnPty: vi.fn((bin: string, args: string[]) => {
     const proc = makeFakePty();
     spawnCalls.push({ bin, args, proc });
     return proc as unknown as import("node-pty").IPty;
-  }),
-}));
+    }),
+  };
+});
 
 /**
  * Redirect os.homedir() to a temp dir so the engine's module-level

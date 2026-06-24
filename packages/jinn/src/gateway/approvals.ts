@@ -1,8 +1,13 @@
-import fs from "node:fs";
-import { v4 as uuidv4 } from "uuid";
 import { APPROVALS_FILE } from "../shared/paths.js";
-import { safeWriteJson } from "../shared/safe-write.js";
 import type { Approval, JsonObject } from "../shared/types.js";
+import {
+  clearApprovalRecordsForTest,
+  createApprovalRecord,
+  getApprovalRecord,
+  importApprovalsJsonIfNeeded,
+  listApprovalRecords,
+  resolveApprovalRecord,
+} from "../sessions/registry.js";
 
 /**
  * Persisted approval store.
@@ -11,54 +16,31 @@ import type { Approval, JsonObject } from "../shared/types.js";
  * model-fallback (`type:"fallback"`), but `tool`/`custom` approvals are accepted
  * by the same store + endpoints so future gates need no schema change.
  *
- * Persisted as a single JSON array via `safeWriteJson` (atomic + audited) — low
- * approval volume, matches the other small JSON state files in JINN_HOME. An
- * in-memory cache mirrors the file; the gateway is single-process so this is
- * authoritative for the run.
+ * Persisted in the sessions registry database so daemon/CLI instances serialize
+ * read-modify-write updates through SQLite instead of clobbering each other's
+ * JSON snapshots. Legacy `approvals.json` is imported once per store path.
  */
 
-let cache: Approval[] | null = null;
 let storePath = APPROVALS_FILE;
 
-function load(): Approval[] {
-  if (cache) return cache;
-  try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    cache = Array.isArray(parsed) ? (parsed as Approval[]) : [];
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") cache = [];
-    else throw err;
-  }
-  return cache;
-}
-
-function persist(): void {
-  safeWriteJson(storePath, cache ?? [], {
-    audit: { actor: "gateway", op: "approvals.save" },
-    validate: (v) => {
-      if (!Array.isArray(v)) throw new Error("approvals store must be an array");
-    },
-  });
+function ensureMigrated(): void {
+  importApprovalsJsonIfNeeded(storePath);
 }
 
 /** Test seam: point the store at a throwaway file and reset the cache. */
 export function __setApprovalsStoreForTest(path: string): void {
   storePath = path;
-  cache = null;
+  clearApprovalRecordsForTest();
 }
 
 export function listApprovals(filter?: { state?: Approval["state"] | "all"; sessionId?: string }): Approval[] {
-  let items = [...load()];
-  const state = filter?.state ?? "pending";
-  if (state !== "all") items = items.filter((a) => a.state === state);
-  if (filter?.sessionId) items = items.filter((a) => a.sessionId === filter.sessionId);
-  // Newest first.
-  return items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  ensureMigrated();
+  return listApprovalRecords(filter);
 }
 
 export function getApproval(id: string): Approval | undefined {
-  return load().find((a) => a.id === id);
+  ensureMigrated();
+  return getApprovalRecord(id);
 }
 
 /**
@@ -71,30 +53,8 @@ export function createApproval(input: {
   type: Approval["type"];
   payload: JsonObject;
 }): Approval {
-  const items = load();
-  if (input.type === "fallback") {
-    const existing = items.find(
-      (a) => a.sessionId === input.sessionId && a.type === "fallback" && a.state === "pending",
-    );
-    if (existing) {
-      existing.payload = input.payload;
-      persist();
-      return existing;
-    }
-  }
-  const approval: Approval = {
-    id: uuidv4(),
-    sessionId: input.sessionId,
-    type: input.type,
-    payload: input.payload,
-    state: "pending",
-    createdAt: new Date().toISOString(),
-    resolvedAt: null,
-    actor: null,
-  };
-  items.push(approval);
-  persist();
-  return approval;
+  ensureMigrated();
+  return createApprovalRecord(input);
 }
 
 export class ApprovalStateError extends Error {
@@ -113,13 +73,11 @@ export function resolveApproval(
   state: "approved" | "rejected",
   actor?: string | null,
 ): Approval {
-  const items = load();
-  const approval = items.find((a) => a.id === id);
+  ensureMigrated();
+  const current = getApprovalRecord(id);
+  if (!current) throw new Error(`approval ${id} not found`);
+  if (current.state !== "pending") throw new ApprovalStateError(current.state);
+  const approval = resolveApprovalRecord(id, state, actor);
   if (!approval) throw new Error(`approval ${id} not found`);
-  if (approval.state !== "pending") throw new ApprovalStateError(approval.state);
-  approval.state = state;
-  approval.resolvedAt = new Date().toISOString();
-  approval.actor = actor ?? null;
-  persist();
   return approval;
 }

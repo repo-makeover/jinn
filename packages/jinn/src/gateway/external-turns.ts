@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import { logger } from "../shared/logger.js";
 import { getSession, getMessages, insertMessage, updateMessageContent, updateSession, patchSessionTransportMeta, initDb, type SessionMessage } from "../sessions/registry.js";
-import { findTranscriptForSession } from "../engines/claude-interactive.js";
+import { findTranscriptForSession, isPersistableClaudeTranscriptEntry, transcriptEntryText } from "../engines/claude-transcript.js";
+export { isPersistableClaudeTranscriptEntry, transcriptEntryText } from "../engines/claude-transcript.js";
 import type { HookPayload } from "./hook-registry.js";
 
 /**
@@ -71,34 +72,6 @@ function isInternalNotificationPrompt(content: string): boolean {
       t.includes("Tell the operator plainly")
     )
   );
-}
-
-export function isPersistableClaudeTranscriptEntry(obj: any): boolean {
-  if (!obj || typeof obj !== "object") return false;
-  const type = obj?.type;
-  if (type !== "user" && type !== "assistant") return false;
-  if (obj.isSidechain === true || obj.isMeta === true) return false;
-  if (obj.sourceToolAssistantUUID || obj.toolUseResult) return false;
-  if (obj.promptSource === "system") return false;
-  if (obj?.origin?.kind === "task-notification") return false;
-  if (obj?.message?.model === "<synthetic>") return false;
-  const raw = obj?.message?.content;
-  if (typeof raw === "string" && isControlText(raw)) return false;
-  return true;
-}
-
-export function transcriptEntryText(obj: any): { role: "user" | "assistant"; content: string } | null {
-  if (!isPersistableClaudeTranscriptEntry(obj)) return null;
-  let content = obj?.message?.content;
-  if (Array.isArray(content)) {
-    content = content
-      .filter((b: Record<string, unknown>) => b?.type === "text")
-      .map((b: Record<string, unknown>) => String(b.text ?? ""))
-      .join("");
-  }
-  if (typeof content !== "string" || !content.trim()) return null;
-  if (isControlText(content)) return null;
-  return { role: obj.type, content: content.trim() };
 }
 
 /**

@@ -1,7 +1,29 @@
-import * as pty from "node-pty";
+import type * as NodePty from "node-pty";
+import { createRequire } from "node:module";
 import { logger } from "../shared/logger.js";
 import type { PtyControlEvent } from "./pty-view-engine.js";
 import type { PtyHandle } from "./pty-lifecycle.js";
+
+export type JinnPty = NodePty.IPty;
+type SpawnPtyOptions = Parameters<typeof NodePty.spawn>[2];
+
+const require = createRequire(import.meta.url);
+let ptyModule: typeof NodePty | null = null;
+
+function loadPtyModule(): typeof NodePty {
+  ptyModule ??= require("node-pty") as typeof NodePty;
+  return ptyModule;
+}
+
+export function spawnPty(file: string, args: string[], options: SpawnPtyOptions): JinnPty {
+  try {
+    const pty = loadPtyModule();
+    return pty.spawn(file, args, options);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Interactive PTY support is unavailable: ${message}`);
+  }
+}
 
 /** Cap for the per-session PTY scrollback ring buffer (xterm.js reconnect replay). */
 export const SCROLLBACK_CAP_BYTES = 262144;
@@ -69,7 +91,7 @@ export class PtyStreamManager {
   /** Wire a freshly-spawned PTY's output into the session's scrollback ring buffer
    *  + live subscribers; notify subscribers with a reset event on respawn; absorb
    *  node-pty socket errors. `onData` (optional) runs first on every data event. */
-  attach(sessionId: string, proc: pty.IPty, onData?: () => void): void {
+  attach(sessionId: string, proc: JinnPty, onData?: () => void): void {
     const stream = this.streamFor(sessionId);
     // Distinguish initial spawn from respawn via a per-stream flag rather than
     // subscriber count — clients open their WS on mount (before the user sends
@@ -179,7 +201,7 @@ export class PtyStreamManager {
 
 /** Wrap a live pty.IPty in a PtyHandle (the raw proc stashed on `_proc` for the
  *  engines' inject/resize/write paths). */
-export function createPtyHandle(proc: pty.IPty): PtyHandle {
+export function createPtyHandle(proc: JinnPty): PtyHandle {
   const handle = {
     pid: proc.pid,
     get killed() { return (proc as any)._exitCode != null; },

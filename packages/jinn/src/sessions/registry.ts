@@ -1,11 +1,12 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import { SESSIONS_DB } from '../shared/paths.js';
 import { logger } from '../shared/logger.js';
 import type {
+  Approval,
   ArchiveKind,
   ArchivedSessionSnapshot,
   JsonObject,
@@ -96,6 +97,33 @@ const CREATE_ARCHIVES_CREATED_INDEX = `
 CREATE INDEX IF NOT EXISTS idx_archives_created ON archives (created_at DESC)
 `;
 
+const CREATE_APPROVALS_TABLE = `
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  actor TEXT
+)
+`;
+
+const CREATE_APPROVALS_CREATED_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_approvals_created ON approvals (created_at DESC)
+`;
+
+const CREATE_APPROVALS_SESSION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals (session_id)
+`;
+
+const CREATE_APPROVALS_PENDING_FALLBACK_INDEX = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_pending_fallback_session
+ON approvals (session_id, type, state)
+WHERE type = 'fallback' AND state = 'pending'
+`;
+
 // Generic key/value store for one-off migration progress flags (e.g. the FTS
 // backfill watermark). Keep entries tiny — this is not a config table.
 const CREATE_META_TABLE = `
@@ -176,7 +204,7 @@ function rowToSession(row: Record<string, unknown>): Session {
 export function initDb(): Database.Database {
   if (db) return db;
   mkdirSync(path.dirname(SESSIONS_DB), { recursive: true });
-  db = new Database(SESSIONS_DB);
+  db = new Database(SESSIONS_DB, { timeout: 5000 });
   db.pragma('journal_mode = WAL');
   db.exec(CREATE_TABLE);
   db.exec(CREATE_MESSAGES_TABLE);
@@ -227,6 +255,10 @@ export function initDb(): Database.Database {
   db.exec(CREATE_FILES_TABLE);
   db.exec(CREATE_ARCHIVES_TABLE);
   db.exec(CREATE_ARCHIVES_CREATED_INDEX);
+  db.exec(CREATE_APPROVALS_TABLE);
+  db.exec(CREATE_APPROVALS_CREATED_INDEX);
+  db.exec(CREATE_APPROVALS_SESSION_INDEX);
+  db.exec(CREATE_APPROVALS_PENDING_FALLBACK_INDEX);
 
   return db;
 }
@@ -1470,6 +1502,184 @@ export function listAllPendingQueueItems(): QueueItem[] {
   return db.prepare(
     "SELECT id, session_id as sessionId, session_key as sessionKey, prompt, status, position, created_at as createdAt, started_at as startedAt, completed_at as completedAt FROM queue_items WHERE status = 'pending' ORDER BY created_at ASC, position ASC"
   ).all() as QueueItem[];
+}
+
+export function getEmployeeSpendSince(employee: string, sinceIsoDate: string): number {
+  const row = initDb()
+    .prepare("SELECT COALESCE(SUM(total_cost), 0) as spend FROM sessions WHERE employee = ? AND created_at >= ?")
+    .get(employee, sinceIsoDate) as { spend: number };
+  return Number(row.spend ?? 0);
+}
+
+// ── Approvals ────────────────────────────────────────────────────────
+
+type ApprovalRow = {
+  id: string;
+  session_id: string;
+  type: Approval["type"];
+  payload: string;
+  state: Approval["state"];
+  created_at: string;
+  resolved_at: string | null;
+  actor: string | null;
+};
+
+function rowToApproval(row: ApprovalRow): Approval {
+  const payload = parseJsonObject(row.payload, "approvals.payload") ?? {};
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    type: row.type,
+    payload,
+    state: row.state,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+    actor: row.actor,
+  };
+}
+
+export function importApprovalsJsonIfNeeded(filePath: string): void {
+  const db = initDb();
+  const metaKey = `approvals_json_imported:${filePath}`;
+  if (getMeta(db, metaKey) === "1") return;
+  if (!existsSync(filePath)) {
+    setMeta(db, metaKey, "1");
+    return;
+  }
+
+  const raw = readFileSync(filePath, "utf-8");
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) throw new Error("legacy approvals store must be an array");
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO approvals
+      (id, session_id, type, payload, state, created_at, resolved_at, actor)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const txn = db.transaction((items: unknown[]) => {
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const approval = item as Partial<Approval>;
+      if (
+        typeof approval.id !== "string" ||
+        typeof approval.sessionId !== "string" ||
+        typeof approval.type !== "string" ||
+        typeof approval.state !== "string" ||
+        typeof approval.createdAt !== "string" ||
+        !approval.payload ||
+        typeof approval.payload !== "object" ||
+        Array.isArray(approval.payload)
+      ) {
+        continue;
+      }
+      insert.run(
+        approval.id,
+        approval.sessionId,
+        approval.type,
+        JSON.stringify(approval.payload),
+        approval.state,
+        approval.createdAt,
+        approval.resolvedAt ?? null,
+        approval.actor ?? null,
+      );
+    }
+    setMeta(db, metaKey, "1");
+  });
+  txn(parsed);
+}
+
+export function listApprovalRecords(filter?: { state?: Approval["state"] | "all"; sessionId?: string }): Approval[] {
+  const db = initDb();
+  const clauses: string[] = [];
+  const args: unknown[] = [];
+  const state = filter?.state ?? "pending";
+  if (state !== "all") {
+    clauses.push("state = ?");
+    args.push(state);
+  }
+  if (filter?.sessionId) {
+    clauses.push("session_id = ?");
+    args.push(filter.sessionId);
+  }
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = db.prepare(`SELECT * FROM approvals ${where} ORDER BY created_at DESC`).all(...args) as ApprovalRow[];
+  return rows.map(rowToApproval);
+}
+
+export function getApprovalRecord(id: string): Approval | undefined {
+  const db = initDb();
+  const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
+  return row ? rowToApproval(row) : undefined;
+}
+
+export function createApprovalRecord(input: {
+  sessionId: string;
+  type: Approval["type"];
+  payload: JsonObject;
+}): Approval {
+  const db = initDb();
+  const txn = db.transaction(() => {
+    if (input.type === "fallback") {
+      const existing = db
+        .prepare("SELECT * FROM approvals WHERE session_id = ? AND type = 'fallback' AND state = 'pending'")
+        .get(input.sessionId) as ApprovalRow | undefined;
+      if (existing) {
+        db.prepare("UPDATE approvals SET payload = ? WHERE id = ?").run(JSON.stringify(input.payload), existing.id);
+        return getApprovalRecord(existing.id);
+      }
+    }
+
+    const approval: Approval = {
+      id: uuidv4(),
+      sessionId: input.sessionId,
+      type: input.type,
+      payload: input.payload,
+      state: "pending",
+      createdAt: new Date().toISOString(),
+      resolvedAt: null,
+      actor: null,
+    };
+    db.prepare(`
+      INSERT INTO approvals
+        (id, session_id, type, payload, state, created_at, resolved_at, actor)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      approval.id,
+      approval.sessionId,
+      approval.type,
+      JSON.stringify(approval.payload),
+      approval.state,
+      approval.createdAt,
+      approval.resolvedAt,
+      approval.actor,
+    );
+    return approval;
+  });
+  const approval = txn() as Approval | undefined;
+  if (!approval) throw new Error("failed to create approval");
+  return approval;
+}
+
+export function resolveApprovalRecord(
+  id: string,
+  state: "approved" | "rejected",
+  actor?: string | null,
+): Approval | undefined {
+  const db = initDb();
+  const txn = db.transaction(() => {
+    const existing = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
+    if (!existing) return undefined;
+    if (existing.state !== "pending") return rowToApproval(existing);
+    const resolvedAt = new Date().toISOString();
+    db.prepare("UPDATE approvals SET state = ?, resolved_at = ?, actor = ? WHERE id = ? AND state = 'pending'")
+      .run(state, resolvedAt, actor ?? null, id);
+    return getApprovalRecord(id);
+  });
+  return txn() as Approval | undefined;
+}
+
+export function clearApprovalRecordsForTest(): void {
+  initDb().prepare("DELETE FROM approvals").run();
 }
 
 // ── File management ──────────────────────────────────────────────────

@@ -32,9 +32,13 @@ function makeFakePty(): FakePty {
   return p;
 }
 
-vi.mock("node-pty", () => ({
-  spawn: vi.fn(() => { const p = makeFakePty(); ptys.push(p); return p; }),
-}));
+vi.mock("../pty-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pty-stream.js")>();
+  return {
+    ...actual,
+    spawnPty: vi.fn(() => { const p = makeFakePty(); ptys.push(p); return p; }),
+  };
+});
 // Avoid real sockets: the SSE proxy is exercised empirically elsewhere (Item A).
 vi.mock("../sse-pty-proxy.js", () => ({
   MAIN_AGENT_SENTINEL: "<!-- jinn-main-agent:5c1f -->",

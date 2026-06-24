@@ -9,11 +9,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import * as pty from "node-pty";
+import type { IPty } from "node-pty";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../shared/logger.js";
 import { safeWriteFile } from "../shared/safe-write.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { spawnPty } from "../engines/pty-stream.js";
 import type { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 
 export interface ForkResult {
@@ -128,7 +129,7 @@ async function forkClaudeSessionInteractive(
   env.CLAUDE_CODE_NO_FLICKER = "1";
 
   logger.info(`Interactive fork: spawning ${bin} ${args.join(" ")}`);
-  const proc = pty.spawn(bin, args, {
+  const proc = await spawnPty(bin, args, {
     name: "xterm-256color",
     cols: 120,
     rows: 40,
@@ -301,4 +302,3 @@ function findCodexSessionFile(root: string, sessionId: string): string | null {
   }
   return null;
 }
-

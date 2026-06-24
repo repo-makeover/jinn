@@ -217,4 +217,20 @@ describe("KiroEngine", () => {
     expect(result.sessionId).toBe("kiro-existing");
     expect(result.result).toBe("resumed");
   });
+
+  it("fails before spawning when the auth probe reports missing credentials", async () => {
+    execFileMock.mockImplementation((_bin, _args, _opts, cb) => {
+      cb(new Error("Missing API key"), "", "Missing API key");
+    });
+    const engine = new KiroEngine();
+
+    const result = await engine.run({
+      prompt: "hello",
+      cwd: "/tmp/project",
+      sessionId: "track-4",
+    } as any);
+
+    expect(spawnCalls).toHaveLength(0);
+    expect(result.error).toContain("Kiro authentication is unavailable");
+  });
 });

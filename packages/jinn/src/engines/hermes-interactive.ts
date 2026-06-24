@@ -1,10 +1,10 @@
-import * as pty from "node-pty";
+import type { IPty } from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { PtyLifecycleManager } from "./pty-lifecycle.js";
-import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
+import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
 
 // ── Pure helpers (exported for testing) ──────────────────────────────────────
@@ -45,8 +45,11 @@ export class HermesInteractiveEngine implements InterruptibleEngine, PtyViewEngi
   ensureIdleSpawn(jinnSessionId: string, opts: PtyIdleSpawnOpts): void {
     if (opts.cols && opts.rows) setCapped(this.lastGeom, jinnSessionId, { cols: opts.cols, rows: opts.rows });
     if (this.lifecycle.getWarm(jinnSessionId)) return;
-    const handle = this.spawn(jinnSessionId, opts);
-    this.lifecycle.adopt(jinnSessionId, handle);
+    void this.spawn(jinnSessionId, opts).then((handle) => {
+      this.lifecycle.adopt(jinnSessionId, handle);
+    }).catch((err) => {
+      logger.warn(`Hermes ensureIdleSpawn failed for session ${jinnSessionId}: ${err instanceof Error ? err.message : String(err)}`);
+    });
   }
 
   hasWarmPty(sessionId: string): boolean {
@@ -71,18 +74,18 @@ export class HermesInteractiveEngine implements InterruptibleEngine, PtyViewEngi
   }
 
   writeStdin(sessionId: string, text: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     if (proc) proc.write(`${text}\r`);
   }
 
   writeRaw(sessionId: string, data: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     if (proc) proc.write(data);
   }
 
   resizePty(sessionId: string, cols: number, rows: number): void {
     setCapped(this.lastGeom, sessionId, { cols, rows });
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     try { proc?.resize(cols, rows); } catch { /* gone */ }
   }
 
@@ -117,12 +120,12 @@ export class HermesInteractiveEngine implements InterruptibleEngine, PtyViewEngi
     return env;
   }
 
-  private spawn(jinnSessionId: string, opts: PtyIdleSpawnOpts): ReturnType<typeof createPtyHandle> {
+  private async spawn(jinnSessionId: string, opts: PtyIdleSpawnOpts): Promise<ReturnType<typeof createPtyHandle>> {
     const bin = resolveBin("hermes", opts.bin);
     const args = buildHermesInteractiveArgs();
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`HermesInteractiveEngine spawning ${bin} (geom: ${geom ? `${geom.cols}x${geom.rows}` : "default"})`);
-    const proc = pty.spawn(bin, args, {
+    const proc = await spawnPty(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,

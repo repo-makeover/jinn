@@ -334,6 +334,13 @@ export class OrchestrationRuntime {
   }
 
   private async resumeQueuedAllocation(allocation: Allocation, reviewPolicy: ReviewPolicySummary): Promise<void> {
+    if (!this.resumeQueuedRunHandler) {
+      logger.warn(
+        `No orchestration resume handler is registered for ${allocation.taskId}/${allocation.coordinatorId}; leaving continuation queued.`,
+      );
+      this.releaseAllocationLeases(allocation, { retryQueued: false });
+      return;
+    }
     const claimed = this.store.claimQueuedLiveContinuation(allocation.taskId, allocation.coordinatorId, {
       allocationId: allocation.allocationId,
     });
@@ -341,13 +348,6 @@ export class OrchestrationRuntime {
       logger.warn(
         `Orchestration invariant violated: resumed allocation ${allocation.allocationId} for ${allocation.taskId}/${allocation.coordinatorId} had no queued continuation; releasing leases.`,
       );
-      this.releaseAllocationLeases(allocation);
-      return;
-    }
-    if (!this.resumeQueuedRunHandler) {
-      const error = `No orchestration resume handler is registered for ${allocation.taskId}/${allocation.coordinatorId}`;
-      logger.error(error);
-      this.markLiveContinuationFailed(claimed.taskId, claimed.coordinatorId, error, allocation.allocationId);
       this.releaseAllocationLeases(allocation);
       return;
     }

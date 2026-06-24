@@ -11,6 +11,12 @@ export async function runStatus(): Promise<void> {
 
   const status = getStatus();
 
+  if (status.error) {
+    console.log("Gateway: error");
+    console.log(`  ${status.error}`);
+    return;
+  }
+
   if (!status.running) {
     console.log("Gateway: stopped");
     if (status.pid) {

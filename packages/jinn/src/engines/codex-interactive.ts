@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import * as pty from "node-pty";
+import type { IPty } from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { neutralizeForPaste } from "../shared/skill-commands.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
-import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
+import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
 import { codexCliFlags, extractCodexContextTokens } from "./codex.js";
@@ -33,7 +33,7 @@ interface ActiveTurn {
   discover?: { stop: () => void };
   doneTimer?: NodeJS.Timeout;
   hardTimeout?: NodeJS.Timeout;
-  boundProc?: pty.IPty;
+  boundProc?: IPty;
 }
 
 interface CodexSpawnParams {
@@ -46,7 +46,7 @@ interface CodexSpawnParams {
   mcpConfigPath?: string;
 }
 
-function pasteAndSubmit(proc: pty.IPty, text: string): void {
+function pasteAndSubmit(proc: IPty, text: string): void {
   const payload = neutralizeForPaste(text);
   proc.write(`\x1b[200~${payload}\x1b[201~\r`);
 }
@@ -350,13 +350,13 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
     }
 
     if (warm) {
-      turn.boundProc = (warm as any)._proc as pty.IPty | undefined;
+      turn.boundProc = (warm as any)._proc as IPty | undefined;
       this.lifecycle.turnStarted(jinnSessionId);
       if (turn.boundProc) pasteAndSubmit(turn.boundProc, prompt);
       else turn.interrupt("Interrupted: codex PTY unavailable");
     } else {
       const handle = this.spawn(jinnSessionId, opts, prompt, codexSessionId);
-      turn.boundProc = (handle as any)._proc as pty.IPty | undefined;
+      turn.boundProc = (handle as any)._proc as IPty | undefined;
       this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
       this.lifecycle.turnStarted(jinnSessionId);
     }
@@ -424,7 +424,7 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
     const args = this.buildArgs(opts, prompt, resumeSessionId);
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`CodexInteractiveEngine spawning ${bin} (resume: ${resumeSessionId || "none"}, geom: ${geom ? `${geom.cols}x${geom.rows}` : "default"})`);
-    const proc = pty.spawn(bin, args, {
+    const proc = spawnPty(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,
@@ -443,7 +443,7 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
     return this.wireProcToStream(jinnSessionId, proc);
   }
 
-  private wireProcToStream(jinnSessionId: string, proc: pty.IPty): PtyHandle {
+  private wireProcToStream(jinnSessionId: string, proc: IPty): PtyHandle {
     const handle = createPtyHandle(proc);
     this.streams.attach(jinnSessionId, proc);
     proc.onExit(() => {
@@ -490,18 +490,18 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
   }
 
   writeStdin(sessionId: string, text: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     if (proc) pasteAndSubmit(proc, text);
   }
 
   writeRaw(sessionId: string, data: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     if (proc) proc.write(data);
   }
 
   resizePty(sessionId: string, cols: number, rows: number): void {
     setCapped(this.lastGeom, sessionId, { cols, rows });
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     try { proc?.resize(cols, rows); } catch { /* gone */ }
   }
 

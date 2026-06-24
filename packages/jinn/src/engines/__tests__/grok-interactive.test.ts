@@ -39,13 +39,17 @@ function makeFakePty(): FakePty {
   return p;
 }
 
-vi.mock("node-pty", () => ({
-  spawn: vi.fn((bin: string, args: string[], opts: any) => {
+vi.mock("../pty-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pty-stream.js")>();
+  return {
+    ...actual,
+    spawnPty: vi.fn((bin: string, args: string[], opts: any) => {
     const proc = makeFakePty();
     spawnCalls.push({ bin, args, opts, proc });
     return proc as unknown as import("node-pty").IPty;
-  }),
-}));
+    }),
+  };
+});
 
 const osMockState = vi.hoisted(() => ({ home: "" }));
 vi.mock("node:os", async (importOriginal) => {

@@ -651,7 +651,7 @@ function openDatabase(dbPath: string): Database.Database {
   if (dbPath !== ":memory:") {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   }
-  const db = new Database(dbPath);
+  const db = new Database(dbPath, { timeout: 5000 });
   try {
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");

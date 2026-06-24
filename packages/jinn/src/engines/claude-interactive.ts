@@ -1,18 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import * as pty from "node-pty";
+import type { IPty } from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, EngineRateLimitInfo, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME, CLAUDE_SETTINGS_DIR, HOOK_RELAY_SCRIPT, CLAUDE_LIMITS_DIR } from "../shared/paths.js";
 import { cleanupSessionSettings, writeSessionSettings } from "../shared/claude-settings.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
-import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
+import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import type { PtyControlEvent, PtyViewEngine, PtyIdleSpawnOpts } from "./pty-view-engine.js";
 import type { HookRegistry, HookPayload } from "../gateway/hook-registry.js";
 import { SsePtyProxy, MAIN_AGENT_SENTINEL, type SseDataEvent, type UpstreamActivityInfo } from "./sse-pty-proxy.js";
 import { neutralizeForPaste } from "../shared/skill-commands.js";
+import { findTranscriptForSession } from "./claude-transcript.js";
+export { findTranscriptForSession } from "./claude-transcript.js";
 
 export type { PtyControlEvent } from "./pty-view-engine.js";
 
@@ -88,29 +89,6 @@ function lastTurnContextTokens(transcriptPath: string): number | undefined {
     last = Number(u.input_tokens ?? 0) + Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0);
   }
   return last && last > 0 ? last : undefined;
-}
-
-/** Claude Code stores per-project transcripts at
- *  ~/.claude/projects/<cwd-slug>/<claudeSessionId>.jsonl, where the slug is the
- *  cwd with every "/" and "." replaced by "-". Derive that path; fall back to a
- *  scan across project dirs if the slug heuristic misses (defensive). Exported
- *  for the transcript-recovery unit test. */
-export function findTranscriptForSession(
-  claudeSessionId: string,
-  homeDir: string = JINN_HOME,
-  projectsDir: string = path.join(os.homedir(), ".claude", "projects"),
-): string | undefined {
-  if (!claudeSessionId) return undefined;
-  const slug = homeDir.replace(/[/.]/g, "-");
-  const direct = path.join(projectsDir, slug, `${claudeSessionId}.jsonl`);
-  if (fs.existsSync(direct)) return direct;
-  try {
-    for (const d of fs.readdirSync(projectsDir)) {
-      const p = path.join(projectsDir, d, `${claudeSessionId}.jsonl`);
-      if (fs.existsSync(p)) return p;
-    }
-  } catch { /* projects dir missing — nothing to recover */ }
-  return undefined;
 }
 
 /** Last assistant text block from a Claude transcript — the turn's final
@@ -453,7 +431,7 @@ export function isNativeClaudeCommand(prompt: string): boolean {
  *  bash-mode, and jinn-skill slash commands, while letting engine-native commands
  *  (/compact, /clear, /model, …) pass through raw so the TUI actually runs them.
  *  Shared by injectPrompt() (warm-PTY first turn) and writeStdin() (raw WS input). */
-function pasteAndSubmit(proc: pty.IPty, text: string): void {
+function pasteAndSubmit(proc: IPty, text: string): void {
   const payload = neutralizeForPaste(text);
   proc.write(`\x1b[200~${payload}\x1b[201~`);
   setTimeout(() => proc.write("\r"), 50);
@@ -467,7 +445,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  released by a kill->respawn race can't poison the freshly-started turn.
    *  `onStream` is the current turn's delta callback; the per-PTY SSE proxy routes
    *  parsed events here (a PTY outlives its turn, so the proxy looks this up live). */
-  private active = new Map<string, { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: pty.IPty }>();
+  private active = new Map<string, { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: IPty }>();
   /** Sessions with an in-flight async idle-spawn (proxy.start awaited) — prevents
    *  a second ensureIdleSpawn from racing in a duplicate PTY during that gap. */
   private idleSpawning = new Set<string>();
@@ -659,7 +637,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       assumeStarted: !!warm, // warm PTY = SessionStart already fired (turn 1 or idle spawn)
       native: nativeCommand,
     });
-    const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: pty.IPty; activeTools: number } = {
+    const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: IPty; activeTools: number } = {
       resolver,
       onStream: opts.onStream,
       activeTools: 0,
@@ -712,13 +690,13 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
         this.lifecycle.turnStarted(jinnSessionId);
         turnMarkedStarted = true;
         this.injectPrompt(warm, opts);
-        entry.boundProc = (warm as any)._proc as pty.IPty | undefined;
+        entry.boundProc = (warm as any)._proc as IPty | undefined;
       } else {
         const handle = await this.spawn(jinnSessionId, opts, settingsPath);
         this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
         this.lifecycle.turnStarted(jinnSessionId);
         turnMarkedStarted = true;
-        entry.boundProc = (handle as any)._proc as pty.IPty | undefined;
+        entry.boundProc = (handle as any)._proc as IPty | undefined;
       }
 
       // Watchdog: if the bound PTY dies without the resolver settling (e.g. the
@@ -895,12 +873,12 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     }
   }
 
-  /** Wrap a freshly-spawned pty.IPty in a PtyHandle and wire its output into
+  /** Wrap a freshly-spawned IPty in a PtyHandle and wire its output into
    *  the session's scrollback ring buffer + live subscribers. On PTY exit, if this
    *  proc is the one bound to the active turn, the resolver is interrupted (a crash
    *  with no Stop hook); a stale proc replaced by a respawn is treated as benign.
    *  `proxy` (the per-PTY SSE forward proxy) is torn down when this PTY exits. */
-  private wireProcToStream(jinnSessionId: string, proc: pty.IPty, proxy?: SsePtyProxy): PtyHandle {
+  private wireProcToStream(jinnSessionId: string, proc: IPty, proxy?: SsePtyProxy): PtyHandle {
     const handle = createPtyHandle(proc);
     this.streams.attach(jinnSessionId, proc, () => {
       this.lastOutputAt.set(jinnSessionId, Date.now());
@@ -959,7 +937,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     const bin = resolveBin("claude", opts.bin);
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`InteractiveClaudeEngine spawning ${bin} (resume: ${opts.resumeSessionId || "none"}, geom: ${geom ? `${geom.cols}×${geom.rows}` : "default"}, sseProxy: ${port || "off"})`);
-    const proc = pty.spawn(bin, args, {
+    const proc = await spawnPty(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,
@@ -1014,7 +992,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
         }
         const env = this.buildPtyEnv(port || undefined);
         logger.info(`InteractiveClaudeEngine ensureIdleSpawn for session ${jinnSessionId} (resume ${opts.engineSessionId || "none — fresh"}, geom ${cols}×${rows}, sseProxy: ${port || "off"})`);
-        const proc = pty.spawn(bin, args, {
+        const proc = await spawnPty(bin, args, {
           name: "xterm-256color",
           cols,
           rows,
@@ -1036,7 +1014,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
 
   /** Inject a follow-up prompt into a warm PTY via bracketed-paste + CR. */
   private injectPrompt(handle: PtyHandle, opts: EngineRunOpts): void {
-    const proc = (handle as any)._proc as pty.IPty | undefined;
+    const proc = (handle as any)._proc as IPty | undefined;
     if (!proc) return;
     let text = opts.prompt;
     if (opts.attachments?.length) {
@@ -1066,13 +1044,13 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
   writeStdin(sessionId: string, text: string): void {
     const handle = this.lifecycle.getWarm(sessionId);
     if (!handle) return;
-    const proc = (handle as any)._proc as pty.IPty | undefined;
+    const proc = (handle as any)._proc as IPty | undefined;
     if (!proc) return;
     pasteAndSubmit(proc, text);
   }
 
   writeRaw(sessionId: string, data: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     if (proc) proc.write(data);
   }
 
@@ -1081,7 +1059,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     setCapped(this.lastGeom, sessionId, { cols, rows });
     const handle = this.lifecycle.getWarm(sessionId);
     if (!handle) return;
-    const proc = (handle as any)._proc as pty.IPty | undefined;
+    const proc = (handle as any)._proc as IPty | undefined;
     if (!proc) return;
     try { proc.resize(cols, rows); } catch { /* PTY gone */ }
   }

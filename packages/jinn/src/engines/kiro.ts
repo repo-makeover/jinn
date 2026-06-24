@@ -16,6 +16,7 @@ interface LiveProcess {
 export interface KiroEngineOpts {
   configProvider?: () => JinnConfig;
   listSessions?: (bin: string, cwd: string) => Promise<string | undefined>;
+  authProbe?: (bin: string, cwd: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export interface KiroFooterParse {
@@ -27,6 +28,8 @@ const ANSI_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\x1b\\))/g;
 const CREDIT_FOOTER_RE = /^\s*(?:▸\s*)?Credits:\s*([0-9]+(?:\.[0-9]+)?)\s*(?:-|•)\s*Time:\s*.+$/i;
 const CREDIT_EXHAUSTION_RE =
   /(?:credit|credits|quota).*(?:exhaust|insufficient|limit|exceeded|unavailable)|(?:insufficient|exhausted).*credits/i;
+const AUTH_FAILURE_RE =
+  /(?:api key|auth(?:entication)?|credential|login|sign in|unauthorized|forbidden|permission).*(?:missing|required|failed|invalid|expired|denied|not found)|(?:missing|required|invalid|expired).*(?:api key|credential|token)/i;
 
 export function stripKiroAnsi(text: string): string {
   return text.replace(ANSI_RE, "");
@@ -146,6 +149,14 @@ export class KiroEngine implements InterruptibleEngine {
     const trackingId = opts.sessionId || `kiro-${Date.now()}`;
     const bin = resolveBin("kiro-cli", opts.bin);
     const args = this.buildArgs(opts, prompt);
+    const auth = await this.preflightAuth(bin, opts.cwd);
+    if (!auth.ok) {
+      return {
+        sessionId: opts.resumeSessionId ?? "",
+        result: "",
+        error: auth.error ?? "Kiro authentication is unavailable. Authenticate Kiro locally or set KIRO_API_KEY.",
+      };
+    }
 
     logger.info(
       `Kiro engine starting: ${bin} chat --model ${opts.model || this.opts.configProvider?.()?.engines.kiro?.model || "auto"}` +
@@ -278,6 +289,30 @@ export class KiroEngine implements InterruptibleEngine {
       execFile(bin, ["chat", "--list-sessions", "--format", "json"], { cwd, timeout: 5000 }, (err, stdout) => {
         if (err) return resolve(undefined);
         resolve(parseKiroSessionList(stdout));
+      });
+    });
+  }
+
+  private preflightAuth(bin: string, cwd: string): Promise<{ ok: boolean; error?: string }> {
+    if (process.env.KIRO_API_KEY) return Promise.resolve({ ok: true });
+    if (this.opts.authProbe) return this.opts.authProbe(bin, cwd);
+    return new Promise((resolve) => {
+      execFile(bin, ["chat", "--list-sessions", "--format", "json"], { cwd, timeout: 5000 }, (err, stdout, stderr) => {
+        if (!err) {
+          resolve({ ok: true });
+          return;
+        }
+        const combined = stripKiroAnsi(`${stderr ?? ""}\n${stdout ?? ""}\n${err instanceof Error ? err.message : String(err)}`).trim();
+        if (AUTH_FAILURE_RE.test(combined)) {
+          resolve({
+            ok: false,
+            error: `Kiro authentication is unavailable: ${combined.slice(0, 500)}`,
+          });
+          return;
+        }
+        // Non-auth list failures (for example no saved sessions yet) should not
+        // block local-auth installs from starting the real turn.
+        resolve({ ok: true });
       });
     });
   }

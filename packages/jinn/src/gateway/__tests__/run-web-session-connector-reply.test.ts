@@ -73,8 +73,23 @@ describe("deliverConnectorReply", () => {
     expect(slack.replyMessage).not.toHaveBeenCalled();
   });
 
-  it("swallows connector errors (does not reject)", async () => {
+  it("emits failed delivery attempts and retries connector errors", async () => {
     slack.replyMessage.mockRejectedValueOnce(new Error("boom"));
-    await expect(deliverConnectorReply(makeSession(), "hi", map)).resolves.toBeUndefined();
+    const emit = vi.fn();
+    await expect(
+      deliverConnectorReply(makeSession({ id: "s1" } as Partial<Session>), "hi", map, {
+        emit,
+        retryDelayMs: 0,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(slack.replyMessage).toHaveBeenCalledTimes(2);
+    expect(emit).toHaveBeenCalledWith("connector:reply_failed", expect.objectContaining({
+      sessionId: "s1",
+      connector: "slack",
+      attempt: 1,
+      maxAttempts: 2,
+      error: "boom",
+    }));
   });
 });

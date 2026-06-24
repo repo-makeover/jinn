@@ -1,11 +1,11 @@
 import fs from "node:fs";
-import * as pty from "node-pty";
+import type { IPty } from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
-import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
+import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.js";
 import type { PtyControlEvent, PtyViewEngine, PtyIdleSpawnOpts } from "./pty-view-engine.js";
 import {
@@ -53,7 +53,7 @@ const SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions";
  *  neutralizeForPaste() prepends a space for mentions, bash-mode, and jinn-skill
  *  slash commands, while letting engine-native /commands pass through raw.
  *  Shared by injectPromptToProc() and writeStdin(). */
-function pasteAndSubmit(proc: pty.IPty, text: string): void {
+function pasteAndSubmit(proc: IPty, text: string): void {
   const payload = neutralizeForPaste(text);
   proc.write(`\x1b[200~${payload}\x1b[201~\r`);
 }
@@ -66,7 +66,7 @@ interface ActiveTurn {
   hardTimeout?: NodeJS.Timeout;
   /** The PTY serving this turn. A stale PTY's onExit (after a kill->respawn race)
    *  must NOT interrupt the active turn unless it owns this exact proc. */
-  boundProc?: pty.IPty;
+  boundProc?: IPty;
 }
 
 interface AntigravitySpawnParams {
@@ -241,12 +241,12 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
       warm = undefined;
     }
     if (warm) {
-      turn.boundProc = (warm as any)._proc as pty.IPty | undefined;
+      turn.boundProc = (warm as any)._proc as IPty | undefined;
       this.lifecycle.turnStarted(jinnSessionId);
       this.injectPrompt(warm, opts);
     } else {
-      const handle = this.spawn(jinnSessionId, opts, cwd, convId);
-      turn.boundProc = (handle as any)._proc as pty.IPty | undefined;
+      const handle = await this.spawn(jinnSessionId, opts, cwd, convId);
+      turn.boundProc = (handle as any)._proc as IPty | undefined;
       this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
       this.lifecycle.turnStarted(jinnSessionId);
     }
@@ -295,12 +295,12 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
     if (prev && !prev.resumeSessionId) this.spawnParams.set(jinnSessionId, { ...prev, resumeSessionId });
   }
 
-  private spawn(jinnSessionId: string, opts: EngineRunOpts, cwd: string, resumeConvId: string | undefined): PtyHandle {
+  private async spawn(jinnSessionId: string, opts: EngineRunOpts, cwd: string, resumeConvId: string | undefined): Promise<PtyHandle> {
     const bin = resolveBin("agy", opts.bin);
     const args = this.buildArgs(resumeConvId, opts.model);
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`AntigravityEngine spawning ${bin} (resume: ${resumeConvId || "none"}, geom: ${geom ? `${geom.cols}×${geom.rows}` : "default"})`);
-    const proc = pty.spawn(bin, args, {
+    const proc = await spawnPty(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,
@@ -326,7 +326,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
   /** Wait for agy's TUI to settle (first output, then ~1.2s quiet) before sending
    *  the prompt; fall back to a hard cap. Prevents dropping the prompt into a
    *  not-yet-ready terminal (the cause of "no conversation transcript appeared"). */
-  private scheduleColdInject(proc: pty.IPty, opts: EngineRunOpts): void {
+  private scheduleColdInject(proc: IPty, opts: EngineRunOpts): void {
     const QUIET_MS = 1200;
     const HARD_CAP_MS = 12000;
     const startedAt = Date.now();
@@ -348,7 +348,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
     timer.unref?.();
   }
 
-  private injectPromptToProc(proc: pty.IPty, opts: EngineRunOpts): void {
+  private injectPromptToProc(proc: IPty, opts: EngineRunOpts): void {
     let text = opts.prompt;
     // Inject the system prompt only on the FIRST turn of a conversation. agy
     // persists the conversation (resume via --conversation retains it), so on a
@@ -362,7 +362,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
   }
 
   private injectPrompt(handle: PtyHandle, opts: EngineRunOpts): void {
-    const proc = (handle as any)._proc as pty.IPty | undefined;
+    const proc = (handle as any)._proc as IPty | undefined;
     if (proc) this.injectPromptToProc(proc, opts);
   }
 
@@ -373,7 +373,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
    *  turn's callback. Any raw output = proof-of-life. */
   private onActivityCbs = new Map<string, () => void>();
 
-  private wireProcToStream(jinnSessionId: string, proc: pty.IPty, onExitExtra?: () => void): PtyHandle {
+  private wireProcToStream(jinnSessionId: string, proc: IPty, onExitExtra?: () => void): PtyHandle {
     const handle = createPtyHandle(proc);
     this.streams.attach(jinnSessionId, proc, () => this.onActivityCbs.get(jinnSessionId)?.());
     proc.onExit(() => {
@@ -415,7 +415,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
     const rows = opts.rows ?? this.lastGeom.get(jinnSessionId)?.rows ?? 40;
     if (opts.cols && opts.rows) setCapped(this.lastGeom, jinnSessionId, { cols: opts.cols, rows: opts.rows });
     logger.info(`AntigravityEngine ensureIdleSpawn for session ${jinnSessionId} (resume ${opts.engineSessionId || "none — fresh"}, geom ${cols}×${rows})`);
-    const proc = pty.spawn(bin, args, {
+    const proc = spawnPty(bin, args, {
       name: "xterm-256color",
       cols,
       rows,
@@ -446,20 +446,20 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
 
   writeStdin(sessionId: string, text: string): void {
     const handle = this.lifecycle.getWarm(sessionId);
-    const proc = handle ? ((handle as any)._proc as pty.IPty | undefined) : undefined;
+    const proc = handle ? ((handle as any)._proc as IPty | undefined) : undefined;
     if (!proc) return;
     pasteAndSubmit(proc, text);
   }
 
   writeRaw(sessionId: string, data: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
     if (proc) proc.write(data);
   }
 
   resizePty(sessionId: string, cols: number, rows: number): void {
     setCapped(this.lastGeom, sessionId, { cols, rows });
     const handle = this.lifecycle.getWarm(sessionId);
-    const proc = handle ? ((handle as any)._proc as pty.IPty | undefined) : undefined;
+    const proc = handle ? ((handle as any)._proc as IPty | undefined) : undefined;
     if (!proc) return;
     try { proc.resize(cols, rows); } catch { /* gone */ }
   }

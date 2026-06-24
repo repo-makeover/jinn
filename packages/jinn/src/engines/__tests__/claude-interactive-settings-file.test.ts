@@ -37,16 +37,20 @@ function makeFakePty(): FakePty {
   return p;
 }
 
-vi.mock("node-pty", () => ({
-  spawn: vi.fn((_bin: string, args: string[]) => {
+vi.mock("../pty-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pty-stream.js")>();
+  return {
+    ...actual,
+    spawnPty: vi.fn((_bin: string, args: string[]) => {
     const i = args.indexOf("--settings");
     const settingsPath = i >= 0 ? args[i + 1] : "";
     settingsExistedAtSpawn.push(settingsPath ? fs.existsSync(settingsPath) : false);
     const p = makeFakePty();
     ptys.push(p);
     return p;
-  }),
-}));
+    }),
+  };
+});
 vi.mock("../sse-pty-proxy.js", () => ({
   MAIN_AGENT_SENTINEL: "<!-- jinn-main-agent:5c1f -->",
   SsePtyProxy: class {
