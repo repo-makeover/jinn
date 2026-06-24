@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isChatIdle,
   isWithinBoardWorkerWindow,
+  rankBoardWorkerCandidates,
   selectBoardWorkerCandidate,
   usageModeForStatus,
   type TicketCandidate,
@@ -121,6 +122,17 @@ describe("board worker selection ordering", () => {
       candidate("newer-low-high", { priority: "high", complexity: "low", createdAt: "2026-06-20T00:00:00.000Z" }),
     ]);
     expect(selected?.ticket.id).toBe("newer-low-high");
+  });
+
+
+  it("returns dispatch candidates in fallback order after a busy first pick", () => {
+    const ranked = rankBoardWorkerCandidates([
+      candidate("newer-low", { priority: "high", complexity: "low", createdAt: "2026-06-20T00:00:00.000Z" }),
+      candidate("older-low", { priority: "medium", complexity: "low", createdAt: "2026-06-18T00:00:00.000Z" }),
+      candidate("medium-high", { priority: "high", complexity: "medium", createdAt: "2026-06-17T00:00:00.000Z" }),
+    ]);
+
+    expect(ranked.map((entry) => entry.ticket.id)).toEqual(["newer-low", "older-low"]);
   });
 
   it("falls through to highest priority available when no low-complexity tickets exist", () => {

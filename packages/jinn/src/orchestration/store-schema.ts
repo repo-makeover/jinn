@@ -7,7 +7,7 @@ import { writeRecoveryManifest } from "./store-recovery.js";
 import { DEFAULT_LEASE_DURATION_MS, type TelemetryEvent } from "./types.js";
 import { setMeta } from "./store-utils.js";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const NEXT_SEQ_META_KEY = "scheduler_next_seq";
 export const QUEUE_PAUSE_META_KEY = "queue_pause";
 
@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS queue_items (
   missing_roles_json TEXT NOT NULL,
   priority TEXT NOT NULL,
   blocked_since TEXT NOT NULL,
+  last_blocked_at TEXT NOT NULL,
+  blocked_attempts INTEGER NOT NULL DEFAULT 1,
   resume_on_json TEXT NOT NULL,
   request_json TEXT NOT NULL,
   PRIMARY KEY (task_id, coordinator_id)
@@ -201,6 +203,7 @@ function openDatabase(dbPath: string): Database.Database {
     db.exec(CREATE_SCHEMA);
     ensureLeaseDurationColumn(db);
     ensureAllocationUpdatedAtColumn(db);
+    ensureQueueDiagnosticsColumns(db);
     setMeta(db, "schema_version", String(SCHEMA_VERSION));
     return db;
   } catch (err) {
@@ -255,4 +258,15 @@ function renameIfExists(source: string, target: string): string | undefined {
 
 function resolveRecoveryDir(dbPath: string): string {
   return dbPath === ORCH_DB ? ORCH_RECOVERY_DIR : path.join(path.dirname(dbPath), "orchestration-recovery");
+}
+
+function ensureQueueDiagnosticsColumns(db: Database.Database): void {
+  const columns = db.pragma("table_info(queue_items)") as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "last_blocked_at")) {
+    db.prepare("ALTER TABLE queue_items ADD COLUMN last_blocked_at TEXT").run();
+    db.prepare("UPDATE queue_items SET last_blocked_at = blocked_since WHERE last_blocked_at IS NULL").run();
+  }
+  if (!columns.some((column) => column.name === "blocked_attempts")) {
+    db.prepare("ALTER TABLE queue_items ADD COLUMN blocked_attempts INTEGER NOT NULL DEFAULT 1").run();
+  }
 }

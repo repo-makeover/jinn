@@ -106,15 +106,19 @@ function createdAtMs(ticket: BoardTicket): number {
   return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
 }
 
-export function selectBoardWorkerCandidate(candidates: TicketCandidate[]): TicketCandidate | undefined {
-  if (candidates.length === 0) return undefined;
+export function rankBoardWorkerCandidates(candidates: TicketCandidate[]): TicketCandidate[] {
+  if (candidates.length === 0) return [];
   const low = candidates.filter((candidate) => boardTicketComplexity(candidate.ticket) === "low");
   const pool = low.length > 0 ? low : candidates;
   return [...pool].sort((a, b) => {
     const priorityDelta = priorityRank(b.ticket.priority) - priorityRank(a.ticket.priority);
     if (priorityDelta !== 0) return priorityDelta;
     return createdAtMs(a.ticket) - createdAtMs(b.ticket);
-  })[0];
+  });
+}
+
+export function selectBoardWorkerCandidate(candidates: TicketCandidate[]): TicketCandidate | undefined {
+  return rankBoardWorkerCandidates(candidates)[0];
 }
 
 async function buildCandidates(
@@ -181,22 +185,21 @@ export function startBoardWorker(deps: BoardWorkerDeps): () => void {
       );
       if (!idle) return;
 
-      const candidates = await buildCandidates(now, deps);
-      const selected = selectBoardWorkerCandidate(candidates);
-      if (!selected) return;
-
-      const result = await dispatchTicket(
-        selected.department,
-        selected.ticket.id,
-        { source: "board-worker", routeToManager: true },
-        { context: deps.context, orgDir: deps.orgDir, now: () => now },
-      );
-      if (result.ok) {
-        logger.info(
-          `[board-worker] auto-dispatched ${selected.department}/${selected.ticket.id} ` +
-          `-> ${selected.manager.name} at ${new Date(now).toISOString()}`,
+      const candidates = rankBoardWorkerCandidates(await buildCandidates(now, deps));
+      for (const selected of candidates) {
+        const result = await dispatchTicket(
+          selected.department,
+          selected.ticket.id,
+          { source: "board-worker", routeToManager: true },
+          { context: deps.context, orgDir: deps.orgDir, now: () => now },
         );
-      } else {
+        if (result.ok) {
+          logger.info(
+            `[board-worker] auto-dispatched ${selected.department}/${selected.ticket.id} ` +
+            `-> ${selected.manager.name} at ${new Date(now).toISOString()}`,
+          );
+          return;
+        }
         logger.info(
           `[board-worker] skipped ${selected.department}/${selected.ticket.id}: ${result.reason}`,
         );

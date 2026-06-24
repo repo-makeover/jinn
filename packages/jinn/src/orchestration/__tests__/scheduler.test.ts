@@ -73,7 +73,7 @@ function request(overrides: Partial<AllocationRequest> = {}): AllocationRequest 
   };
 }
 
-function scheduler(cfg: OrchestrationConfig, opts: Omit<SchedulerOptions, "now"> = {}): MatrixScheduler {
+function scheduler(cfg: OrchestrationConfig, opts: SchedulerOptions = {}): MatrixScheduler {
   return new MatrixScheduler(cfg, { now: () => fixedNow, ...opts });
 }
 
@@ -156,6 +156,32 @@ describe("MatrixScheduler", () => {
       missingRoles: ["seniorImplementer"],
       resumeOn: ["worker_released", "quota_available", "lease_expired"],
     });
+  });
+
+
+  it("tracks repeated blocked attempts without duplicating queue items", () => {
+    let now = new Date("2026-06-23T12:00:00.000Z");
+    const s = scheduler(
+      config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]),
+      { now: () => now },
+    );
+    expect(s.requestAllocation(request({ taskId: "running" })).ok).toBe(true);
+
+    const first = s.requestAllocation(request({ taskId: "blocked", coordinatorId: "coord-blocked" }));
+    now = new Date("2026-06-23T12:01:00.000Z");
+    const second = s.requestAllocation(request({ taskId: "blocked", coordinatorId: "coord-blocked", priority: "high" }));
+
+    expect(first.ok).toBe(false);
+    expect(second.ok).toBe(false);
+    expect(s.listQueue()).toEqual([
+      expect.objectContaining({
+        taskId: "blocked",
+        priority: "high",
+        blockedSince: "2026-06-23T12:00:00.000Z",
+        lastBlockedAt: "2026-06-23T12:01:00.000Z",
+        blockedAttempts: 2,
+      }),
+    ]);
   });
 
   it("uses maxConcurrentTasks before blocking", () => {

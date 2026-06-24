@@ -37,6 +37,8 @@ interface QueueRow {
   missing_roles_json: string;
   priority: QueueItem["priority"];
   blocked_since: string;
+  last_blocked_at: string | null;
+  blocked_attempts: number | null;
   resume_on_json: string;
   request_json: string;
 }
@@ -108,8 +110,8 @@ export function replaceSnapshotInDb(db: Database.Database, snapshot: SchedulerSn
 
     const insertQueueItem = db.prepare(`
       INSERT INTO queue_items (
-        task_id, coordinator_id, state, missing_roles_json, priority, blocked_since, resume_on_json, request_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        task_id, coordinator_id, state, missing_roles_json, priority, blocked_since, last_blocked_at, blocked_attempts, resume_on_json, request_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const item of snapshot.queue) {
       insertQueueItem.run(
@@ -119,6 +121,8 @@ export function replaceSnapshotInDb(db: Database.Database, snapshot: SchedulerSn
         JSON.stringify(item.missingRoles),
         item.priority,
         item.blockedSince,
+        item.lastBlockedAt,
+        item.blockedAttempts,
         JSON.stringify(item.resumeOn),
         JSON.stringify(item.request),
       );
@@ -268,13 +272,15 @@ function upsertQueueItems(
 ): void {
   const upsertQueueItem = db.prepare(`
     INSERT INTO queue_items (
-      task_id, coordinator_id, state, missing_roles_json, priority, blocked_since, resume_on_json, request_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      task_id, coordinator_id, state, missing_roles_json, priority, blocked_since, last_blocked_at, blocked_attempts, resume_on_json, request_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(task_id, coordinator_id) DO UPDATE SET
       state = excluded.state,
       missing_roles_json = excluded.missing_roles_json,
       priority = excluded.priority,
       blocked_since = excluded.blocked_since,
+      last_blocked_at = excluded.last_blocked_at,
+      blocked_attempts = excluded.blocked_attempts,
       resume_on_json = excluded.resume_on_json,
       request_json = excluded.request_json
   `);
@@ -287,6 +293,8 @@ function upsertQueueItems(
       JSON.stringify(item.missingRoles),
       item.priority,
       item.blockedSince,
+      item.lastBlockedAt,
+      item.blockedAttempts,
       JSON.stringify(item.resumeOn),
       JSON.stringify(item.request),
     );
@@ -372,6 +380,8 @@ function loadQueue(db: Database.Database): QueueItem[] {
     missingRoles: parseDbJson<string[]>(row.missing_roles_json, "queue missing roles"),
     priority: row.priority,
     blockedSince: row.blocked_since,
+    lastBlockedAt: row.last_blocked_at ?? row.blocked_since,
+    blockedAttempts: row.blocked_attempts ?? 1,
     resumeOn: parseDbJson<QueueItem["resumeOn"]>(row.resume_on_json, "queue resume triggers"),
     request: parseDbJson<QueueItem["request"]>(row.request_json, "queue allocation request"),
   }));

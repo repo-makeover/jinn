@@ -278,6 +278,8 @@ export class MatrixScheduler {
     return this.queue.map((item) => ({
       ...item,
       missingRoles: [...item.missingRoles],
+      lastBlockedAt: item.lastBlockedAt ?? item.blockedSince,
+      blockedAttempts: item.blockedAttempts ?? 1,
       resumeOn: [...item.resumeOn],
       request: {
         ...item.request,
@@ -489,7 +491,10 @@ export class MatrixScheduler {
     const existing = this.queue.find((item) => item.taskId === request.taskId && item.coordinatorId === request.coordinatorId);
     if (existing) {
       existing.missingRoles = missingRoles;
+      existing.priority = request.priority;
       existing.request = request;
+      existing.lastBlockedAt = this.isoNow();
+      existing.blockedAttempts += 1;
       return { ...existing, request: { ...existing.request } };
     }
     const item = this.buildBlockedQueueItem(request, missingRoles, this.isoNow());
@@ -505,6 +510,8 @@ export class MatrixScheduler {
       missingRoles,
       priority: request.priority,
       blockedSince,
+      lastBlockedAt: blockedSince,
+      blockedAttempts: 1,
       resumeOn: ["worker_released", "quota_available", "lease_expired"],
       request,
     };
@@ -538,6 +545,8 @@ export class MatrixScheduler {
     this.queue.push(...snapshot.queue.map((item) => ({
       ...item,
       missingRoles: [...item.missingRoles],
+      lastBlockedAt: item.lastBlockedAt ?? item.blockedSince,
+      blockedAttempts: item.blockedAttempts ?? 1,
       resumeOn: [...item.resumeOn],
       request: {
         ...item.request,
