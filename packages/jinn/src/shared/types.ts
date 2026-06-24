@@ -535,6 +535,12 @@ export interface JinnConfig {
     allowFileCustomPaths?: boolean;
     /** Opt-in unsafe local convenience: allow POST /api/files {open:true} to open uploaded files. Default false. */
     allowFileOpen?: boolean;
+    /** Require token/cookie auth even on loopback. Network binds require auth by default. */
+    authRequired?: boolean;
+    /** Disable gateway auth. Refused on network binds unless insecureAllowUnauthenticatedNetwork is true. */
+    authDisabled?: boolean;
+    /** Explicit escape hatch for unauthenticated 0.0.0.0/LAN/Tailscale binds. */
+    insecureAllowUnauthenticatedNetwork?: boolean;
     /** Opt-in: when set, POST /api/sessions reads the forwarded SSO identity
      *  from this request header (set by an auth proxy such as oauth2-proxy,
      *  Traefik forward-auth, or IAP) and persists it on the session. Accepts a
@@ -622,5 +628,5 @@ export interface JinnConfig {
       sidecarPort?: number;
     };
   };
-  remotes?: Record<string, { url: string; label?: string }>;
+  remotes?: Record<string, { url: string; label?: string; token?: string }>;
 }

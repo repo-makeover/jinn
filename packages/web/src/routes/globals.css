@@ -417,6 +417,11 @@ h1, h2, h3, h4, h5, h6 {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes authReveal {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(12px); }
   to { opacity: 1; transform: translateX(0); }
@@ -476,6 +481,7 @@ h1, h2, h3, h4, h5, h6 {
 .animate-slide-up { animation: slideUp 250ms var(--ease-spring); }
 .animate-slide-in-right { animation: slideInRight 300ms var(--ease-smooth); }
 .animate-fade-in { animation: fadeIn 200ms var(--ease-smooth); }
+.animate-auth-reveal { animation: authReveal 260ms var(--ease-smooth) both; }
 .animate-slide-in { animation: slideIn 200ms var(--ease-smooth); }
 .animate-error-pulse { animation: pulse-red 1.5s ease-in-out infinite; }
 .animate-blink { animation: blink-cursor 1s step-end infinite; }

@@ -16,6 +16,7 @@ import fs from "node:fs";
 import yaml from "js-yaml";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import type { ApiContext } from "../gateway/api.js";
+import { gatewayBaseUrl } from "../gateway/gateway-info.js";
 import { readJsonBody } from "../gateway/http-helpers.js";
 import type { JinnConfig, JsonObject } from "../shared/types.js";
 import { CONFIG_PATH } from "../shared/paths.js";
@@ -453,7 +454,11 @@ export async function handleTalkApi(
       const parsed = await readJsonBody(req, res);
       if (!parsed.ok) return true;
       const config = context.getConfig();
-      const base = `http://127.0.0.1:${config.gateway?.port || 7777}`;
+      const base = gatewayBaseUrl({ port: config.gateway?.port || 7777, host: config.gateway?.host });
+      const headers = {
+        "Content-Type": "application/json",
+        ...(context.gatewayAuthToken ? { authorization: `Bearer ${context.gatewayAuthToken}` } : {}),
+      };
       // Attachments persist by merging into the talk session's transport_meta;
       // updateSessionMeta wraps the generic updateSession meta writer.
       const attachmentDeps = {
@@ -476,7 +481,7 @@ export async function handleTalkApi(
         spawnChild: async ({ prompt, parentSessionId, promptExcerpt }) => {
           const r = await fetch(`${base}/api/sessions`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ prompt, parentSessionId, promptExcerpt }),
           });
           if (!r.ok) throw new Error(`spawn failed (${r.status})`);
@@ -485,7 +490,7 @@ export async function handleTalkApi(
         continueThread: async (id, message) => {
           const r = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/message`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ message }),
           });
           if (!r.ok) throw new Error(`continue failed (${r.status})`);

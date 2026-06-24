@@ -65,6 +65,24 @@ program
   });
 
 program
+  .command("pair")
+  .description("Create a one-time code for pairing another browser")
+  .option("--json", "Print raw JSON")
+  .action(async (opts: { json?: boolean }) => {
+    const { runPair } = await import("../src/cli/pair.js");
+    await runPair(opts);
+  });
+
+program
+  .command("unpair [deviceId]")
+  .description("List paired browsers or unpair one by id")
+  .option("--json", "Print raw JSON")
+  .action(async (deviceId: string | undefined, opts: { json?: boolean }) => {
+    const { runUnpair } = await import("../src/cli/pair.js");
+    await runUnpair(deviceId, opts);
+  });
+
+program
   .command("limits")
   .description("Show engine rate limits, quota windows, and model capabilities")
   .option("-e, --engine <name>", "Only show one engine")

@@ -52,6 +52,7 @@ import {
 } from "../shared/paths.js";
 import { saveConfigAtomic } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
+import { redactText } from "../shared/redact.js";
 import { getSttStatus, downloadModel, transcribe as sttTranscribe, resolveLanguages, WHISPER_LANGUAGES } from "../stt/stt.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveEffort } from "../shared/effort.js";
@@ -71,6 +72,22 @@ import { readJsonlTail } from "./jsonl-tail.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel, notifyAttachedTalkSessions } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
 import { handleHookPost, isLoopback } from "./hook-endpoint.js";
+import {
+  authenticateGatewayRequest,
+  authCookieHeaders,
+  clearAuthCookieHeaders,
+  consumePairingCode,
+  createAuthSession,
+  createAuthState,
+  currentAuthDeviceId,
+  hasGatewayBearerAuth,
+  issuePairingCode,
+  isLoopbackHost,
+  listAuthSessions,
+  matchesGatewayAuthToken,
+  revokeAuthSession,
+  touchAuthSession,
+} from "./auth.js";
 import { markTranscriptSyncedThrough, scheduleOnLoadTailSync, transcriptEntryText } from "./external-turns.js";
 import { handleTalkApi } from "../talk/routes.js";
 import { getOrchestratorPersona } from "../talk/orchestrator-persona.js";
@@ -88,6 +105,8 @@ import { onboardingNeeded, applyEngineChoice } from "./onboarding-policy.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
+/** Max bytes accepted by public auth helpers. Codes/tokens are tiny. */
+const AUTH_BODY_MAX_BYTES = 16 * 1024;
 const SESSION_LIST_PER_GROUP = 50;
 const BACKGROUND_ACTIVITY_STALE_MS = 5 * 60 * 1000;
 const SUPERSEDED_TURN_META_KEY = "supersededRunningTurnAt";
@@ -121,6 +140,10 @@ export interface ApiContext {
    *  maintained in server.ts from the interactive engine's onBackgroundActivity
    *  callback. lastActivityAt is epoch ms; serializeSession converts to ISO. */
   backgroundActivity?: Map<string, { activeStreams: number; lastActivityAt: number }>;
+  /** Gateway auth token for seamless browser/CLI access when auth is required. */
+  gatewayAuthToken?: string;
+  /** Test-injectable Jinn home for auth device storage. Defaults to shared JINN_HOME. */
+  jinnHome?: string;
 }
 
 function killSessionEngines(context: ApiContext, session: Session, reason: string): void {
@@ -540,6 +563,103 @@ export async function handleApiRequest(
   (res as ResWithEncoding).__acceptEncoding = req.headers["accept-encoding"];
 
   try {
+    const jinnHome = context.jinnHome ?? JINN_HOME;
+
+    // GET /api/auth/state — safe browser boot metadata. Never includes the token.
+    if (method === "GET" && pathname === "/api/auth/state") {
+      const state = createAuthState(context.getConfig(), req, context.gatewayAuthToken, jinnHome);
+      if (state.authenticated) touchAuthSession(jinnHome, req);
+      return json(res, state);
+    }
+
+    // POST /api/auth/bootstrap — loopback/local convenience: set the browser cookie
+    // from a local browser session so daily local use does not require a login form.
+    if (method === "POST" && pathname === "/api/auth/bootstrap") {
+      if (!context.gatewayAuthToken) return json(res, { authRequired: false });
+      if (!isLoopback(req.socket.remoteAddress) || !isLoopbackHost(Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host)) {
+        return json(res, { error: "Bootstrap is loopback-only" }, 403);
+      }
+      const session = createAuthSession(jinnHome, req, { kind: "local" });
+      res.setHeader("Set-Cookie", authCookieHeaders(session.secret, session.device.id));
+      return json(res, { status: "ok", authRequired: true, device: { ...session.device, current: true } });
+    }
+
+    // POST /api/auth/pairing-codes — local authenticated helper for pairing a
+    // second browser. Codes are short-lived, single-use, and only stored hashed.
+    if (method === "POST" && pathname === "/api/auth/pairing-codes") {
+      const parsed = await readJsonBody(req, res, { allowEmpty: true, maxBytes: AUTH_BODY_MAX_BYTES });
+      if (!parsed.ok) return;
+      if (!context.gatewayAuthToken) return json(res, { error: "Gateway auth token is not configured" }, 503);
+      const auth = authenticateGatewayRequest(req, context.gatewayAuthToken, jinnHome);
+      if (!auth.ok) return json(res, { error: auth.reason || "Unauthorized" }, 401);
+      const bearer = hasGatewayBearerAuth(req.headers, context.gatewayAuthToken);
+      const localBrowser = isLoopback(req.socket.remoteAddress)
+        && isLoopbackHost(Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host);
+      if (!bearer && !localBrowser) return json(res, { error: "Pairing codes can only be created locally" }, 403);
+      const issued = issuePairingCode();
+      return json(res, {
+        status: "ok",
+        code: issued.code,
+        expiresAt: new Date(issued.expiresAt).toISOString(),
+        ttlSeconds: Math.floor((issued.expiresAt - Date.now()) / 1000),
+      });
+    }
+
+    // POST /api/auth/pair — exchange a one-time pairing code (or advanced token
+    // fallback) for the HttpOnly browser cookie used by APIs and WebSockets.
+    if (method === "POST" && pathname === "/api/auth/pair") {
+      const parsed = await readJsonBody(req, res, { maxBytes: AUTH_BODY_MAX_BYTES });
+      if (!parsed.ok) return;
+      const body = parsed.body && typeof parsed.body === "object" ? parsed.body as Record<string, unknown> : {};
+      const code = typeof body.code === "string" ? body.code : undefined;
+      const token = typeof body.token === "string" ? body.token : undefined;
+      const pairedWithToken = matchesGatewayAuthToken(token, context.gatewayAuthToken);
+      const ok = consumePairingCode(undefined, code) || pairedWithToken;
+      if (!ok || !context.gatewayAuthToken) return json(res, { error: "Invalid or expired pairing code" }, 401);
+      const session = createAuthSession(jinnHome, req, { kind: pairedWithToken ? "token" : "remote" });
+      res.setHeader("Set-Cookie", authCookieHeaders(session.secret, session.device.id));
+      return json(res, { status: "ok", authRequired: true, device: { ...session.device, current: true } });
+    }
+
+    // GET /api/auth/devices — authenticated browser list for Settings > Pairing.
+    if (method === "GET" && pathname === "/api/auth/devices") {
+      const auth = authenticateGatewayRequest(req, context.gatewayAuthToken, jinnHome);
+      if (!auth.ok) return json(res, { error: auth.reason || "Unauthorized" }, 401);
+      touchAuthSession(jinnHome, req);
+      return json(res, { devices: listAuthSessions(jinnHome, currentAuthDeviceId(req.headers)) });
+    }
+
+    // DELETE /api/auth/devices/:id — shared unpair primitive used by Settings
+    // and the CLI. Deleting the current browser also clears its cookies.
+    if (method === "DELETE" && pathname.startsWith("/api/auth/devices/")) {
+      const auth = authenticateGatewayRequest(req, context.gatewayAuthToken, jinnHome);
+      if (!auth.ok) return json(res, { error: auth.reason || "Unauthorized" }, 401);
+      const rawDeviceId = pathname.slice("/api/auth/devices/".length);
+      let deviceId = "";
+      try {
+        deviceId = decodeURIComponent(rawDeviceId);
+      } catch {
+        return badRequest(res, "Invalid paired browser id");
+      }
+      if (!deviceId) return badRequest(res, "Missing paired browser id");
+      const currentDevice = currentAuthDeviceId(req.headers);
+      const removed = revokeAuthSession(jinnHome, deviceId);
+      if (!removed) return json(res, { error: "Paired browser not found" }, 404);
+      const current = Boolean(currentDevice && currentDevice === deviceId);
+      if (current) res.setHeader("Set-Cookie", clearAuthCookieHeaders());
+      return json(res, { status: "ok", current });
+    }
+
+    // POST /api/auth/logout — forget this browser by clearing the auth cookie.
+    if (method === "POST" && pathname === "/api/auth/logout") {
+      const parsed = await readJsonBody(req, res, { allowEmpty: true, maxBytes: AUTH_BODY_MAX_BYTES });
+      if (!parsed.ok) return;
+      const currentDevice = currentAuthDeviceId(req.headers);
+      if (currentDevice) revokeAuthSession(jinnHome, currentDevice);
+      res.setHeader("Set-Cookie", clearAuthCookieHeaders());
+      return json(res, { status: "ok" });
+    }
+
     // GET /api/status
     if (method === "GET" && pathname === "/api/status") {
       const config = context.getConfig();
@@ -1515,7 +1635,7 @@ export async function handleApiRequest(
       const buf = Buffer.alloc(readSize);
       fs.readSync(fd, buf, 0, readSize, stat.size - readSize);
       fs.closeSync(fd);
-      const allLines = buf.toString("utf-8").split("\n").filter(Boolean);
+      const allLines = redactText(buf.toString("utf-8")).split("\n").filter(Boolean);
       const lines = allLines.slice(-n);
       return json(res, { lines });
     }
@@ -1606,15 +1726,15 @@ export async function handleApiRequest(
       switch (action) {
         case "sendMessage":
           if (!target || !body.text) return badRequest(res, "target and text are required");
-          messageId = (await connector.sendMessage(target, body.text)) as string | undefined;
+          messageId = (await connector.sendMessage(target, redactText(String(body.text)))) as string | undefined;
           break;
         case "replyMessage":
           if (!target || !body.text) return badRequest(res, "target and text are required");
-          messageId = (await connector.replyMessage(target, body.text)) as string | undefined;
+          messageId = (await connector.replyMessage(target, redactText(String(body.text)))) as string | undefined;
           break;
         case "editMessage":
           if (!target || !body.text) return badRequest(res, "target and text are required");
-          await connector.editMessage(target, body.text);
+          await connector.editMessage(target, redactText(String(body.text)));
           break;
         case "addReaction":
           if (!target || !body.emoji) return badRequest(res, "target and emoji are required");
@@ -1648,7 +1768,7 @@ export async function handleApiRequest(
       if (!body.channel || !body.text) return badRequest(res, "channel and text are required");
       await connector.sendMessage(
         { channel: body.channel, thread: body.thread },
-        body.text,
+        redactText(String(body.text)),
       );
       return json(res, { status: "sent" });
     }

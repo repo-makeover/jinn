@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Jinn hook relay. Invoked by Claude Code hooks as: node hook-relay.mjs <jinnSessionId>
-// Reads hook JSON on stdin, POSTs to the gateway's /api/internal/hook. Always exits 0.
+// Reads hook JSON on stdin, POSTs to the gateway's /api/internal/hook.
+// Most relay failures exit 0 so Claude is not interrupted; policy hard-blocks exit non-zero.
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -27,11 +28,16 @@ async function main() {
   try { info = JSON.parse(fs.readFileSync(path.join(JINN_HOME, "gateway.json"), "utf-8")); } catch (err) { logBestEffort(err); return; }
 
   const body = JSON.stringify({ jinnSessionId, hook: payload });
-  await fetch(`http://127.0.0.1:${info.port}/api/internal/hook`, {
+  const response = await fetch(`http://127.0.0.1:${info.port}/api/internal/hook`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-jinn-hook-secret": info.secret },
     body,
-  }).catch((err) => { logBestEffort(err); });
+  }).catch((err) => { logBestEffort(err); return null; });
+  if (response && response.status === 451) {
+    const text = await response.text().catch(() => "Command blocked by Jinn security policy");
+    process.stderr.write(text || "Command blocked by Jinn security policy");
+    process.exitCode = 2;
+  }
 }
 
-main().catch((err) => { logBestEffort(err); }).finally(() => process.exit(0));
+main().catch((err) => { logBestEffort(err); process.exitCode = process.exitCode || 0; });

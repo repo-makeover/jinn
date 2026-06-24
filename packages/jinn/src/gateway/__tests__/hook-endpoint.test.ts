@@ -73,6 +73,16 @@ describe("handleHookPost", () => {
     expect(res.status).toBe(400);
   });
 
+  it("blocks dangerous Bash PreToolUse commands before delivery", () => {
+    const reg = makeReg();
+    const seen: string[] = [];
+    reg.register("s1", (h) => seen.push(h.hook_event_name));
+    const res = handleHookPost({ reg, secret: "sek", remoteAddress: "127.0.0.1" },
+      "sek", { jinnSessionId: "s1", hook: { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "rm -rf /" } } });
+    expect(res.status).toBe(451);
+    expect(seen).toEqual([]);
+  });
+
   it("returns 401 when the server secret is empty (defense-in-depth)", () => {
     const reg = makeReg();
     const res = handleHookPost({ reg, secret: "", remoteAddress: "127.0.0.1" },

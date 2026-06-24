@@ -24,7 +24,8 @@ import { HermesAcpEngine } from "../engines/hermes-acp.js";
 import { HermesInteractiveEngine } from "../engines/hermes-interactive.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { HookRegistry } from "./hook-registry.js";
-import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids } from "./gateway-info.js";
+import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids, staleGatewayPids } from "./gateway-info.js";
+import { authenticateGatewayRequest, authRequiredForRequest, ensureGatewayAuthToken, shouldRequireGatewayAuth, validateGatewayExposure } from "./auth.js";
 import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js";
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
@@ -90,8 +91,9 @@ function setCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): bo
   if (allowed && origin) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   }
   return allowed;
 }
@@ -217,6 +219,10 @@ export async function startGateway(
   // Resolve gateway port/host early so boot artifacts (gateway.json) can record it.
   const port = config.gateway.port || 7777;
   const host = config.gateway.host || "127.0.0.1";
+  const exposure = validateGatewayExposure(config);
+  if (!exposure.ok) throw new Error(exposure.error);
+  const gatewayAuthToken = ensureGatewayAuthToken(JINN_HOME);
+  if (shouldRequireGatewayAuth(config)) logger.info("Gateway auth enabled for privileged API and WebSocket routes");
 
   // Normalize claude engine config (idempotent — loadConfig already normalized it)
   const claudeCfg = normalizeClaudeEngineConfig(config.engines.claude);
@@ -224,13 +230,7 @@ export async function startGateway(
   // Reap any orphaned PTYs from a prior crashed run before writing the fresh gateway.json.
   const oldInfo = readGatewayInfo(GATEWAY_INFO_FILE);
   if (oldInfo) {
-    const pidsToReap = [
-      ...(oldInfo.ptyPids ?? []),
-      // Also try to reap the prior gateway process itself (in case it is still lingering).
-      oldInfo.pid,
-    ];
-    for (const pid of pidsToReap) {
-      if (pid === process.pid) continue; // paranoia: never signal ourselves
+    for (const pid of staleGatewayPids(oldInfo)) {
       try {
         process.kill(pid, "SIGTERM");
         logger.info(`Reaping stale pid ${pid} from prior gateway`);
@@ -245,7 +245,7 @@ export async function startGateway(
   }
 
   // Write gateway connection info (port + hook secret + pid) for hook-relay discovery.
-  const gatewayInfo = writeGatewayInfo(GATEWAY_INFO_FILE, { port, pid: process.pid });
+  const gatewayInfo = writeGatewayInfo(GATEWAY_INFO_FILE, { port, host, pid: process.pid, token: gatewayAuthToken });
 
   // Hook registry — shared by the interactive engine and the internal hook route.
   const hookRegistry = new HookRegistry();
@@ -827,6 +827,7 @@ export async function startGateway(
     ptyViewEngines,
     reloadOrg,
     backgroundActivity,
+    gatewayAuthToken,
   };
 
   // Re-read config.yaml into memory. Used by both the file-watcher (debounced)
@@ -859,6 +860,8 @@ export async function startGateway(
   const webDir = path.resolve(__dirname, "..", "..", "web");
 
   // Create HTTP server
+  const authRequiredNow = (): boolean => shouldRequireGatewayAuth(currentConfig);
+
   const server = http.createServer((req, res) => {
     const url = req.url || "/";
     const corsAllowed = setCorsHeaders(req, res);
@@ -873,6 +876,16 @@ export async function startGateway(
       res.writeHead(204);
       res.end();
       return;
+    }
+
+    const pathname = url.split("?")[0];
+    if (authRequiredNow() && authRequiredForRequest(req.method, pathname)) {
+      const auth = authenticateGatewayRequest(req, gatewayAuthToken, JINN_HOME);
+      if (!auth.ok) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: auth.reason || "Unauthorized" }));
+        return;
+      }
     }
 
     // API routes
@@ -939,6 +952,15 @@ export async function startGateway(
 
   server.on("upgrade", (req, socket, head) => {
     const reqUrl = req.url || "";
+    const pathname = reqUrl.split("?")[0];
+    if (authRequiredNow() && authRequiredForRequest("GET", pathname)) {
+      const auth = authenticateGatewayRequest(req, gatewayAuthToken, JINN_HOME);
+      if (!auth.ok) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+    }
     if (reqUrl === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);

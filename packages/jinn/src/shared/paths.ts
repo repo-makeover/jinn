@@ -42,5 +42,5 @@ export const UPLOADS_DIR = path.join(JINN_HOME, "uploads");
 export const MIGRATIONS_DIR = path.join(JINN_HOME, "migrations");
 export const TEMPLATE_MIGRATIONS_DIR = path.join(TEMPLATE_DIR, "migrations");
 
-/** Path to the global instances registry (always in default ~/.jinn/) */
-export const INSTANCES_REGISTRY = path.join(os.homedir(), ".jinn", "instances.json");
+/** Path to the global multi-instance registry. Override only for isolated tests. */
+export const INSTANCES_REGISTRY = process.env.JINN_INSTANCES_REGISTRY || path.join(os.homedir(), ".jinn", "instances.json");
