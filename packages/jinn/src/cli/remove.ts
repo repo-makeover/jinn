@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { loadInstances, saveInstances } from "./instances.js";
+import { assertSafeManagedInstanceHome, loadInstances, saveInstances } from "./instances.js";
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
@@ -22,6 +22,13 @@ export async function runRemove(name: string, opts: { force?: boolean }): Promis
   }
 
   const instance = instances[index];
+  let safeHome: string;
+  try {
+    safeHome = assertSafeManagedInstanceHome(instance);
+  } catch (err) {
+    console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
 
   // Check if running
   const pidFile = `${instance.home}/gateway.pid`;
@@ -40,13 +47,13 @@ export async function runRemove(name: string, opts: { force?: boolean }): Promis
   instances.splice(index, 1);
   saveInstances(instances);
 
-  if (opts.force && fs.existsSync(instance.home)) {
-    fs.rmSync(instance.home, { recursive: true, force: true });
-    console.log(`${GREEN}Instance "${name}" removed.${RESET} Home directory ${DIM}${instance.home}${RESET} deleted.`);
+  if (opts.force && fs.existsSync(safeHome)) {
+    fs.rmSync(safeHome, { recursive: true, force: true });
+    console.log(`${GREEN}Instance "${name}" removed.${RESET} Home directory ${DIM}${safeHome}${RESET} deleted.`);
   } else {
     console.log(`${GREEN}Instance "${name}" removed from registry.${RESET}`);
-    if (fs.existsSync(instance.home)) {
-      console.log(`  ${YELLOW}Note:${RESET} Home directory ${DIM}${instance.home}${RESET} still exists. Use --force to delete it.`);
+    if (fs.existsSync(safeHome)) {
+      console.log(`  ${YELLOW}Note:${RESET} Home directory ${DIM}${safeHome}${RESET} still exists. Use --force to delete it.`);
     }
   }
 }

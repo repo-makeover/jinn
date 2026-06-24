@@ -126,11 +126,42 @@ describe("OrchestrationRuntime continuation dispatch", () => {
       resumed.push({ taskId: continuation.taskId, allocationId: allocation.allocationId });
     });
 
-    const result = runtime.retryFailedLiveContinuation("task-3", "coord-3");
+    const result = await runtime.retryFailedLiveContinuation("task-3", "coord-3");
 
     expect(result).toMatchObject({ ok: true, state: "dispatching" });
     await waitFor(() => resumed.length === 1);
     expect(resumed[0]).toMatchObject({ taskId: "task-3" });
+    runtime.close();
+  });
+
+  it("applies live headroom before retrying a failed continuation", async () => {
+    const runtime = new OrchestrationRuntime({
+      config: config(),
+      dbPath,
+      startReaper: false,
+      jinnConfig: jinnConfig(dbPath),
+      headroomFilter: async (workers) => ({
+        allowed: [],
+        rejected: workers.map((worker) => ({
+          worker,
+          headroom: { ok: false, provider: worker.provider, reason: "usage_exhausted" },
+        })),
+      }),
+    });
+    runtime.queueLiveContinuation(continuation("task-headroom-retry", "coord-headroom-retry", {
+      state: "failed",
+      lastError: "forced engine failure",
+    }));
+    const resumed: Array<{ taskId: string; allocationId: string }> = [];
+    runtime.setResumeQueuedRunHandler(async ({ continuation, allocation }) => {
+      resumed.push({ taskId: continuation.taskId, allocationId: allocation.allocationId });
+    });
+
+    const result = await runtime.retryFailedLiveContinuation("task-headroom-retry", "coord-headroom-retry");
+
+    expect(result).toMatchObject({ ok: true, state: "blocked_resource" });
+    expect(runtime.listLeases()).toEqual([]);
+    expect(resumed).toEqual([]);
     runtime.close();
   });
 

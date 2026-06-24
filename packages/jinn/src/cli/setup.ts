@@ -22,6 +22,7 @@ import {
 } from "../shared/paths.js";
 import { initDb } from "../sessions/registry.js";
 import { getPackageVersion } from "../shared/version.js";
+import { assertSafeDestructiveHome } from "./instances.js";
 import { SKILLS_NPX_SPEC } from "./skills.js";
 
 const GREEN = "\x1b[32m";
@@ -339,9 +340,10 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   console.log("\nJinn Setup\n");
 
   if (opts?.force && fs.existsSync(JINN_HOME)) {
-    console.log(`  ${YELLOW}[force]${RESET} Removing ${JINN_HOME}...`);
-    fs.rmSync(JINN_HOME, { recursive: true, force: true });
-    console.log(`  ${GREEN}[ok]${RESET} Removed ${JINN_HOME}\n`);
+    const safeHome = assertSafeDestructiveHome(JINN_HOME);
+    console.log(`  ${YELLOW}[force]${RESET} Removing ${safeHome}...`);
+    fs.rmSync(safeHome, { recursive: true, force: true });
+    console.log(`  ${GREEN}[ok]${RESET} Removed ${safeHome}\n`);
   }
 
   // 1. Check Node.js version

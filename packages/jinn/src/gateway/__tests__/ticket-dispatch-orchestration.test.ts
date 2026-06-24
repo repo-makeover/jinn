@@ -55,7 +55,7 @@ describe("ticket dispatch orchestration bridge", () => {
     const telemetry = await import("../../orchestration/telemetry.js");
     const { context, runtime } = await makeContext();
 
-    const result = dispatchTicket(
+    const result = await dispatchTicket(
       "software-delivery",
       "ticket-1",
       { source: "manual", routeToManager: false },
@@ -118,19 +118,19 @@ describe("ticket dispatch orchestration bridge", () => {
     const registry = await import("../../sessions/registry.js");
     const { context, runtime } = await makeContext();
 
-    expect(() => dispatchTicket(
+    await expect(dispatchTicket(
       "software-delivery",
       "ticket-1",
       { source: "manual", routeToManager: false },
       { context, orgDir: orgDir(), now: () => Date.parse("2026-06-24T10:00:00.000Z") },
-    )).toThrow("injected board write failure");
+    )).rejects.toThrow("injected board write failure");
 
     expect(runtime.listLeases()).toEqual([expect.objectContaining({ state: "released" })]);
     expect(readBoard()[0].status).toBe("todo");
     expect(dispatchWebSessionRun).not.toHaveBeenCalled();
     const failedSession = registry.listSessions()[0];
 
-    const retry = dispatchTicket(
+    const retry = await dispatchTicket(
       "software-delivery",
       "ticket-1",
       { source: "manual", routeToManager: false },
@@ -157,13 +157,13 @@ describe("ticket dispatch orchestration bridge", () => {
     const { dispatchTicket } = await import("../ticket-dispatch.js");
     const { context } = await makeContext();
 
-    const first = dispatchTicket(
+    const first = await dispatchTicket(
       "software-delivery",
       "ticket-1",
       { source: "board-worker", routeToManager: true },
       { context, orgDir: orgDir(), now: () => Date.parse("2026-06-24T10:00:00.000Z") },
     );
-    const second = dispatchTicket(
+    const second = await dispatchTicket(
       "software-delivery",
       "ticket-2",
       { source: "board-worker", routeToManager: true },
@@ -185,7 +185,7 @@ describe("ticket dispatch orchestration bridge", () => {
     const { dispatchTicket } = await import("../ticket-dispatch.js");
     const context = makeBareContext({ orchestration: { enabled: true } });
 
-    const result = dispatchTicket(
+    const result = await dispatchTicket(
       "software-delivery",
       "ticket-1",
       { source: "board-worker", routeToManager: true },
@@ -196,24 +196,56 @@ describe("ticket dispatch orchestration bridge", () => {
     expect(dispatchWebSessionRun).not.toHaveBeenCalled();
     expect(readBoard()[0].status).toBe("todo");
   });
+
+  it("does not create a manual-dispatch lease when the exact worker lacks live headroom", async () => {
+    seedOrg([ticket("ticket-1", "worker")]);
+    const dispatchWebSessionRun = vi.fn();
+    vi.doMock("../api/session-dispatch.js", () => ({ dispatchWebSessionRun }));
+    const { dispatchTicket } = await import("../ticket-dispatch.js");
+    const { context, runtime } = await makeContext({
+      headroomFilter: async (workers) => ({
+        allowed: [],
+        rejected: workers.map((worker) => ({
+          worker,
+          headroom: { ok: false, provider: worker.provider, reason: "usage_exhausted" },
+        })),
+      }),
+    });
+
+    const result = await dispatchTicket(
+      "software-delivery",
+      "ticket-1",
+      { source: "manual", routeToManager: false },
+      { context, orgDir: orgDir(), now: () => Date.parse("2026-06-24T10:00:00.000Z") },
+    );
+
+    expect(result).toEqual({ ok: false, reason: "orchestration-busy" });
+    expect(runtime.listLeases()).toEqual([]);
+    expect(dispatchWebSessionRun).not.toHaveBeenCalled();
+    expect(readBoard()[0].status).toBe("todo");
+  });
 });
 
-async function makeContext() {
+async function makeContext(
+  opts: Pick<ConstructorParameters<typeof OrchestrationRuntime>[0], "headroomFilter"> = {},
+) {
   const { scanOrg } = await import("../org.js");
   const { OrchestrationRuntime } = await import("../../orchestration/runtime.js");
   const { augmentOrchestrationConfigWithOrgWorkers } = await import("../org-worker-bridge.js");
   const augmented = augmentOrchestrationConfigWithOrgWorkers(baseConfig(), scanOrg());
-  const runtime = new OrchestrationRuntime({
-    config: augmented.config,
-    dbPath: path.join(tmpHome, "orchestration.db"),
-    startReaper: false,
-  });
-  runtimes.push(runtime);
   const config = {
     gateway: {},
     engines: { default: "mock", mock: { bin: "mock", model: "mock" } },
     orchestration: { enabled: true, dbPath: path.join(tmpHome, "orchestration.db"), leaseDurationMs: 60_000 },
   };
+  const runtime = new OrchestrationRuntime({
+    config: augmented.config,
+    dbPath: path.join(tmpHome, "orchestration.db"),
+    startReaper: false,
+    jinnConfig: config as any,
+    ...opts,
+  });
+  runtimes.push(runtime);
   return { runtime, context: makeBareContext(config, runtime) };
 }
 

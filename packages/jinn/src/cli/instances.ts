@@ -27,6 +27,39 @@ export function saveInstances(instances: Instance[]): void {
   });
 }
 
+export function assertSafeDestructiveHome(home: string, label = "Jinn home"): string {
+  const resolved = path.resolve(home);
+  const root = path.parse(resolved).root;
+  const userHome = path.resolve(os.homedir());
+
+  if (resolved === root) {
+    throw new Error(`${label} resolves to filesystem root: ${resolved}`);
+  }
+  if (resolved === userHome) {
+    throw new Error(`${label} resolves to the user home directory: ${resolved}`);
+  }
+  if (resolved === path.resolve(process.cwd())) {
+    throw new Error(`${label} resolves to the current working directory: ${resolved}`);
+  }
+  try {
+    if (fs.lstatSync(resolved).isSymbolicLink()) {
+      throw new Error(`${label} is a symlink and will not be deleted: ${resolved}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("will not be deleted")) throw err;
+  }
+  return resolved;
+}
+
+export function assertSafeManagedInstanceHome(instance: Instance): string {
+  const resolved = assertSafeDestructiveHome(instance.home, `Instance "${instance.name}" home`);
+  const expected = path.join(os.homedir(), `.${instance.name}`);
+  if (resolved !== path.resolve(expected)) {
+    throw new Error(`Instance "${instance.name}" home is outside its managed path: ${resolved}`);
+  }
+  return resolved;
+}
+
 /** Find the next available port starting from 7777, skipping ports already used by instances. */
 export function nextAvailablePort(instances: Instance[]): number {
   const usedPorts = new Set(instances.map((i) => i.port));

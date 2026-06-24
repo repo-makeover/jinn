@@ -102,12 +102,12 @@ describe("ticket dispatch idempotency", () => {
       },
     } as any;
 
-    expect(() => dispatchTicket(
+    await expect(dispatchTicket(
       "software-delivery",
       "ticket-1",
       { source: "board", routeToManager: false },
       { context, orgDir: orgDir(), now: () => Date.parse("2026-06-23T10:00:00.000Z") },
-    )).toThrow("injected board write failure");
+    )).rejects.toThrow("injected board write failure");
 
     const sessionsAfterFailure = registry.listSessions();
     expect(sessionsAfterFailure).toHaveLength(1);
@@ -122,7 +122,7 @@ describe("ticket dispatch idempotency", () => {
     expect(readBoard()[0].sessionId).toBeUndefined();
     expect(dispatchWebSessionRun).not.toHaveBeenCalled();
 
-    const retry = dispatchTicket(
+    const retry = await dispatchTicket(
       "software-delivery",
       "ticket-1",
       { source: "board", routeToManager: false },

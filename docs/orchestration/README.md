@@ -12,7 +12,8 @@ explicit OpenAI/Anthropic lane runs with deterministic comparison reports and a
 human selection gate. Board-originated ticket dispatch is scheduler-aware when
 `orchestration.enabled: true`. Durable JSONL telemetry, `jinn scheduler stats`,
 and optional empirical-routing tie-breaks are implemented. Dashboard controls
-remain a later milestone.
+are implemented as an observe-first operations view with only existing safe
+actions: failed-continuation retry and explicit dual-lane winner selection.
 
 ## Intent
 
@@ -151,18 +152,25 @@ skippedLines }`. Malformed JSONL lines are skipped and counted.
 Gateway routes under `/api/orchestration/` inherit the existing `/api/*`
 gateway token gate.
 
+- `GET /api/orchestration/status`
 - `GET /api/orchestration/workers`
 - `GET /api/orchestration/leases`
 - `GET /api/orchestration/queue`
 - `GET /api/orchestration/allocations`
 - `GET /api/orchestration/continuations`
+- `GET /api/orchestration/telemetry/summary`
+- `GET /api/orchestration/worktrees`
+- `GET /api/orchestration/dual-lane`
 - `POST /api/orchestration/continuations/retry`
 - `POST /api/orchestration/run`
 - `POST /api/orchestration/dual-lane/select`
 
-The GET routes return the configured workers and scheduler state. When the
-daemon runtime exists, they read that shared instance; otherwise they use the
-old no-daemon/test fallback that opens a scheduler for read-only inspection.
+The GET routes return status, configured workers, scheduler state, bounded
+telemetry summaries, managed worktree summaries, and sanitized dual-lane
+manifest summaries. They do not return prompts, raw model output, raw diffs,
+headers, secrets, or env values. When the daemon runtime exists, scheduler-state
+routes read that shared instance; otherwise they use the old no-daemon/test
+fallback that opens a scheduler for read-only inspection.
 
 `POST /api/orchestration/run` executes `single_worker`,
 `single_worker_with_review`, and `dual_lane` tasks through the existing session
@@ -180,6 +188,26 @@ persist a durable continuation and auto-resume on later resource availability.
 Failed continuations remain inspectable and can be retried explicitly through
 the continuation routes. Manual retry does not target still-queued
 continuations, which continue to resume only on scheduler resource events.
+Manual failed-continuation retry applies live engine headroom before creating a
+new lease. Orchestration-backed ticket dispatch also applies live headroom before
+exact-worker allocation for both manual and board-worker dispatch.
+
+## Web Dashboard
+
+`/orchestration` is an observe-first operations dashboard. It reads the API
+routes above and shows runtime status, workers, running leases, blocked queue
+items, durable continuations, dual-lane selection manifests, managed worktrees,
+and telemetry/cost summaries.
+
+The only mutating dashboard actions are:
+
+- retry a continuation whose state is exactly `failed`;
+- select `openai` or `anthropic` for a dual-lane manifest whose state is exactly
+  `selection_required`.
+
+Pause-queue and cancel-lease controls are intentionally absent. Lease/session
+cancellation needs a separate safety slice because releasing a lease without
+interrupting the owned engine turn can leave ambiguous in-flight work.
 
 ## Org Board Dispatch
 

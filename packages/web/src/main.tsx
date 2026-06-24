@@ -11,6 +11,7 @@ const ApprovalsPage = lazy(() => import('./routes/approvals/page'))
 const ArchivePage = lazy(() => import('./routes/archive/page'))
 const LogsPage = lazy(() => import('./routes/logs/page'))
 const LimitsPage = lazy(() => import('./routes/limits/page'))
+const OrchestrationPage = lazy(() => import('./routes/orchestration/page'))
 const OrgPage = lazy(() => import('./routes/org/page'))
 const SettingsPage = lazy(() => import('./routes/settings/page'))
 const SkillsPage = lazy(() => import('./routes/skills/page'))
@@ -32,6 +33,7 @@ function App() {
             <Route path="/archive" element={<ArchivePage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/limits" element={<LimitsPage />} />
+            <Route path="/orchestration" element={<OrchestrationPage />} />
             <Route path="/org" element={<OrgPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/skills" element={<SkillsPage />} />

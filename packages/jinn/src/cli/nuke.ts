@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import readline from "node:readline";
-import { loadInstances, saveInstances } from "./instances.js";
+import { assertSafeManagedInstanceHome, loadInstances, saveInstances } from "./instances.js";
 
 const RED = "\x1b[31m";
 const YELLOW = "\x1b[33m";
@@ -75,6 +75,13 @@ export async function runNuke(name?: string): Promise<void> {
   }
 
   const instance = allInstances[index];
+  let safeHome: string;
+  try {
+    safeHome = assertSafeManagedInstanceHome(instance);
+  } catch (err) {
+    console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
   const homeDisplay = instance.home.replace(process.env.HOME || process.env.USERPROFILE || "", "~");
 
   // Check if running and stop it
@@ -122,8 +129,8 @@ export async function runNuke(name?: string): Promise<void> {
   saveInstances(allInstances);
 
   // Delete home directory
-  if (fs.existsSync(instance.home)) {
-    fs.rmSync(instance.home, { recursive: true, force: true });
+  if (fs.existsSync(safeHome)) {
+    fs.rmSync(safeHome, { recursive: true, force: true });
   }
 
   console.log(`\n${RED}Instance "${name}" has been nuked.${RESET} ${DIM}${homeDisplay}${RESET} deleted.`);

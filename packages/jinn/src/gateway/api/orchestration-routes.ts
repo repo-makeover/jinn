@@ -1,22 +1,33 @@
 import fs from "node:fs";
 import { selectDualLaneWinner } from "../../orchestration/dual-lane.js";
+import { listDualLaneManifests } from "../../orchestration/dual-lane-state.js";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import { loadDefaultOrchestrationConfig, loadOrchestrationConfig } from "../../orchestration/config.js";
 import { liveRunModeSchema, runOrchestrationTask } from "../../orchestration/run-mode.js";
+import type { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { formatZodError } from "../../orchestration/schemas.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import { OrchestrationStore } from "../../orchestration/store.js";
 import { ORCH_DB } from "../../shared/paths.js";
+import { readOrchestrationTelemetry, summarizeOrchestrationTelemetry } from "../../orchestration/telemetry.js";
+import { listManagedWorktrees, resolveWorktreeOptions } from "../../orchestration/worktree.js";
 import { readJsonBody } from "../http-helpers.js";
 import type { ApiContext } from "./context.js";
 import { json } from "./responses.js";
 
+const DASHBOARD_TELEMETRY_MAX_BYTES = 1_000_000;
+const DASHBOARD_TELEMETRY_MAX_RECORDS = 5_000;
+
 const ROUTES = new Set([
+  "/api/orchestration/status",
   "/api/orchestration/workers",
   "/api/orchestration/leases",
   "/api/orchestration/queue",
   "/api/orchestration/allocations",
   "/api/orchestration/continuations",
+  "/api/orchestration/telemetry/summary",
+  "/api/orchestration/worktrees",
+  "/api/orchestration/dual-lane",
   "/api/orchestration/continuations/retry",
   "/api/orchestration/dual-lane/select",
   "/api/orchestration/run",
@@ -83,7 +94,7 @@ export async function handleOrchestrationRoutes(
       json(res, { error: "taskId and coordinatorId are required" }, 400);
       return true;
     }
-    const result = runtime.retryFailedLiveContinuation(body.taskId, body.coordinatorId);
+    const result = await runtime.retryFailedLiveContinuation(body.taskId, body.coordinatorId);
     if (!result.ok) {
       json(res, { error: result.message }, result.reason === "not_found" ? 404 : 409);
       return true;
@@ -126,6 +137,46 @@ export async function handleOrchestrationRoutes(
 
   try {
     const runtime = context.orchestration?.runtime;
+    if (pathname === "/api/orchestration/status") {
+      json(res, buildStatusPayload(context, runtime));
+      return true;
+    }
+    if (pathname === "/api/orchestration/telemetry/summary") {
+      const read = readOrchestrationTelemetry(context.orchestration?.telemetryLogPath, {
+        maxBytes: DASHBOARD_TELEMETRY_MAX_BYTES,
+        maxRecords: DASHBOARD_TELEMETRY_MAX_RECORDS,
+      });
+      json(res, {
+        maxBytes: DASHBOARD_TELEMETRY_MAX_BYTES,
+        maxRecords: DASHBOARD_TELEMETRY_MAX_RECORDS,
+        summary: summarizeOrchestrationTelemetry(read),
+      });
+      return true;
+    }
+    if (pathname === "/api/orchestration/worktrees") {
+      const root = context.orchestration?.worktreeRoot
+        ?? runtime?.getWorktreeOptions().root
+        ?? resolveWorktreeOptions(context.getConfig()).root;
+      json(res, {
+        root,
+        worktrees: listManagedWorktrees(root).map((worktree) => ({
+          taskId: worktree.taskId,
+          lane: worktree.lane,
+          path: worktree.path,
+          baseCwd: worktree.baseCwd,
+          gitRoot: worktree.gitRoot,
+          branch: worktree.branch,
+          createdAt: worktree.createdAt,
+        })),
+      });
+      return true;
+    }
+    if (pathname === "/api/orchestration/dual-lane") {
+      json(res, {
+        manifests: listDualLaneManifests(context.orchestration?.dualLaneStateDir).map(summarizeDualLaneManifest),
+      });
+      return true;
+    }
     if (runtime) {
       if (pathname === "/api/orchestration/workers") json(res, { workers: runtime.listWorkers() });
       else if (pathname === "/api/orchestration/leases") json(res, { leases: runtime.listLeases() });
@@ -181,4 +232,81 @@ export async function handleOrchestrationRoutes(
     json(res, { error: "orchestration observe failed", detail: err instanceof Error ? err.message : String(err) }, 500);
     return true;
   }
+}
+
+function buildStatusPayload(context: ApiContext, runtime: OrchestrationRuntime | undefined) {
+  const enabled = context.getConfig().orchestration?.enabled === true;
+  const counts = runtime
+    ? {
+      workers: runtime.listWorkers().length,
+      runningLeases: runtime.listLeases().filter((lease) => lease.state === "running").length,
+      queueItems: runtime.listQueue().length,
+      allocations: runtime.listAllocations().length,
+      continuations: runtime.listLiveContinuations().length,
+      activeWork: runtime.hasActiveWork(),
+    }
+    : {
+      workers: context.orchestration?.config?.workers.length ?? 0,
+      runningLeases: 0,
+      queueItems: 0,
+      allocations: 0,
+      continuations: 0,
+      activeWork: false,
+    };
+  return {
+    enabled,
+    runtimeBound: Boolean(runtime),
+    degraded: enabled && !runtime,
+    disabledReason: enabled ? null : "orchestration is disabled",
+    degradedReason: enabled && !runtime ? "orchestration runtime is not bound; observe routes may use durable fallback state" : null,
+    counts,
+  };
+}
+
+type DualLaneManifestSummaryInput = ReturnType<typeof listDualLaneManifests>[number];
+
+function summarizeDualLaneManifest(manifest: DualLaneManifestSummaryInput) {
+  return {
+    taskId: manifest.taskId,
+    coordinatorId: manifest.coordinatorId,
+    state: manifest.state,
+    createdAt: manifest.createdAt,
+    updatedAt: manifest.updatedAt,
+    baseCwd: manifest.baseCwd,
+    selectedLane: manifest.selectedLane ?? null,
+    archivedLane: manifest.archivedLane ?? null,
+    lanes: manifest.lanes.map((lane) => ({
+      id: lane.id,
+      role: lane.role,
+      family: lane.family,
+      workerId: lane.workerId,
+      leaseId: lane.leaseId,
+      sessionId: lane.session.sessionId,
+      sessionStatus: lane.session.status,
+      sessionError: lane.session.error ?? null,
+      worktreePath: lane.worktree.path,
+      archive: lane.archive
+        ? {
+          diffPath: lane.archive.diffPath,
+          metadataPath: lane.archive.metadataPath,
+          archivedAt: lane.archive.archivedAt,
+        }
+        : null,
+    })),
+    comparisonReport: {
+      taskId: manifest.comparisonReport.taskId,
+      generatedAt: manifest.comparisonReport.generatedAt,
+      laneSummaries: manifest.comparisonReport.laneSummaries.map((summary) => ({
+        laneId: summary.laneId,
+        changedFiles: summary.changedFiles,
+        addedLines: summary.addedLines,
+        removedLines: summary.removedLines,
+        status: summary.status,
+        error: summary.error,
+      })),
+      commonFiles: manifest.comparisonReport.commonFiles,
+      uniqueFiles: manifest.comparisonReport.uniqueFiles,
+      majorDifferences: manifest.comparisonReport.majorDifferences,
+    },
+  };
 }

@@ -219,7 +219,7 @@ export class OrchestrationRuntime {
     return this.store.listLiveContinuations();
   }
 
-  retryFailedLiveContinuation(taskId: string, coordinatorId: string): RetryLiveContinuationResult {
+  async retryFailedLiveContinuation(taskId: string, coordinatorId: string): Promise<RetryLiveContinuationResult> {
     const current = this.store.getLiveContinuation(taskId, coordinatorId);
     if (!current) {
       return {
@@ -248,7 +248,9 @@ export class OrchestrationRuntime {
       };
     }
 
-    const result = this.scheduler.requestAllocation(buildContinuationRequest(queued, this.config));
+    const result = this.scheduler.requestAllocation(buildContinuationRequest(queued, this.config), {
+      allowedWorkerIds: await this.resolveLiveHeadroomWorkerIds(),
+    });
     if (!result.ok) {
       const blocked = this.store.getLiveContinuation(taskId, coordinatorId) ?? queued;
       return {

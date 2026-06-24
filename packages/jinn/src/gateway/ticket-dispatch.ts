@@ -160,14 +160,14 @@ function createLeaseGuard(runtime: OrchestrationRuntime, lease: Lease, worker: W
   };
 }
 
-function allocateBoardDispatchLease(
+async function allocateBoardDispatchLease(
   department: string,
   ticket: BoardTicket,
   employee: Employee,
   opts: DispatchTicketOptions,
   deps: DispatchTicketDeps,
   sessionKey: string,
-): BoardDispatchLeaseGuard | { reason: Extract<DispatchTicketFailureReason, "orchestration-unavailable" | "orchestration-worker-unmapped" | "orchestration-busy"> } | undefined {
+): Promise<BoardDispatchLeaseGuard | { reason: Extract<DispatchTicketFailureReason, "orchestration-unavailable" | "orchestration-worker-unmapped" | "orchestration-busy"> } | undefined> {
   if (deps.context.getConfig().orchestration?.enabled !== true) return undefined;
   const runtime = deps.context.orchestration?.runtime;
   if (!runtime) return { reason: "orchestration-unavailable" };
@@ -188,7 +188,7 @@ function allocateBoardDispatchLease(
   };
   let result;
   try {
-    result = runtime.tryAllocationNow(request);
+    result = await runtime.tryAllocationNowWithLiveHeadroom(request);
   } catch (err) {
     logger.warn(
       `[ticket-dispatch] orchestration allocation failed for ${department}/${ticket.id}: ${err instanceof Error ? err.message : String(err)}`,
@@ -210,12 +210,12 @@ function allocateBoardDispatchLease(
   return createLeaseGuard(runtime, lease, worker);
 }
 
-export function dispatchTicket(
+export async function dispatchTicket(
   department: string,
   ticketId: string,
   opts: DispatchTicketOptions,
   deps: DispatchTicketDeps,
-): DispatchTicketResult {
+): Promise<DispatchTicketResult> {
   let tickets: BoardTicket[] | null;
   try {
     tickets = readBoardArray(deps.orgDir, department);
@@ -263,7 +263,7 @@ export function dispatchTicket(
   if (!engine) {
     throw new Error(`Engine "${employee.engine}" not available for ${employee.name}`);
   }
-  const leaseGuard = allocateBoardDispatchLease(department, ticket, employee, opts, deps, sessionKey);
+  const leaseGuard = await allocateBoardDispatchLease(department, ticket, employee, opts, deps, sessionKey);
   if (leaseGuard && "reason" in leaseGuard) {
     logger.info(`[ticket-dispatch] skipped ${department}/${ticketId}: ${leaseGuard.reason}`);
     return { ok: false, reason: leaseGuard.reason };

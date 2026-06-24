@@ -9,6 +9,8 @@ import { handleOrchestrationRoutes } from "../api/orchestration-routes.js";
 import { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import type { OrchestrationConfig } from "../../orchestration/types.js";
+import { appendOrchestrationTelemetry } from "../../orchestration/telemetry.js";
+import { WORKTREE_MARKER, type WorktreeHandle } from "../../orchestration/worktree.js";
 
 let tmpDir: string;
 let dbPath: string;
@@ -72,6 +74,123 @@ describe("GET /api/orchestration/*", () => {
     expect(workers.body).toMatchObject({ workers: [{ id: "runtimeWorker" }] });
     expect(leases.body).toMatchObject({ leases: [{ taskId: "runtime-task" }] });
     expect(continuations.body).toMatchObject({ continuations: [{ taskId: "runtime-task", state: "failed" }] });
+  });
+
+  it("returns dashboard status without executing work", async () => {
+    const runtime = new OrchestrationRuntime({
+      config: config(),
+      dbPath,
+      startReaper: false,
+    });
+    const ctx = makeCtx(config());
+    ctx.orchestration = { runtime };
+    const allocated = runtime.requestAllocation(request("status-task", "status-coord"));
+    expect(allocated.ok).toBe(true);
+
+    const status = await get("/api/orchestration/status", ctx);
+
+    expect(status.body).toMatchObject({
+      enabled: true,
+      runtimeBound: true,
+      degraded: false,
+      counts: {
+        workers: 1,
+        runningLeases: 1,
+        activeWork: true,
+      },
+    });
+    runtime.close();
+  });
+
+  it("returns bounded telemetry summaries without raw records", async () => {
+    const telemetryLogPath = path.join(tmpDir, "telemetry.jsonl");
+    appendOrchestrationTelemetry({
+      task_id: "telemetry-task",
+      coordinator_id: "telemetry-coord",
+      session_id: "session-1",
+      lease_id: "lease-1",
+      worker_id: "codexSenior",
+      provider: "openai",
+      family: "openai",
+      model: "gpt",
+      role: "seniorImplementer",
+      mode: "single_worker",
+      source: "orchestration",
+      cost: 0.25,
+      latency_ms: 1200,
+      tokens: 2000,
+      files_changed: 2,
+      tests_added: 1,
+      tests_passed: true,
+      review_blockers: 0,
+      human_edits: 0,
+      regressions: 0,
+      disposition: "completed",
+      timestamp: "2026-06-24T10:00:00.000Z",
+    }, { logPath: telemetryLogPath, fsync: false });
+    const ctx = makeCtx(config());
+    ctx.orchestration = { ...ctx.orchestration, telemetryLogPath };
+
+    const telemetry = await get("/api/orchestration/telemetry/summary", ctx);
+
+    expect(telemetry.body).toMatchObject({
+      maxRecords: 5000,
+      summary: {
+        totals: { count: 1, totalCost: 0.25 },
+        byWorker: { codexSenior: { count: 1 } },
+      },
+    });
+    expect(telemetry.body.records).toBeUndefined();
+  });
+
+  it("lists managed worktrees without diffs or prompt content", async () => {
+    const worktreeRoot = path.join(tmpDir, "worktrees");
+    const worktreePath = path.join(worktreeRoot, "jinn-worktree-task-openai");
+    const handle: WorktreeHandle = {
+      taskId: "worktree-task",
+      lane: "openai",
+      path: worktreePath,
+      baseCwd: tmpDir,
+      gitRoot: tmpDir,
+      branch: "jinn/worktree-task/openai/1",
+      createdAt: "2026-06-24T10:00:00.000Z",
+    };
+    fs.mkdirSync(worktreePath, { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, WORKTREE_MARKER), JSON.stringify(handle));
+    const ctx = makeCtx(config());
+    ctx.orchestration = { ...ctx.orchestration, worktreeRoot };
+
+    const worktrees = await get("/api/orchestration/worktrees", ctx);
+
+    expect(worktrees.body).toEqual({
+      root: worktreeRoot,
+      worktrees: [handle],
+    });
+    expect(JSON.stringify(worktrees.body)).not.toContain("diff --git");
+  });
+
+  it("lists dual-lane manifests without prompt hashes or raw diffs", async () => {
+    const dualLaneStateDir = path.join(tmpDir, "dual-lane");
+    const taskDir = path.join(dualLaneStateDir, "dual-task");
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(path.join(taskDir, "manifest.json"), JSON.stringify(dualLaneManifest(), null, 2));
+    const ctx = makeCtx(config());
+    ctx.orchestration = { ...ctx.orchestration, dualLaneStateDir };
+
+    const dualLane = await get("/api/orchestration/dual-lane", ctx);
+
+    expect(dualLane.body.manifests).toMatchObject([{
+      taskId: "dual-task",
+      state: "selection_required",
+      selectedLane: null,
+      lanes: [{ id: "openai", sessionStatus: "completed" }, { id: "anthropic", sessionStatus: "completed" }],
+      comparisonReport: {
+        laneSummaries: [{ laneId: "openai", changedFiles: ["src/a.ts"] }, { laneId: "anthropic", changedFiles: ["src/b.ts"] }],
+      },
+    }]);
+    const raw = JSON.stringify(dualLane.body);
+    expect(raw).not.toContain("promptHash");
+    expect(raw).not.toContain("diff --git");
   });
 
   it("returns review-policy explanations for blocked run requests", async () => {
@@ -351,5 +470,70 @@ function sameFamilyReviewConfig(): OrchestrationConfig {
       },
     ],
     quotas: { providers: {}, families: {} },
+  };
+}
+
+function dualLaneManifest() {
+  const worktree = (lane: "openai" | "anthropic"): WorktreeHandle => ({
+    taskId: "dual-task",
+    lane,
+    path: path.join(tmpDir, "worktrees", lane),
+    baseCwd: tmpDir,
+    gitRoot: tmpDir,
+    branch: `jinn/dual-task/${lane}/1`,
+    createdAt: "2026-06-24T10:00:00.000Z",
+  });
+  const session = (lane: "openai" | "anthropic") => ({
+    sessionId: `${lane}-session`,
+    leaseId: `${lane}-lease`,
+    workerId: `${lane}-worker`,
+    provider: lane,
+    family: lane,
+    model: null,
+    role: `${lane}Implementer`,
+    status: "completed",
+    error: null,
+    cwd: path.join(tmpDir, "worktrees", lane),
+    workspaceMode: "implementation_worktree",
+  });
+  return {
+    taskId: "dual-task",
+    coordinatorId: "dual-coord",
+    state: "selection_required",
+    createdAt: "2026-06-24T10:00:00.000Z",
+    updatedAt: "2026-06-24T10:01:00.000Z",
+    baseCwd: tmpDir,
+    promptHash: "do-not-expose",
+    lanes: [
+      {
+        id: "openai",
+        role: "openaiImplementer",
+        family: "openai",
+        workerId: "openai-worker",
+        leaseId: "openai-lease",
+        session: session("openai"),
+        worktree: worktree("openai"),
+      },
+      {
+        id: "anthropic",
+        role: "anthropicImplementer",
+        family: "anthropic",
+        workerId: "anthropic-worker",
+        leaseId: "anthropic-lease",
+        session: session("anthropic"),
+        worktree: worktree("anthropic"),
+      },
+    ],
+    comparisonReport: {
+      taskId: "dual-task",
+      generatedAt: "2026-06-24T10:02:00.000Z",
+      laneSummaries: [
+        { laneId: "openai", changedFiles: ["src/a.ts"], addedLines: 2, removedLines: 0, status: "completed", error: null },
+        { laneId: "anthropic", changedFiles: ["src/b.ts"], addedLines: 1, removedLines: 1, status: "completed", error: null },
+      ],
+      commonFiles: [],
+      uniqueFiles: { openai: ["src/a.ts"], anthropic: ["src/b.ts"] },
+      majorDifferences: ["Different files changed"],
+    },
   };
 }

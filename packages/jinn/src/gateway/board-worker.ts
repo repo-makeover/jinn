@@ -185,7 +185,7 @@ export function startBoardWorker(deps: BoardWorkerDeps): () => void {
       const selected = selectBoardWorkerCandidate(candidates);
       if (!selected) return;
 
-      const result = dispatchTicket(
+      const result = await dispatchTicket(
         selected.department,
         selected.ticket.id,
         { source: "board-worker", routeToManager: true },

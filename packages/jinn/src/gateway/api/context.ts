@@ -43,5 +43,8 @@ export interface ApiContext {
     configDir?: string;
     dbPath?: string;
     now?: () => Date;
+    telemetryLogPath?: string;
+    worktreeRoot?: string;
+    dualLaneStateDir?: string;
   };
 }

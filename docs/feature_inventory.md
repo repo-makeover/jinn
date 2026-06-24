@@ -30,6 +30,19 @@
 - Running board-linked tickets preserve active `sessionId` and `source` metadata across
   fresh saves so a stale layout cannot silently move a dispatched ticket back to `todo`.
 
+### Matrix orchestration operations dashboard
+- `packages/web/src/routes/orchestration/page.tsx`
+- `packages/web/src/lib/orchestration-api.ts`
+- `/orchestration` shows real orchestration status, workers, running leases,
+  blocked queue items, durable continuations, dual-lane selection manifests,
+  managed worktrees, and telemetry/cost summaries.
+- Dashboard actions are deliberately limited to existing safe backend actions:
+  retry a continuation only when it is `failed`, and select a winner only for a
+  dual-lane manifest in `selection_required`.
+- Disabled action controls explain the state boundary. Pause queue, cancel lease,
+  automatic patch integration, raw diff viewing, and raw prompt/model-output
+  viewing are not exposed.
+
 ## CLI
 
 ### Provider-neutral matrix orchestration dry-runs and observe surfaces
@@ -64,17 +77,25 @@
   - `orchestration.empiricalRouting: true` lets runtime startup use historical telemetry scores as a deterministic worker tie-break after hard constraints and explicit tier/cost preferences.
   - Runtime reload/shutdown paths preserve active orchestration work, replay deferred org/config refresh after drain, recover stale `dispatching` continuations, and release owned leases before closing persistent state.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
-  - Dashboard controls and automatic patch integration are later milestones.
+  - The `/orchestration` dashboard is observe-first and exposes only failed-continuation retry plus explicit dual-lane selection. Pause queue, cancel lease, raw diff viewing, and automatic patch integration remain deferred.
 
 ## API
 
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
+- `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded
+  reason, and active counts.
 - `GET /api/orchestration/workers` returns configured workers.
 - `GET /api/orchestration/leases` returns existing durable orchestration leases.
 - `GET /api/orchestration/queue` returns blocked-resource queue items, including missing roles and resume triggers.
 - `GET /api/orchestration/allocations` returns existing durable allocations.
 - `GET /api/orchestration/continuations` returns durable blocked/failed continuation records.
+- `GET /api/orchestration/telemetry/summary` returns bounded, summarized
+  telemetry without raw records.
+- `GET /api/orchestration/worktrees` returns managed worktree metadata without
+  diffs.
+- `GET /api/orchestration/dual-lane` returns sanitized dual-lane manifest
+  summaries without prompt hashes or raw diffs.
 - `POST /api/orchestration/continuations/retry` re-attempts a failed continuation through the live runtime.
 - `POST /api/orchestration/run` executes `single_worker`, `single_worker_with_review`, and `dual_lane` tasks through the daemon runtime.
 - `POST /api/orchestration/dual-lane/select` selects a completed dual-lane winner and archives/discards the loser lane.
@@ -85,7 +106,7 @@
   - GET routes observe state only; `POST /api/orchestration/run` is the only M5 mutating route.
   - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, passes isolated worktree cwd values to eligible implementation sessions, hands reviewers diff bundles, and releases leases on terminal paths.
   - If no orchestration runtime exists, state routes retain the no-daemon/test fallback; the run route fails instead of opening its own live scheduler.
-  - No dashboard controls, cancel API, or automatic dual-lane patch application are wired yet.
+  - Dashboard controls are limited to retrying failed continuations and selecting dual-lane winners. No pause queue, cancel API, raw diff view, or automatic dual-lane patch application is wired yet.
 
 ### Kanban ticket dispatch scheduler bridge
 - `packages/jinn/src/gateway/org-worker-bridge.ts`
@@ -93,6 +114,8 @@
 - `packages/jinn/src/gateway/board-worker.ts`
 - `packages/jinn/src/gateway/orchestration-runtime-factory.ts`
 - When `orchestration.enabled: true`, manual ticket dispatch and the background board worker allocate an exact in-memory org-derived scheduler role before creating/running the board-linked session.
+- Exact-worker dispatch applies live engine headroom before creating the lease,
+  so unavailable, exhausted, or below-threshold engines do not get leased.
 - A busy exact worker returns `orchestration-busy` and leaves the ticket in `todo`; no orchestration queue item is created because the board is already the durable backlog.
 - Missing runtime or missing org-worker mapping returns `orchestration-unavailable` or `orchestration-worker-unmapped` and does not fall back to legacy direct dispatch.
 - The manual dispatch route maps scheduler-specific failures to HTTP `409`.

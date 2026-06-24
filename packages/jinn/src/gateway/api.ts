@@ -1158,7 +1158,7 @@ export async function handleApiRequest(
     // POST /api/org/departments/:name/tickets/:id/dispatch
     params = matchRoute("/api/org/departments/:name/tickets/:id/dispatch", pathname);
     if (method === "POST" && params) {
-      const result = dispatchTicket(
+      const result = await dispatchTicket(
         params.name,
         params.id,
         { source: "manual", routeToManager: false },

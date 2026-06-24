@@ -10,6 +10,7 @@ import {
   Zap,
   Settings,
   ShieldCheck,
+  Network,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
@@ -27,6 +28,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/approvals", label: "Approvals", icon: ShieldCheck },
   { href: "/archive", label: "Archive", icon: Archive },
   { href: "/cron", label: "Cron", icon: Clock },
+  { href: "/orchestration", label: "Orchestration", icon: Network },
   { href: "/limits", label: "Limits", icon: Gauge },
   { href: "/logs", label: "Activity", icon: Activity },
   { href: "/skills", label: "Skills", icon: Zap },
