@@ -30,6 +30,10 @@ export async function handleOrchestrationRoutes(
       json(res, { error: "Method not allowed" }, 405);
       return true;
     }
+    if (context.getConfig().orchestration?.enabled !== true) {
+      json(res, { error: "orchestration is disabled" }, 409);
+      return true;
+    }
     if (!req) {
       json(res, { error: "orchestration run requires an HTTP request body" }, 400);
       return true;
@@ -43,7 +47,7 @@ export async function handleOrchestrationRoutes(
         mode: typeof body?.mode === "string" ? liveRunModeSchema.parse(body.mode) : undefined,
         task: body?.task,
       });
-      json(res, result, result.ok ? 200 : 409);
+      json(res, result, result.ok || result.state === "failed" ? 200 : 409);
     } catch (err) {
       json(res, { error: "orchestration run failed", detail: formatZodError(err) }, 400);
     }

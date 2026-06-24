@@ -25,6 +25,15 @@ export interface WorktreeHandle {
   createdAt: string;
 }
 
+export interface ReviewBundleHandle {
+  path: string;
+  patchPath: string;
+  metadataPath: string;
+  sourceCwd: string;
+  sourceWorktreePath?: string;
+  createdAt: string;
+}
+
 export type WorktreePreparation =
   | { mode: "implementation_worktree"; cwd: string; handle: WorktreeHandle }
   | { mode: "shared"; cwd: string; downgradeReason: WorktreeDowngradeReason };
@@ -106,18 +115,7 @@ export function createImplementationWorktree(opts: {
 }
 
 export function diffWorktree(handle: WorktreeHandle): string {
-  const diff = runGit(["diff", "HEAD", "--"], handle.path);
-  const untracked = runGit(["ls-files", "--others", "--exclude-standard"], handle.path)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && line !== WORKTREE_MARKER);
-  if (untracked.length === 0) return diff;
-  return [
-    diff.trimEnd(),
-    "Untracked files:",
-    ...untracked.map((file) => `  ${file}`),
-    "",
-  ].filter((line, index) => index !== 0 || line.length > 0).join("\n");
+  return diffGitWorkspace(handle.path, [WORKTREE_MARKER]);
 }
 
 export function diffWorktreeByTaskLane(root: string, taskId: string, lane: string): string {
@@ -146,10 +144,44 @@ export function cleanupWorktreeByTaskLane(root: string, taskId: string, lane: st
   return cleanupWorktree(readManagedWorktree(worktreePath));
 }
 
-export function setWorktreeReadOnly(handle: WorktreeHandle, readOnly: boolean): void {
-  if (!fs.existsSync(handle.path)) return;
-  if (readOnly) makeReadOnly(handle.path);
-  else makeWritable(handle.path);
+export function createReviewBundle(opts: {
+  taskId: string;
+  role: string;
+  workerId: string;
+  sourceCwd: string;
+  sourceWorktree?: WorktreeHandle;
+  now?: () => Date;
+}): ReviewBundleHandle {
+  const bundleRoot = path.join(JINN_HOME, "tmp", "orchestration-review");
+  fs.mkdirSync(bundleRoot, { recursive: true });
+  const bundlePath = fs.mkdtempSync(path.join(bundleRoot, `review-${safeSegment(opts.taskId)}-${safeSegment(opts.role)}-`));
+  const createdAt = (opts.now?.() ?? new Date()).toISOString();
+  const patchPath = path.join(bundlePath, "patch.diff");
+  const metadataPath = path.join(bundlePath, "metadata.json");
+  const patch = opts.sourceWorktree
+    ? diffWorktree(opts.sourceWorktree)
+    : diffGitWorkspace(opts.sourceCwd);
+  fs.writeFileSync(patchPath, patch);
+  fs.writeFileSync(metadataPath, JSON.stringify({
+    taskId: opts.taskId,
+    role: opts.role,
+    workerId: opts.workerId,
+    createdAt,
+    sourceCwd: opts.sourceCwd,
+    sourceWorktreePath: opts.sourceWorktree?.path ?? null,
+  }, null, 2));
+  return {
+    path: bundlePath,
+    patchPath,
+    metadataPath,
+    sourceCwd: opts.sourceCwd,
+    sourceWorktreePath: opts.sourceWorktree?.path,
+    createdAt,
+  };
+}
+
+export function cleanupReviewBundle(handle: ReviewBundleHandle): void {
+  fs.rmSync(handle.path, { recursive: true, force: true });
 }
 
 export function reapOrphanedWorktrees(root: string, activeTaskIds: Set<string>): WorktreeHandle[] {
@@ -255,13 +287,20 @@ function makeWritable(target: string): void {
   }
 }
 
-function makeReadOnly(target: string): void {
-  if (!fs.existsSync(target)) return;
-  const stat = fs.lstatSync(target);
-  if (stat.isSymbolicLink()) return;
-  fs.chmodSync(target, stat.mode & ~0o222);
-  if (!stat.isDirectory()) return;
-  for (const entry of fs.readdirSync(target)) {
-    makeReadOnly(path.join(target, entry));
-  }
+function diffGitWorkspace(cwd: string, excludedUntracked: string[] = []): string {
+  const gitRoot = findGitRoot(cwd);
+  if (!gitRoot) return "";
+  const diff = runGit(["diff", "HEAD", "--"], cwd);
+  const ignored = new Set(excludedUntracked);
+  const untracked = runGit(["ls-files", "--others", "--exclude-standard"], cwd)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !ignored.has(line));
+  if (untracked.length === 0) return diff;
+  return [
+    diff.trimEnd(),
+    "Untracked files:",
+    ...untracked.map((file) => `  ${file}`),
+    "",
+  ].filter((line, index) => index !== 0 || line.length > 0).join("\n");
 }

@@ -74,6 +74,48 @@ describe("OrchestrationStore", () => {
     expect(store.loadSnapshot()).toEqual(seed);
     store.close();
   });
+
+  it("persists, claims, and updates live run continuations across reopen", () => {
+    const store = OrchestrationStore.open(dbPath);
+    store.upsertLiveContinuation({
+      taskId: "task-live",
+      coordinatorId: "coord-live",
+      mode: "single_worker",
+      state: "queued",
+      task: {
+        taskId: "task-live",
+        coordinatorId: "coord-live",
+        priority: "normal",
+        leaseDurationMs: 60_000,
+        prompt: "Resume me later",
+      },
+      enqueuedAt: fixedNow.toISOString(),
+      updatedAt: fixedNow.toISOString(),
+      retryCount: 0,
+    });
+    store.close();
+
+    const reopened = OrchestrationStore.open(dbPath);
+    expect(reopened.listLiveContinuations()).toMatchObject([{ taskId: "task-live", state: "queued", retryCount: 0 }]);
+    const claimed = reopened.claimQueuedLiveContinuation("task-live", "coord-live", {
+      updatedAt: new Date("2026-06-23T12:01:00.000Z").toISOString(),
+      allocationId: "alloc-live",
+    });
+    expect(claimed).toMatchObject({
+      state: "dispatching",
+      retryCount: 1,
+      allocationId: "alloc-live",
+    });
+    reopened.markLiveContinuationState("task-live", "coord-live", "completed", {
+      updatedAt: new Date("2026-06-23T12:02:00.000Z").toISOString(),
+      allocationId: "alloc-live",
+    });
+    expect(reopened.getLiveContinuation("task-live", "coord-live")).toMatchObject({
+      state: "completed",
+      allocationId: "alloc-live",
+    });
+    reopened.close();
+  });
 });
 
 function exampleSnapshot(): SchedulerSnapshot {

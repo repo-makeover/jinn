@@ -1,0 +1,75 @@
+import { describe, expect, it, vi } from "vitest";
+import { swapOrchestrationRuntime } from "../orchestration-runtime-manager.js";
+import type { ApiContext } from "../api/context.js";
+import type { JinnConfig } from "../../shared/types.js";
+
+describe("swapOrchestrationRuntime", () => {
+  it("binds a newly constructed runtime and closes the old one", () => {
+    const oldRuntime = runtime(false);
+    const nextRuntime = runtime(false);
+    const ctx = makeContext(oldRuntime.instance);
+
+    const bound = swapOrchestrationRuntime(ctx, config(true), oldRuntime.instance, () => nextRuntime.instance);
+
+    expect(bound).toBe(nextRuntime.instance);
+    expect(ctx.orchestration?.runtime).toBe(nextRuntime.instance);
+    expect(oldRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the current runtime bound in drain mode when orchestration is disabled with active work", () => {
+    const current = runtime(true);
+    const ctx = makeContext(current.instance);
+
+    const bound = swapOrchestrationRuntime(ctx, config(false), current.instance, () => undefined);
+
+    expect(bound).toBe(current.instance);
+    expect(ctx.orchestration?.runtime).toBe(current.instance);
+    expect(current.close).not.toHaveBeenCalled();
+  });
+
+  it("unbinds and closes the runtime when orchestration is disabled and there is no active work", () => {
+    const current = runtime(false);
+    const ctx = makeContext(current.instance);
+
+    const bound = swapOrchestrationRuntime(ctx, config(false), current.instance, () => undefined);
+
+    expect(bound).toBeUndefined();
+    expect(ctx.orchestration?.runtime).toBeUndefined();
+    expect(current.close).toHaveBeenCalledOnce();
+  });
+});
+
+function makeContext(runtime?: unknown): ApiContext {
+  return {
+    config: config(true),
+    getConfig: () => config(true),
+    sessionManager: {} as any,
+    startTime: Date.now(),
+    emit: vi.fn(),
+    connectors: new Map(),
+    orchestration: runtime ? { runtime: runtime as any } : undefined,
+  } as ApiContext;
+}
+
+function config(enabled: boolean): JinnConfig {
+  return {
+    gateway: { port: 7777, host: "127.0.0.1" },
+    engines: {
+      default: "claude",
+      claude: { bin: "claude", model: "opus" },
+      codex: { bin: "codex", model: "gpt" },
+    },
+    connectors: {},
+    logging: { file: false, stdout: false, level: "error" },
+    orchestration: { enabled },
+  } as JinnConfig;
+}
+
+function runtime(active: boolean) {
+  const close = vi.fn();
+  const instance = {
+    close,
+    hasActiveWork: () => active,
+  };
+  return { instance: instance as any, close };
+}

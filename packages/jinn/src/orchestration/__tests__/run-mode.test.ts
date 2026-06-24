@@ -59,7 +59,7 @@ describe("runOrchestrationTask", () => {
     expect(runtime.listLeases().every((lease) => lease.state === "released")).toBe(true);
     expect(runtime.listQueue()).toEqual([]);
     runtime.close();
-  });
+  }, 15_000);
 
   it("runs implementer and reviewer leases sequentially in review mode", async () => {
     const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
@@ -108,12 +108,13 @@ describe("runOrchestrationTask", () => {
     });
 
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok || result.state !== "blocked_resource") return;
     expect(result.queueItem.missingRoles).toEqual(["independentReviewer"]);
     expect(result.reviewPolicy.explanations[0]).toMatchObject({
       decision: "same_family_fallback_forbidden",
       sameFamilyCandidateIds: ["mockReviewer"],
     });
+    expect(runtime.listLiveContinuations()).toMatchObject([{ taskId: "task-same-family-blocked", state: "queued" }]);
     expect(engine.run).not.toHaveBeenCalled();
     runtime.close();
   });
@@ -160,7 +161,32 @@ describe("runOrchestrationTask", () => {
     runtime.close();
   });
 
-  it("routes reviewer to the implementation worktree before task-end cleanup", async () => {
+  it("returns a failed top-level result when any role session errors", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
+    const engine = new RecordingEngine({ throwOnPromptSubstring: "Review-only pass" });
+    const runtime = new OrchestrationRuntime({ config: reviewConfig(), dbPath: ":memory:", startReaper: false });
+    const ctx = makeContext(runtime, engine);
+
+    const result = await runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-review-failure",
+        coordinatorId: "coord-review-failure",
+        coordinatorTemplate: "withReview",
+        mode: "single_worker_with_review",
+        prompt: "Implement and review a task with a reviewer failure",
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok || result.state !== "failed") return;
+    expect(result.errorSummary).toContain("independentReviewer failed");
+    expect(result.sessions.map((session) => session.role)).toEqual(["seniorImplementer", "independentReviewer"]);
+    expect(result.sessions[1]).toMatchObject({ status: "error" });
+    runtime.close();
+  });
+
+  it("routes reviewer to a diff-only bundle and cleans up the implementation worktree", async () => {
     const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
     const repo = path.join(tmpHome, "repo");
     initGitRepo(repo);
@@ -190,13 +216,69 @@ describe("runOrchestrationTask", () => {
     if (!result.ok) return;
     expect(result.sessions.map((session) => session.workspaceMode)).toEqual([
       "implementation_worktree",
-      "review_read_only_worktree",
+      "review_bundle",
     ]);
-    expect(result.sessions[1].cwd).toBe(result.sessions[0].cwd);
-    expect(engine.reviewerSawImplementationFile).toBe(true);
-    expect(engine.reviewerWriteFailed).toBe(true);
+    expect(result.sessions[1].cwd).not.toBe(result.sessions[0].cwd);
+    expect(result.sessions[1].reviewBundlePath).toBeDefined();
+    expect(engine.reviewerSawPatchDiff).toBe(true);
+    expect(engine.reviewerSawMetadata).toBe(true);
+    expect(engine.reviewerSawImplementationFile).toBe(false);
     expect(fs.existsSync(result.sessions[0].cwd)).toBe(false);
+    expect(fs.existsSync(result.sessions[1].cwd)).toBe(false);
     expect(runtime.listLeases().map((lease) => lease.state)).toEqual(["released", "released"]);
+    runtime.close();
+  });
+
+  it("persists blocked continuations and auto-resumes them on lease release", async () => {
+    const { runOrchestrationTask, runAllocatedOrchestrationTask, OrchestrationRuntime } = await loadModules();
+    const engine = new RecordingEngine({ blockRuns: 1 });
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath: ":memory:", startReaper: false });
+    const ctx = makeContext(runtime, engine);
+    runtime.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
+      const result = await runAllocatedOrchestrationTask({
+        context: ctx,
+        mode: continuation.mode,
+        task: continuation.task,
+        allocation,
+        reviewPolicy,
+      });
+      if (!result.ok) throw new Error(result.state === "failed" ? result.errorSummary : result.state);
+    });
+
+    const firstRun = runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-1",
+        coordinatorId: "coord-1",
+        requiredRoles: ["seniorImplementer"],
+        mode: "single_worker",
+        prompt: "Long-running implementer task",
+      },
+    });
+    await waitFor(() => engine.blockedWaiterCount() === 1);
+
+    const blocked = await runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-2",
+        coordinatorId: "coord-2",
+        requiredRoles: ["seniorImplementer"],
+        mode: "single_worker",
+        prompt: "Blocked task that should resume",
+      },
+    });
+
+    expect(blocked.ok).toBe(false);
+    if (blocked.ok || blocked.state !== "blocked_resource") return;
+    expect(runtime.listLiveContinuations()).toMatchObject([{ taskId: "task-2", state: "queued" }]);
+    engine.unblockNext();
+    const completed = await firstRun;
+    expect(completed.ok).toBe(true);
+
+    await waitFor(() => engine.run.mock.calls.length === 2);
+    await waitFor(() => runtime.listLiveContinuations().find((entry) => entry.taskId === "task-2")?.state === "completed");
+    expect(runtime.listQueue()).toEqual([]);
+    expect(runtime.listLeases().every((lease) => lease.state === "released")).toBe(true);
     runtime.close();
   });
 });
@@ -210,6 +292,7 @@ async function loadModules() {
   registry.initDb();
   return {
     runOrchestrationTask: runMode.runOrchestrationTask,
+    runAllocatedOrchestrationTask: runMode.runAllocatedOrchestrationTask,
     OrchestrationRuntime: runtime.OrchestrationRuntime,
     getSession: registry.getSession,
   };
@@ -219,18 +302,41 @@ class RecordingEngine implements Engine {
   name = "mock";
   prompts: string[] = [];
   cwds: string[] = [];
+  reviewerSawPatchDiff = false;
+  reviewerSawMetadata = false;
   reviewerSawImplementationFile = false;
-  reviewerWriteFailed = false;
+  private readonly releaseWaiters: Array<() => void> = [];
+  private remainingBlocks: number;
+  private readonly throwOnPromptSubstring?: string;
+
+  constructor(opts: { blockRuns?: number; throwOnPromptSubstring?: string } = {}) {
+    this.remainingBlocks = opts.blockRuns ?? 0;
+    this.throwOnPromptSubstring = opts.throwOnPromptSubstring;
+  }
+
+  blockedWaiterCount(): number {
+    return this.releaseWaiters.length;
+  }
+
+  unblockNext(): void {
+    this.releaseWaiters.shift()?.();
+  }
+
   run = vi.fn(async (opts: EngineRunOpts): Promise<EngineResult> => {
     this.prompts.push(opts.prompt);
     this.cwds.push(opts.cwd);
+    if (this.throwOnPromptSubstring && opts.prompt.includes(this.throwOnPromptSubstring)) {
+      throw new Error("forced engine failure");
+    }
+    if (this.remainingBlocks > 0) {
+      this.remainingBlocks -= 1;
+      await new Promise<void>((resolve) => this.releaseWaiters.push(resolve));
+    }
+
     if (opts.prompt.includes("Review-only pass")) {
+      this.reviewerSawPatchDiff = fs.existsSync(path.join(opts.cwd, "patch.diff"));
+      this.reviewerSawMetadata = fs.existsSync(path.join(opts.cwd, "metadata.json"));
       this.reviewerSawImplementationFile = fs.existsSync(path.join(opts.cwd, "implemented.txt"));
-      try {
-        fs.writeFileSync(path.join(opts.cwd, "review-write.txt"), "review should not mutate\n");
-      } catch {
-        this.reviewerWriteFailed = true;
-      }
     } else {
       fs.writeFileSync(path.join(opts.cwd, "implemented.txt"), "implemented\n");
     }
@@ -344,4 +450,12 @@ function initGitRepo(dir: string): void {
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error("timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }

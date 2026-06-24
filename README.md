@@ -209,7 +209,7 @@ Every department also has a **board**. Assign tickets to employees, watch work m
 - **📎 Attachments** - drag, drop, or paste files and images into chat; passed through to the engine and rendered inline.
 - **🎙️ Voice** - push-to-talk dictation (local Whisper) and a hands-free "Talk" mission-control mode with streaming TTS.
 - **💰 Cost governance** - per-employee monthly budgets and per-session cost/time caps.
-- **🔄 Hot-reload & self-modification** - edit config, cron, org, or skills and the daemon reloads live; agents can edit those files too.
+- **🔄 Hot-reload & self-modification** - edit config, cron, org, or skills and the daemon reloads live; orchestration runtime settings now swap on config reload, and disabling orchestration drains existing work while rejecting new runs.
 - **🔗 MCP support** - connect engines to any MCP server, with per-employee allow-lists.
 
 ---

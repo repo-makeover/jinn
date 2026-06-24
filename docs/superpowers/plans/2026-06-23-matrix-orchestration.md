@@ -262,9 +262,10 @@ in pure simulation). **Mitigates R8 and avoids dispatching into a wall.**
 When an implementation worker's `workspacePolicy === "isolated_worktree"` **and** the
 resolved task base `cwd` is inside a git repo: create
 `git worktree add <root>/jinn-<taskId>-<lane>` on a fresh branch; pass that path as the
-implementation turn `cwd`. Reviewer roles read the implementation lane's worktree in
-read-only mode (`git -C <worktree> diff` plus a non-mutating session contract), never a
-separate mutable reviewer worktree unless a later repair role explicitly grants it.
+implementation turn `cwd`. Reviewer roles consume a diff-only review bundle generated
+from the implementation lane (`patch.diff` plus metadata, outside the implementation
+tree), never a separate mutable reviewer worktree unless a later repair role explicitly
+grants it.
 Worker leases still release promptly, but the implementation worktree survives until
 the task/lane lifecycle is complete so the reviewer can inspect the actual patch. Task
 completion performs cleanup, and orphan cleanup plugs into the existing
@@ -432,25 +433,25 @@ the source brief.
   review-only, but read-only worktree enforcement is M6.
 - **M5 carry-forward → resolved in M6:** `runOrchestrationTask` previously passed the same
   optional task `cwd` to every lease turn and released each lease independently. M6 added
-  per-task lane→worktree state so the reviewer targets the implementation lane's
-  worktree read-only, and the implementation worktree is cleaned up at task/lane end
+  per-task lane→worktree state so the reviewer targets a diff-only bundle generated from
+  the implementation lane, and the implementation worktree is cleaned up at task/lane end
   rather than on implementer lease release. It resolves the effective base `cwd` before
   git detection because task `cwd` is optional, and narrows accepted `workspacePolicy`
   values to `shared`, `read_only`, and `isolated_worktree`.
 
 ### M6 — Worktree execution (complete, 2026-06-23)
 
-- **Goal:** isolated implementation worktrees plus read-only reviewer access per D5.
+- **Goal:** isolated implementation worktrees plus diff-only reviewer access per D5.
 - **Delivered:** `orchestration/worktree.ts` creates/diffs/cleans/reaps managed git
   worktrees with a marker file, git-only downgrade, path safety, and `maxWorktrees`.
   `run-mode.ts` resolves the effective base `cwd`, keeps per-task lane→worktree state,
-  sends reviewers to the implementation worktree in read-only mode, releases leases
+  sends reviewers a generated diff bundle instead of the implementation worktree, releases leases
   promptly, and cleans task worktrees at task end. `OrchestrationRuntime` reuses its
   existing boot+timer reaper to remove abandoned managed worktrees whose task no longer
   has a running lease. `jinn worktree create|diff|cleanup <task> [--lane <name>]` exposes
   focused operator helpers.
 - **Validation:** focused tests cover create/diff/cleanup, non-git downgrade, max
-  worktree enforcement, runtime reaping, reviewer cwd/read-only routing, and CLI
+  worktree enforcement, runtime reaping, reviewer diff-bundle routing, and CLI
   worktree helpers.
 - **Remaining boundary:** integration worktrees, dual-lane selection, durable patch
   artifacts, dashboard controls, and board-worker routing remain later milestones.
@@ -659,7 +660,7 @@ high-priority queued behind normal resumes first · atomic allocation prevents d
   rate-limit fallback, late recovery, deleted session); observe routes read the single boot
   instance (no stale second-handle read).
 - **M6:** implementer session receives the isolated worktree `cwd`; reviewer session
-  receives that same worktree `cwd` read-only; implementer lease release does not remove
+  receives a diff-only bundle derived from that worktree; implementer lease release does not remove
   the worktree before review; task-end cleanup removes completed worktrees; runtime
   reaper finds + removes abandoned worktrees; non-git cwd downgrade logged; max-worktrees
   bound enforced.
@@ -813,7 +814,7 @@ Milestone-specific emphasis to append to the template:
   scheduler, not the observe-only planner. Add `orchestration.enabled` (off by default);
   construct the single scheduler at boot and route the M4 observe endpoints through it."
 - **M6:** "git-only implementation worktrees, lane isolation enforced, reviewer reads
-  the implementation worktree read-only, worktree survives implementer lease release,
+  a diff-only bundle generated from the implementation worktree, worktree survives implementer lease release,
   orphan reaper uses the runtime boot+timer loop, non-git cwd downgrades with a log line."
 - **M8:** "Only start once M1–M7 are stable; identical brief to both lanes; human
   selection by default; archive the loser."

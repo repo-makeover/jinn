@@ -7,20 +7,21 @@ import { dispatchWebSessionRun } from "../gateway/api/session-dispatch.js";
 import { buildCoordinatorTaskBrief, coordinatorModeSchema, type CoordinatorMode } from "./coordinator.js";
 import { isReviewerRole } from "./cross-family.js";
 import { toLeaseTransportMeta } from "./lease-meta.js";
+import { LIVE_RUN_MODES, type LiveRunContinuationRecord, type LiveRunMode, type LiveRunTaskPayload } from "./live-run.js";
 import { resolveLiveLeaseDurationMs } from "./runtime.js";
 import type { Allocation, Lease, QueueItem, ReviewPolicyExplanation, ReviewPolicySummary, RoleDefinition, Worker } from "./types.js";
 import {
+  cleanupReviewBundle,
   cleanupWorktree,
   createImplementationWorktree,
+  createReviewBundle,
   resolveTaskBaseCwd,
-  setWorktreeReadOnly,
+  type ReviewBundleHandle,
   type WorktreeHandle,
-  type WorktreePreparation,
   type WorktreeOptions,
 } from "./worktree.js";
 
-export const liveRunModeSchema = z.enum(["single_worker", "single_worker_with_review"]);
-export type LiveRunMode = z.infer<typeof liveRunModeSchema>;
+export const liveRunModeSchema = z.enum(LIVE_RUN_MODES);
 
 const liveRunTaskSchema = z.object({
   taskId: z.string().min(1),
@@ -45,8 +46,17 @@ export interface RunOrchestrationTaskOptions {
   mode?: LiveRunMode;
 }
 
+export interface RunAllocatedOrchestrationTaskOptions {
+  context: ApiContext;
+  mode: LiveRunMode;
+  task: LiveRunTaskPayload;
+  allocation: Allocation;
+  reviewPolicy: ReviewPolicySummary;
+}
+
 export type OrchestrationRunTaskResult =
   | { ok: false; state: "blocked_resource"; mode: LiveRunMode; queueItem: QueueItem; reviewPolicy: ReviewPolicySummary }
+  | { ok: false; state: "failed"; mode: LiveRunMode; allocation: Allocation; sessions: OrchestrationRunSession[]; reviewPolicy: ReviewPolicySummary; errorSummary: string }
   | { ok: true; state: "completed"; mode: LiveRunMode; allocation: Allocation; sessions: OrchestrationRunSession[]; reviewPolicy: ReviewPolicySummary };
 
 export interface OrchestrationRunSession {
@@ -59,45 +69,68 @@ export interface OrchestrationRunSession {
   cwd: string;
   workspaceMode: LeaseWorkspace["mode"];
   worktreePath?: string;
+  reviewBundlePath?: string;
   reviewPolicy?: ReviewPolicyExplanation;
 }
 
-type LeaseWorkspace =
+type ImplementationWorkspace =
   | { mode: "shared"; cwd: string; downgradeReason?: string }
-  | { mode: "implementation_worktree"; cwd: string; handle: WorktreeHandle }
-  | { mode: "review_read_only_worktree"; cwd: string; handle: WorktreeHandle };
+  | { mode: "implementation_worktree"; cwd: string; handle: WorktreeHandle };
+
+type LeaseWorkspace =
+  | ImplementationWorkspace
+  | { mode: "review_bundle"; cwd: string; bundle: ReviewBundleHandle; worktreePath?: string };
 
 export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): Promise<OrchestrationRunTaskResult> {
+  if (opts.context.getConfig().orchestration?.enabled !== true) {
+    throw new Error("orchestration runtime is disabled in config");
+  }
   const runtime = opts.context.orchestration?.runtime;
   if (!runtime) throw new Error("orchestration runtime is not enabled");
 
   const parsed = liveRunTaskSchema.parse(opts.task);
   const mode = opts.mode ?? liveRunModeSchema.parse(parsed.mode);
-
-  const requestInput = {
-    taskId: parsed.taskId,
-    coordinatorId: parsed.coordinatorId,
-    coordinatorTemplate: parsed.coordinatorTemplate,
-    template: parsed.template,
-    requiredRoles: parsed.requiredRoles,
-    optionalRoles: parsed.optionalRoles,
-    priority: parsed.priority,
-    leaseDurationMs: parsed.leaseDurationMs ?? resolveLiveLeaseDurationMs(opts.context.getConfig()),
+  const task = normalizeTaskPayload(parsed, opts.context);
+  const brief = buildCoordinatorTaskBrief({
+    taskId: task.taskId,
+    coordinatorId: task.coordinatorId,
+    coordinatorTemplate: task.coordinatorTemplate,
+    requiredRoles: task.requiredRoles,
+    optionalRoles: task.optionalRoles,
+    priority: task.priority,
+    leaseDurationMs: task.leaseDurationMs,
     mode: mode as CoordinatorMode,
-  };
-  const brief = buildCoordinatorTaskBrief(requestInput, runtime.config);
+  }, runtime.config);
   const allocationResult = runtime.requestAllocation(brief.request);
   if (!allocationResult.ok) {
+    runtime.queueLiveContinuation(buildContinuationRecord(runtime.getLiveContinuation(task.taskId, task.coordinatorId), task, mode));
     return { ok: false, state: "blocked_resource", mode, queueItem: allocationResult.queueItem, reviewPolicy: allocationResult.reviewPolicy };
   }
 
+  runtime.deleteLiveContinuation(task.taskId, task.coordinatorId);
+  return runAllocatedOrchestrationTask({
+    context: opts.context,
+    mode,
+    task,
+    allocation: allocationResult.allocation,
+    reviewPolicy: allocationResult.reviewPolicy,
+  });
+}
+
+export async function runAllocatedOrchestrationTask(opts: RunAllocatedOrchestrationTaskOptions): Promise<OrchestrationRunTaskResult> {
+  const runtime = opts.context.orchestration?.runtime;
+  if (!runtime) throw new Error("orchestration runtime is not enabled");
+
   const sessions: OrchestrationRunSession[] = [];
-  const baseCwd = resolveTaskBaseCwd(parsed.cwd, opts.context.getConfig());
+  const baseCwd = resolveTaskBaseCwd(opts.task.cwd, opts.context.getConfig());
   const laneWorktrees = new Map<string, WorktreeHandle>();
+  const reviewBundles: ReviewBundleHandle[] = [];
   const roleDefinitions = new Map(runtime.config.roles.map((role) => [role.id, role]));
-  const reviewPolicyByRole = new Map(allocationResult.reviewPolicy.explanations.map((explanation) => [explanation.role, explanation]));
+  const reviewPolicyByRole = new Map(opts.reviewPolicy.explanations.map((explanation) => [explanation.role, explanation]));
+  let implementationWorkspace: ImplementationWorkspace | undefined;
+
   try {
-    for (const lease of allocationResult.allocation.leases) {
+    for (const lease of opts.allocation.leases) {
       const worker = requireWorker(runtime.listWorkers(), lease.workerId);
       const role = roleDefinitions.get(lease.role);
       let turnStarted = false;
@@ -108,27 +141,51 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
           role,
           worker,
           worktrees: laneWorktrees,
-          runtime,
+          reviewBundles,
+          runtime: { getWorktreeOptions: () => runtime.getWorktreeOptions() },
+          implementationWorkspace,
         });
+        if (!isReviewerRole(lease.role, role) && (workspace.mode === "shared" || workspace.mode === "implementation_worktree")) {
+          implementationWorkspace = workspace;
+        }
         turnStarted = true;
-        sessions.push(await runLeaseTurn({
+        const session = await runLeaseTurn({
           context: opts.context,
-          mode,
+          mode: opts.mode,
           lease,
           worker,
           workspace,
           reviewPolicy: reviewPolicyByRole.get(lease.role),
-          prompt: promptForRole(parsed.prompt, lease.role, role),
-          title: parsed.title,
-          model: parsed.model,
-          effortLevel: parsed.effortLevel,
-        }));
+          prompt: promptForRole(opts.task.prompt, lease.role, role),
+          title: opts.task.title,
+          model: opts.task.model,
+          effortLevel: opts.task.effortLevel,
+        });
+        sessions.push(session);
+        if (sessionFailed(session)) {
+          return {
+            ok: false,
+            state: "failed",
+            mode: opts.mode,
+            allocation: opts.allocation,
+            sessions,
+            reviewPolicy: opts.reviewPolicy,
+            errorSummary: `${lease.role} failed: ${session.error ?? session.status}`,
+          };
+        }
       } catch (err) {
         if (!turnStarted) releaseLeaseSafely(runtime, lease);
         throw err;
       }
     }
   } finally {
+    for (const bundle of reviewBundles) {
+      try {
+        cleanupReviewBundle(bundle);
+      } catch (err) {
+        logger.warn(`Orchestration review bundle cleanup failed for ${bundle.path}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
     for (const handle of laneWorktrees.values()) {
       try {
         cleanupWorktree(handle);
@@ -138,7 +195,14 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
     }
   }
 
-  return { ok: true, state: "completed", mode, allocation: allocationResult.allocation, sessions, reviewPolicy: allocationResult.reviewPolicy };
+  return {
+    ok: true,
+    state: "completed",
+    mode: opts.mode,
+    allocation: opts.allocation,
+    sessions,
+    reviewPolicy: opts.reviewPolicy,
+  };
 }
 
 async function runLeaseTurn(opts: {
@@ -173,8 +237,10 @@ async function runLeaseTurn(opts: {
   transportMeta["orchestrationWorkspace"] = {
     mode: opts.workspace.mode,
     cwd: opts.workspace.cwd,
-    worktreePath: "handle" in opts.workspace ? opts.workspace.handle.path : null,
-    readOnly: opts.workspace.mode === "review_read_only_worktree",
+    worktreePath: "handle" in opts.workspace
+      ? opts.workspace.handle.path
+      : (opts.workspace.mode === "review_bundle" ? opts.workspace.worktreePath ?? null : null),
+    reviewBundlePath: "bundle" in opts.workspace ? opts.workspace.bundle.path : null,
     downgradeReason: opts.workspace.mode === "shared" ? opts.workspace.downgradeReason ?? null : null,
   };
   if (opts.reviewPolicy) {
@@ -199,16 +265,8 @@ async function runLeaseTurn(opts: {
   updateSession(session.id, { status: "running", lastActivity: new Date().toISOString(), lastError: null });
 
   try {
-    if (opts.workspace.mode === "review_read_only_worktree") setWorktreeReadOnly(opts.workspace.handle, true);
     await dispatchWebSessionRun(session, opts.prompt, engine, opts.context.getConfig(), opts.context);
   } finally {
-    if (opts.workspace.mode === "review_read_only_worktree") {
-      try {
-        setWorktreeReadOnly(opts.workspace.handle, false);
-      } catch (err) {
-        logger.warn(`Orchestration worktree restore failed for ${opts.workspace.handle.path}: ${err instanceof Error ? err.message : err}`);
-      }
-    }
     try {
       runtime.releaseLease(opts.lease.leaseId, opts.lease.coordinatorId);
     } catch (err) {
@@ -226,7 +284,10 @@ async function runLeaseTurn(opts: {
     error: completed?.lastError ?? null,
     cwd: opts.workspace.cwd,
     workspaceMode: opts.workspace.mode,
-    worktreePath: "handle" in opts.workspace ? opts.workspace.handle.path : undefined,
+    worktreePath: "handle" in opts.workspace
+      ? opts.workspace.handle.path
+      : (opts.workspace.mode === "review_bundle" ? opts.workspace.worktreePath : undefined),
+    reviewBundlePath: "bundle" in opts.workspace ? opts.workspace.bundle.path : undefined,
     reviewPolicy: opts.reviewPolicy,
   };
 }
@@ -237,12 +298,26 @@ function prepareLeaseWorkspace(opts: {
   role?: RoleDefinition;
   worker: Worker;
   worktrees: Map<string, WorktreeHandle>;
+  reviewBundles: ReviewBundleHandle[];
   runtime: { getWorktreeOptions(): WorktreeOptions };
+  implementationWorkspace?: ImplementationWorkspace;
 }): LeaseWorkspace {
   if (isReviewerRole(opts.lease.role, opts.role)) {
-    const implementation = firstWorktree(opts.worktrees);
-    if (implementation) return { mode: "review_read_only_worktree", cwd: implementation.path, handle: implementation };
-    return { mode: "shared", cwd: opts.baseCwd };
+    const source = opts.implementationWorkspace ?? { mode: "shared" as const, cwd: opts.baseCwd };
+    const bundle = createReviewBundle({
+      taskId: opts.lease.taskId,
+      role: opts.lease.role,
+      workerId: opts.worker.id,
+      sourceCwd: source.cwd,
+      sourceWorktree: "handle" in source ? source.handle : undefined,
+    });
+    opts.reviewBundles.push(bundle);
+    return {
+      mode: "review_bundle",
+      cwd: bundle.path,
+      bundle,
+      worktreePath: "handle" in source ? source.handle.path : undefined,
+    };
   }
   if (opts.worker.workspacePolicy !== "isolated_worktree") return { mode: "shared", cwd: opts.baseCwd };
 
@@ -250,7 +325,7 @@ function prepareLeaseWorkspace(opts: {
   const existing = opts.worktrees.get(lane);
   if (existing) return { mode: "implementation_worktree", cwd: existing.path, handle: existing };
 
-  const prepared: WorktreePreparation = createImplementationWorktree({
+  const prepared = createImplementationWorktree({
     taskId: opts.lease.taskId,
     lane,
     baseCwd: opts.baseCwd,
@@ -264,8 +339,50 @@ function prepareLeaseWorkspace(opts: {
   return { mode: "implementation_worktree", cwd: prepared.cwd, handle: prepared.handle };
 }
 
-function firstWorktree(worktrees: Map<string, WorktreeHandle>): WorktreeHandle | undefined {
-  return worktrees.values().next().value;
+function buildContinuationRecord(
+  existing: LiveRunContinuationRecord | undefined,
+  task: LiveRunTaskPayload,
+  mode: LiveRunMode,
+): LiveRunContinuationRecord {
+  const now = new Date().toISOString();
+  return {
+    taskId: task.taskId,
+    coordinatorId: task.coordinatorId,
+    mode,
+    state: "queued",
+    task,
+    enqueuedAt: existing?.enqueuedAt ?? now,
+    updatedAt: now,
+    retryCount: existing?.retryCount ?? 0,
+    lastDispatchedAt: existing?.lastDispatchedAt,
+    allocationId: undefined,
+    lastError: undefined,
+  };
+}
+
+function normalizeTaskPayload(
+  parsed: z.infer<typeof liveRunTaskSchema>,
+  context: ApiContext,
+): LiveRunTaskPayload {
+  return {
+    taskId: parsed.taskId,
+    coordinatorId: parsed.coordinatorId,
+    coordinatorTemplate: parsed.coordinatorTemplate,
+    template: parsed.template,
+    requiredRoles: parsed.requiredRoles,
+    optionalRoles: parsed.optionalRoles,
+    priority: parsed.priority,
+    leaseDurationMs: parsed.leaseDurationMs ?? resolveLiveLeaseDurationMs(context.getConfig()),
+    prompt: parsed.prompt,
+    cwd: parsed.cwd,
+    title: parsed.title,
+    model: parsed.model,
+    effortLevel: parsed.effortLevel,
+  };
+}
+
+function sessionFailed(session: OrchestrationRunSession): boolean {
+  return session.status === "error" || Boolean(session.error);
 }
 
 function releaseLeaseSafely(runtime: { releaseLease(leaseId: string, coordinatorId?: string): Lease }, lease: Lease): void {
@@ -289,7 +406,9 @@ function requireWorker(workers: Worker[], workerId: string): Worker {
 function promptForRole(prompt: string, roleId: string, role: RoleDefinition | undefined): string {
   if (!isReviewerRole(roleId, role)) return prompt;
   return [
-    "Review-only pass. Do not modify files. Inspect the completed work and report issues, risks, and missing validation.",
+    "Review-only pass. Do not modify files.",
+    "Your working directory is a generated review bundle, not the source repository.",
+    "Inspect patch.diff and metadata.json, then report issues, risks, and missing validation.",
     "",
     prompt,
   ].join("\n");

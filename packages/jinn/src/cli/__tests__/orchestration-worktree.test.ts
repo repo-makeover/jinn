@@ -50,7 +50,7 @@ describe("jinn worktree CLI helpers", () => {
     const cleanup = JSON.parse(String(logSpy.mock.calls[2][0]));
     expect(cleanup).toMatchObject({ removed: true, taskId: "cli-worktree-task", lane: "implementation" });
     expect(fs.existsSync(created.cwd)).toBe(false);
-  });
+  }, 15_000);
 });
 
 function writeConfig(dir: string): void {

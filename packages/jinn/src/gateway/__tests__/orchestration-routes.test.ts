@@ -109,6 +109,28 @@ describe("GET /api/orchestration/*", () => {
     });
     runtime.close();
   });
+
+  it("rejects new live run requests when orchestration is disabled in config", async () => {
+    const cap = makeRes();
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/run",
+      cap.res,
+      makeCtx(config(), { enabled: false }),
+      makeJsonReq({
+        mode: "single_worker",
+        task: {
+          taskId: "api-disabled",
+          coordinatorId: "api-disabled",
+          requiredRoles: ["seniorImplementer"],
+          prompt: "Do not run",
+        },
+      }),
+    );
+
+    expect(cap.status).toBe(409);
+    expect(cap.body).toEqual({ error: "orchestration is disabled" });
+  });
 });
 
 async function get(pathname: string, ctx: ApiContext) {
@@ -159,9 +181,22 @@ function makeRes() {
   };
 }
 
-function makeCtx(cfg: OrchestrationConfig): ApiContext {
+function makeCtx(cfg: OrchestrationConfig, orchestrationCfg: { enabled?: boolean } = { enabled: true }): ApiContext {
+  const liveConfig = {
+    gateway: { port: 7777, host: "127.0.0.1" },
+    engines: {
+      default: "claude",
+      claude: { bin: "claude", model: "opus" },
+      codex: { bin: "codex", model: "gpt" },
+      mock: { bin: "mock", model: "mock" },
+    },
+    connectors: {},
+    logging: { file: false, stdout: false, level: "error" },
+    orchestration: orchestrationCfg,
+  };
   return {
-    getConfig: () => ({ gateway: {}, engines: {} }),
+    config: liveConfig as any,
+    getConfig: () => liveConfig as any,
     connectors: new Map(),
     startTime: Date.now(),
     emit: vi.fn(),

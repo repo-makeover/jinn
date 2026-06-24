@@ -31,6 +31,7 @@ import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR, O
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
 import { createOrchestrationRuntimeFromConfig } from "../orchestration/runtime.js";
+import { runAllocatedOrchestrationTask } from "../orchestration/run-mode.js";
 import { startStatusReconciler } from "./status-reconciler.js";
 import { syncExternalTurn } from "./external-turns.js";
 import { pickEncoding, isCompressibleExt, compressStream } from "./compress.js";
@@ -57,6 +58,7 @@ import { syncBoardForEvent } from "./board-sync.js";
 import { logBoardSummary } from "./board-service.js";
 import { startBoardWorker } from "./board-worker.js";
 import { reconcileOrphanedTickets } from "./orphaned-ticket-reconciler.js";
+import { swapOrchestrationRuntime } from "./orchestration-runtime-manager.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -867,8 +869,24 @@ export async function startGateway(
     reloadOrg,
     backgroundActivity,
   };
-  const orchestrationRuntime = createOrchestrationRuntimeFromConfig(currentConfig);
-  if (orchestrationRuntime) apiContext.orchestration = { runtime: orchestrationRuntime };
+  let orchestrationRuntime = createOrchestrationRuntimeFromConfig(currentConfig);
+  if (orchestrationRuntime) {
+    orchestrationRuntime.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
+      const result = await runAllocatedOrchestrationTask({
+        context: apiContext,
+        mode: continuation.mode,
+        task: continuation.task,
+        allocation,
+        reviewPolicy,
+      });
+      if (!result.ok) {
+        throw new Error(result.state === "failed"
+          ? result.errorSummary
+          : `unexpected orchestration state while resuming ${continuation.taskId}/${continuation.coordinatorId}: ${result.state}`);
+      }
+    });
+    apiContext.orchestration = { runtime: orchestrationRuntime };
+  }
 
   // Re-read config.yaml into memory. Used by both the file-watcher (debounced)
   // and by API handlers that write config.yaml and need getConfig() to reflect
@@ -881,6 +899,21 @@ export async function startGateway(
       invalidateModelRegistry(); // rebuild the model/capability registry from the new config
       refreshDynamicModels(currentConfig); // re-discover dynamic models (engine bins/auth may have changed)
       reloadScheduler(loadJobs(), currentConfig, connectorMap);
+      orchestrationRuntime = swapOrchestrationRuntime(apiContext, currentConfig, orchestrationRuntime);
+      orchestrationRuntime?.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
+        const result = await runAllocatedOrchestrationTask({
+          context: apiContext,
+          mode: continuation.mode,
+          task: continuation.task,
+          allocation,
+          reviewPolicy,
+        });
+        if (!result.ok) {
+          throw new Error(result.state === "failed"
+            ? result.errorSummary
+            : `unexpected orchestration state while resuming ${continuation.taskId}/${continuation.coordinatorId}: ${result.state}`);
+        }
+      });
       logger.info("Config reloaded successfully");
       logBoardSummary(ORG_DIR, (msg) => logger.info(msg));
       emit("config:reloaded", {});

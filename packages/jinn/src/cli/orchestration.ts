@@ -135,12 +135,26 @@ function formatQueue(queue: QueueItem[]): string {
 }
 
 function formatRunResult(result: any): string {
-  if (result?.ok === false) {
+  if (result?.ok === false && result?.state === "blocked_resource") {
     const lines = [
       `Task ${result.queueItem?.taskId ?? "(unknown)"} blocked_resource`,
       `Missing roles: ${(result.queueItem?.missingRoles ?? []).join(", ")}`,
       `Resume on: ${(result.queueItem?.resumeOn ?? []).join(", ")}`,
     ];
+    lines.push(...formatReviewPolicy(result?.reviewPolicy));
+    return lines.join("\n");
+  }
+  if (result?.ok === false && result?.state === "failed") {
+    const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+    const lines = [
+      "Orchestration run failed",
+      `Mode: ${result?.mode ?? "(unknown)"}`,
+      `Allocation: ${result?.allocation?.allocationId ?? "(unknown)"}`,
+      `Error: ${result?.errorSummary ?? "(unknown)"}`,
+    ];
+    for (const session of sessions) {
+      lines.push(`- ${session.role}: ${session.workerId} (${session.sessionId}) ${session.status}${session.error ? `: ${session.error}` : ""}`);
+    }
     lines.push(...formatReviewPolicy(result?.reviewPolicy));
     return lines.join("\n");
   }
@@ -270,6 +284,9 @@ export async function runOrchestrationRun(opts: OrchestrationRunOptions): Promis
     body: JSON.stringify({ mode, task }),
   });
   const body = await res.json().catch(() => null);
+  if (res.status === 409 && body && typeof body === "object" && "error" in body && !("state" in body)) {
+    throw new Error(String((body as { error?: unknown }).error ?? "orchestration run blocked"));
+  }
   if (!res.ok && res.status !== 409) {
     const detail = body && typeof body === "object" && "detail" in body ? `: ${(body as { detail?: unknown }).detail}` : "";
     throw new Error(`orchestration run failed (${res.status})${detail}`);

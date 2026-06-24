@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  cleanupReviewBundle,
   cleanupWorktree,
+  createReviewBundle,
   createImplementationWorktree,
   diffWorktree,
   listManagedWorktrees,
@@ -103,6 +105,33 @@ describe("orchestration worktrees", () => {
     expect(removed.map((item) => item.taskId)).toEqual(["task-orphan"]);
     expect(fs.existsSync(active.cwd)).toBe(true);
     expect(fs.existsSync(orphan.cwd)).toBe(false);
+  });
+
+  it("builds a diff-only review bundle outside the implementation worktree", () => {
+    const prepared = createImplementationWorktree({
+      taskId: "task-review",
+      lane: "implementation",
+      baseCwd: repoDir,
+      worktrees: { root: worktreeRoot, maxWorktrees: 4 },
+    });
+    expect(prepared.mode).toBe("implementation_worktree");
+    if (prepared.mode !== "implementation_worktree") return;
+    fs.writeFileSync(path.join(prepared.cwd, "feature.txt"), "hello\n");
+
+    const bundle = createReviewBundle({
+      taskId: "task-review",
+      role: "independentReviewer",
+      workerId: "mockReviewer",
+      sourceCwd: prepared.cwd,
+      sourceWorktree: prepared.handle,
+    });
+
+    expect(bundle.path).not.toBe(prepared.cwd);
+    expect(fs.existsSync(path.join(bundle.path, "patch.diff"))).toBe(true);
+    expect(fs.existsSync(path.join(bundle.path, "metadata.json"))).toBe(true);
+    expect(fs.readFileSync(path.join(bundle.path, "patch.diff"), "utf-8")).toContain("feature.txt");
+    cleanupReviewBundle(bundle);
+    cleanupWorktree(prepared.handle);
   });
 
   it("runtime reaper preserves live task worktrees and removes them after lease release", () => {

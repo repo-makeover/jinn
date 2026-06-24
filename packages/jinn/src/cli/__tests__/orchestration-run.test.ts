@@ -55,7 +55,7 @@ describe("jinn run orchestration client", () => {
       task: { taskId: "cli-task", coordinatorId: "cli-coord", prompt: "Implement a small task" },
     });
     expect(JSON.parse(String(logSpy.mock.calls[0][0]))).toMatchObject({ state: "completed" });
-  });
+  }, 15_000);
 
   it("prints review-policy explanations for text run output", async () => {
     const taskFile = path.join(tmpHome, "task.yaml");
@@ -87,6 +87,34 @@ describe("jinn run orchestration client", () => {
     await runOrchestrationRun({ mode: "single_worker_with_review", task: taskFile });
 
     expect(String(logSpy.mock.calls[0][0])).toContain("Review policy: same_family_fallback_forbidden");
+  });
+
+  it("prints failed orchestration state instead of completed when the gateway reports a role failure", async () => {
+    const taskFile = path.join(tmpHome, "task.yaml");
+    fs.writeFileSync(taskFile, [
+      "taskId: cli-task-failed",
+      "coordinatorId: cli-coord-failed",
+      "requiredRoles: [seniorImplementer, independentReviewer]",
+      "prompt: Implement and review with a failure",
+    ].join("\n"));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      ok: false,
+      state: "failed",
+      mode: "single_worker_with_review",
+      allocation: { allocationId: "alloc-failed" },
+      sessions: [
+        { role: "seniorImplementer", workerId: "mock", sessionId: "s1", status: "idle", error: null },
+        { role: "independentReviewer", workerId: "mock", sessionId: "s2", status: "error", error: "forced engine failure" },
+      ],
+      errorSummary: "independentReviewer failed: forced engine failure",
+      reviewPolicy: { explanations: [] },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    const { runOrchestrationRun } = await import("../orchestration.js");
+    await runOrchestrationRun({ mode: "single_worker_with_review", task: taskFile });
+
+    expect(String(logSpy.mock.calls[0][0])).toContain("Orchestration run failed");
+    expect(String(logSpy.mock.calls[0][0])).toContain("independentReviewer failed");
   });
 });
 

@@ -1,9 +1,21 @@
 import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
+import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import { loadOrchestrationConfig } from "./config.js";
 import { resolveCrossFamilyReviewPolicy, type CrossFamilyReviewPolicy } from "./cross-family.js";
+import type { LiveRunContinuationRecord } from "./live-run.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
-import { DEFAULT_LEASE_DURATION_MS, type AllocationRequest, type AllocationResult, type Lease, type LeaseValidationResult, type OrchestrationConfig } from "./types.js";
+import { OrchestrationStore } from "./store.js";
+import {
+  DEFAULT_LEASE_DURATION_MS,
+  type Allocation,
+  type AllocationRequest,
+  type AllocationResult,
+  type Lease,
+  type LeaseValidationResult,
+  type OrchestrationConfig,
+  type ReviewPolicySummary,
+} from "./types.js";
 import { DEFAULT_MAX_WORKTREES, reapOrphanedWorktrees, type WorktreeHandle, type WorktreeOptions } from "./worktree.js";
 
 const DEFAULT_REAPER_INTERVAL_MS = 5_000;
@@ -20,19 +32,30 @@ export interface OrchestrationRuntimeOptions {
   reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
 }
 
+export interface ResumeQueuedRun {
+  continuation: LiveRunContinuationRecord;
+  allocation: Allocation;
+  reviewPolicy: ReviewPolicySummary;
+}
+
+type ResumeQueuedRunHandler = (run: ResumeQueuedRun) => Promise<void>;
+
 export class OrchestrationRuntime {
   readonly config: OrchestrationConfig;
   readonly dbPath: string;
+  private readonly store: OrchestrationStore;
   private readonly scheduler: PersistentMatrixScheduler;
   private readonly reaperIntervalMs: number;
   private readonly worktrees: WorktreeOptions;
+  private resumeQueuedRunHandler?: ResumeQueuedRunHandler;
   private reaper: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: OrchestrationRuntimeOptions) {
     this.config = opts.config ?? loadOrchestrationConfig(opts.configDir ?? ORCH_CONFIG_DIR);
     this.dbPath = opts.dbPath ?? ORCH_DB;
+    this.store = OrchestrationStore.open(this.dbPath);
     this.scheduler = PersistentMatrixScheduler.open(this.config, {
-      dbPath: this.dbPath,
+      store: this.store,
       now: opts.now,
       reviewPolicy: opts.reviewPolicy,
     });
@@ -46,6 +69,10 @@ export class OrchestrationRuntime {
     if (opts.startReaper !== false) this.startReaper();
   }
 
+  setResumeQueuedRunHandler(handler: ResumeQueuedRunHandler | undefined): void {
+    this.resumeQueuedRunHandler = handler;
+  }
+
   requestAllocation(request: AllocationRequest): AllocationResult {
     return this.scheduler.requestAllocation(request);
   }
@@ -56,22 +83,47 @@ export class OrchestrationRuntime {
 
   releaseLease(leaseId: string, coordinatorId?: string): Lease {
     const lease = this.scheduler.releaseLease(leaseId, coordinatorId);
-    this.scheduler.retryQueued();
+    this.dispatchRetryResults(this.scheduler.retryQueued());
     return lease;
   }
 
   expireLeases(now?: Date): Lease[] {
     const expired = this.scheduler.expireLeases(now);
-    if (expired.length > 0) this.scheduler.retryQueued();
+    if (expired.length > 0) this.dispatchRetryResults(this.scheduler.retryQueued());
     return expired;
   }
 
   retryQueued(): AllocationResult[] {
-    return this.scheduler.retryQueued();
+    const results = this.scheduler.retryQueued();
+    this.dispatchRetryResults(results);
+    return results;
   }
 
   validateLeaseForWorker(workerId: string, leaseId: string, taskId: string, coordinatorId: string): LeaseValidationResult {
     return this.scheduler.validateLeaseForWorker(workerId, leaseId, taskId, coordinatorId);
+  }
+
+  queueLiveContinuation(record: LiveRunContinuationRecord): void {
+    this.store.upsertLiveContinuation(record);
+  }
+
+  getLiveContinuation(taskId: string, coordinatorId: string): LiveRunContinuationRecord | undefined {
+    return this.store.getLiveContinuation(taskId, coordinatorId);
+  }
+
+  deleteLiveContinuation(taskId: string, coordinatorId: string): void {
+    this.store.deleteLiveContinuation(taskId, coordinatorId);
+  }
+
+  markLiveContinuationCompleted(taskId: string, coordinatorId: string, allocationId?: string): void {
+    this.store.markLiveContinuationState(taskId, coordinatorId, "completed", { allocationId: allocationId ?? null });
+  }
+
+  markLiveContinuationFailed(taskId: string, coordinatorId: string, error: string, allocationId?: string): void {
+    this.store.markLiveContinuationState(taskId, coordinatorId, "failed", {
+      allocationId: allocationId ?? null,
+      lastError: error,
+    });
   }
 
   listWorkers() {
@@ -88,6 +140,16 @@ export class OrchestrationRuntime {
 
   listAllocations() {
     return this.scheduler.listAllocations();
+  }
+
+  listLiveContinuations() {
+    return this.store.listLiveContinuations();
+  }
+
+  hasActiveWork(): boolean {
+    return this.scheduler.listLeases().some((lease) => lease.state === "running")
+      || this.scheduler.listQueue().length > 0
+      || this.store.listLiveContinuations(["queued", "dispatching"]).length > 0;
   }
 
   getWorktreeOptions(): WorktreeOptions {
@@ -109,6 +171,58 @@ export class OrchestrationRuntime {
       this.reaper = null;
     }
     this.scheduler.close();
+    this.store.close();
+  }
+
+  private dispatchRetryResults(results: AllocationResult[]): void {
+    for (const result of results) {
+      if (!result.ok) continue;
+      void this.resumeQueuedAllocation(result.allocation, result.reviewPolicy);
+    }
+  }
+
+  private async resumeQueuedAllocation(allocation: Allocation, reviewPolicy: ReviewPolicySummary): Promise<void> {
+    const claimed = this.store.claimQueuedLiveContinuation(allocation.taskId, allocation.coordinatorId, {
+      allocationId: allocation.allocationId,
+    });
+    if (!claimed) {
+      logger.warn(
+        `Orchestration invariant violated: resumed allocation ${allocation.allocationId} for ${allocation.taskId}/${allocation.coordinatorId} had no queued continuation; releasing leases.`,
+      );
+      this.releaseAllocationLeases(allocation);
+      return;
+    }
+    if (!this.resumeQueuedRunHandler) {
+      const error = `No orchestration resume handler is registered for ${allocation.taskId}/${allocation.coordinatorId}`;
+      logger.error(error);
+      this.markLiveContinuationFailed(claimed.taskId, claimed.coordinatorId, error, allocation.allocationId);
+      this.releaseAllocationLeases(allocation);
+      return;
+    }
+    try {
+      await this.resumeQueuedRunHandler({
+        continuation: claimed,
+        allocation,
+        reviewPolicy,
+      });
+      this.markLiveContinuationCompleted(claimed.taskId, claimed.coordinatorId, allocation.allocationId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`Queued orchestration resume failed for ${claimed.taskId}/${claimed.coordinatorId}: ${message}`);
+      this.releaseAllocationLeases(allocation);
+      this.markLiveContinuationFailed(claimed.taskId, claimed.coordinatorId, message, allocation.allocationId);
+    }
+  }
+
+  private releaseAllocationLeases(allocation: Allocation): void {
+    for (const lease of allocation.leases) {
+      try {
+        this.scheduler.releaseLease(lease.leaseId, lease.coordinatorId);
+      } catch (err) {
+        logger.warn(`Orchestration invariant cleanup failed for lease ${lease.leaseId}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    this.dispatchRetryResults(this.scheduler.retryQueued());
   }
 
   private startReaper(): void {

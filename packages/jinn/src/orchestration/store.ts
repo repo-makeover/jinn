@@ -3,9 +3,10 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { logger } from "../shared/logger.js";
 import { ORCH_DB } from "../shared/paths.js";
+import type { LiveRunContinuationRecord, LiveRunContinuationState } from "./live-run.js";
 import { DEFAULT_LEASE_DURATION_MS, type Allocation, type Lease, type QueueItem, type SchedulerSnapshot, type TelemetryEvent } from "./types.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const NEXT_SEQ_META_KEY = "scheduler_next_seq";
 
 const CREATE_SCHEMA = `
@@ -73,6 +74,22 @@ CREATE TABLE IF NOT EXISTS telemetry_events (
   detail_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orch_telemetry_time ON telemetry_events (timestamp, event_id);
+
+CREATE TABLE IF NOT EXISTS live_run_continuations (
+  task_id TEXT NOT NULL,
+  coordinator_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  state TEXT NOT NULL,
+  task_json TEXT NOT NULL,
+  enqueued_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  last_dispatched_at TEXT,
+  allocation_id TEXT,
+  last_error TEXT,
+  PRIMARY KEY (task_id, coordinator_id)
+);
+CREATE INDEX IF NOT EXISTS idx_orch_live_run_state ON live_run_continuations (state, updated_at, task_id, coordinator_id);
 `;
 
 interface StoreOpenOptions {
@@ -127,6 +144,20 @@ interface TelemetryRow {
   role: string | null;
   timestamp: string;
   detail_json: string | null;
+}
+
+interface LiveRunContinuationRow {
+  task_id: string;
+  coordinator_id: string;
+  mode: LiveRunContinuationRecord["mode"];
+  state: LiveRunContinuationState;
+  task_json: string;
+  enqueued_at: string;
+  updated_at: string;
+  retry_count: number;
+  last_dispatched_at: string | null;
+  allocation_id: string | null;
+  last_error: string | null;
 }
 
 export class OrchestrationStore {
@@ -405,6 +436,137 @@ export class OrchestrationStore {
     apply();
   }
 
+  listLiveContinuations(states?: LiveRunContinuationState[]): LiveRunContinuationRecord[] {
+    if (!states || states.length === 0) {
+      const rows = this.db.prepare(`
+        SELECT * FROM live_run_continuations
+        ORDER BY updated_at, task_id, coordinator_id
+      `).all() as LiveRunContinuationRow[];
+      return rows.map(rowToLiveRunContinuation);
+    }
+    const placeholders = states.map(() => "?").join(", ");
+    const rows = this.db.prepare(`
+      SELECT * FROM live_run_continuations
+      WHERE state IN (${placeholders})
+      ORDER BY updated_at, task_id, coordinator_id
+    `).all(...states) as LiveRunContinuationRow[];
+    return rows.map(rowToLiveRunContinuation);
+  }
+
+  getLiveContinuation(taskId: string, coordinatorId: string): LiveRunContinuationRecord | undefined {
+    const row = this.db.prepare(`
+      SELECT * FROM live_run_continuations
+      WHERE task_id = ? AND coordinator_id = ?
+    `).get(taskId, coordinatorId) as LiveRunContinuationRow | undefined;
+    return row ? rowToLiveRunContinuation(row) : undefined;
+  }
+
+  upsertLiveContinuation(record: LiveRunContinuationRecord): void {
+    this.db.prepare(`
+      INSERT INTO live_run_continuations (
+        task_id, coordinator_id, mode, state, task_json, enqueued_at, updated_at,
+        retry_count, last_dispatched_at, allocation_id, last_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id, coordinator_id) DO UPDATE SET
+        mode = excluded.mode,
+        state = excluded.state,
+        task_json = excluded.task_json,
+        enqueued_at = excluded.enqueued_at,
+        updated_at = excluded.updated_at,
+        retry_count = excluded.retry_count,
+        last_dispatched_at = excluded.last_dispatched_at,
+        allocation_id = excluded.allocation_id,
+        last_error = excluded.last_error
+    `).run(
+      record.taskId,
+      record.coordinatorId,
+      record.mode,
+      record.state,
+      JSON.stringify(record.task),
+      record.enqueuedAt,
+      record.updatedAt,
+      record.retryCount,
+      record.lastDispatchedAt ?? null,
+      record.allocationId ?? null,
+      record.lastError ?? null,
+    );
+  }
+
+  deleteLiveContinuation(taskId: string, coordinatorId: string): void {
+    this.db.prepare(`
+      DELETE FROM live_run_continuations
+      WHERE task_id = ? AND coordinator_id = ?
+    `).run(taskId, coordinatorId);
+  }
+
+  claimQueuedLiveContinuation(
+    taskId: string,
+    coordinatorId: string,
+    opts: { updatedAt?: string; allocationId?: string } = {},
+  ): LiveRunContinuationRecord | undefined {
+    const updatedAt = opts.updatedAt ?? new Date().toISOString();
+    const claim = this.db.transaction(() => {
+      const current = this.db.prepare(`
+        SELECT * FROM live_run_continuations
+        WHERE task_id = ? AND coordinator_id = ?
+      `).get(taskId, coordinatorId) as LiveRunContinuationRow | undefined;
+      if (!current || current.state !== "queued") return undefined;
+      this.db.prepare(`
+        UPDATE live_run_continuations
+        SET state = ?, updated_at = ?, retry_count = ?, last_dispatched_at = ?, allocation_id = ?, last_error = NULL
+        WHERE task_id = ? AND coordinator_id = ? AND state = ?
+      `).run(
+        "dispatching",
+        updatedAt,
+        current.retry_count + 1,
+        updatedAt,
+        opts.allocationId ?? null,
+        taskId,
+        coordinatorId,
+        "queued",
+      );
+      const claimed = this.db.prepare(`
+        SELECT * FROM live_run_continuations
+        WHERE task_id = ? AND coordinator_id = ?
+      `).get(taskId, coordinatorId) as LiveRunContinuationRow | undefined;
+      return claimed ? rowToLiveRunContinuation(claimed) : undefined;
+    });
+    return claim();
+  }
+
+  markLiveContinuationState(
+    taskId: string,
+    coordinatorId: string,
+    state: LiveRunContinuationState,
+    opts: {
+      updatedAt?: string;
+      allocationId?: string | null;
+      lastError?: string | null;
+    } = {},
+  ): LiveRunContinuationRecord | undefined {
+    const updatedAt = opts.updatedAt ?? new Date().toISOString();
+    const update = this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE live_run_continuations
+        SET state = ?, updated_at = ?, allocation_id = ?, last_error = ?
+        WHERE task_id = ? AND coordinator_id = ?
+      `).run(
+        state,
+        updatedAt,
+        opts.allocationId ?? null,
+        opts.lastError ?? null,
+        taskId,
+        coordinatorId,
+      );
+      const row = this.db.prepare(`
+        SELECT * FROM live_run_continuations
+        WHERE task_id = ? AND coordinator_id = ?
+      `).get(taskId, coordinatorId) as LiveRunContinuationRow | undefined;
+      return row ? rowToLiveRunContinuation(row) : undefined;
+    });
+    return update();
+  }
+
   private loadLeases(): Lease[] {
     const rows = this.db.prepare(`
       SELECT * FROM leases ORDER BY started_at, lease_id
@@ -518,6 +680,22 @@ function rowToLease(row: LeaseRow): Lease {
     leaseExpiresAt: row.lease_expires_at,
     leaseDurationMs: row.lease_duration_ms ?? DEFAULT_LEASE_DURATION_MS,
     heartbeatAt: row.heartbeat_at,
+  };
+}
+
+function rowToLiveRunContinuation(row: LiveRunContinuationRow): LiveRunContinuationRecord {
+  return {
+    taskId: row.task_id,
+    coordinatorId: row.coordinator_id,
+    mode: row.mode,
+    state: row.state,
+    task: parseJson<LiveRunContinuationRecord["task"]>(row.task_json, "live run task"),
+    enqueuedAt: row.enqueued_at,
+    updatedAt: row.updated_at,
+    retryCount: row.retry_count,
+    lastDispatchedAt: row.last_dispatched_at ?? undefined,
+    allocationId: row.allocation_id ?? undefined,
+    lastError: row.last_error ?? undefined,
   };
 }
 

@@ -112,7 +112,8 @@ its single runtime scheduler, creates normal Jinn sessions with lease metadata i
 releases leases in `finally` after each role turn settles.
 For `single_worker_with_review`, JSON output includes `reviewPolicy.explanations`.
 Text output prints the reviewer policy decision so same-family fallback or a
-blocked reviewer is not silent.
+blocked reviewer is not silent. If any leased role session errors, the live run
+returns `ok: false, state: "failed"` with the session evidence preserved.
 
 `jinn worktree create|diff|cleanup` uses the live `config.yaml`
 `orchestration.worktreeRoot` and `orchestration.maxWorktrees` settings. The
@@ -138,9 +139,12 @@ old no-daemon/test fallback that opens a scheduler for read-only inspection.
 not create dashboard controls. When an implementation worker has
 `workspacePolicy: isolated_worktree` and the resolved task `cwd` is inside a git
 repo, the run path creates a task/lane-scoped worktree and passes that path as
-the session `cwd`. Non-supported methods return `405`.
+the session `cwd`. Reviewer turns do not run in that worktree; they receive a
+generated diff bundle directory containing `patch.diff` and `metadata.json`.
+Non-supported methods return `405`.
 Run responses include structured `reviewPolicy.explanations` when reviewer
-family policy selects, falls back, or blocks a reviewer.
+family policy selects, falls back, or blocks a reviewer. Blocked live runs
+persist a durable continuation and auto-resume on later resource availability.
 
 ## Scheduler Behavior
 
@@ -189,7 +193,11 @@ explicit temp database paths and do not write live `~/.jinn`.
 upserts/deletes, and expires stale leases deterministically on hydrate. The
 daemon constructs one runtime scheduler when `orchestration.enabled: true`,
 starts an expiry/retry timer, and closes the scheduler on shutdown. Plain CLI
-inspection still uses explicit temp paths or read-only fallbacks.
+inspection still uses explicit temp paths or read-only fallbacks. On config
+reload, the gateway swaps to a freshly constructed orchestration runtime when
+settings stay enabled; if orchestration is disabled while work is active, the
+existing runtime stays bound only long enough to drain leases and queued
+continuations.
 
 ## Worktrees
 
@@ -199,11 +207,13 @@ managed git worktree rooted at `orchestration.worktreeRoot` (default:
 worktrees that can exist at once. If the resolved task `cwd` is not inside a git
 repo, Jinn logs a downgrade and uses the current shared-cwd behavior.
 
-For `single_worker_with_review`, the reviewer receives the implementation
-worktree `cwd` in read-only mode after the implementer lease has been released,
-so the worker slot is free while the patch remains inspectable. The worktree is
-cleaned up at task end. If cleanup is missed, the runtime's existing boot/timer
-reaper removes managed worktrees whose task no longer has a running lease.
+For `single_worker_with_review`, the reviewer receives a generated diff-only
+bundle outside the repository/worktree after the implementer lease has been
+released. The bundle contains `patch.diff` plus `metadata.json`, so the patch
+remains inspectable without handing the reviewer the implementation tree as its
+session `cwd`. The implementation worktree is cleaned up at task end. If
+cleanup is missed, the runtime's existing boot/timer reaper removes managed
+worktrees whose task no longer has a running lease.
 
 ## Provider Adapters
 

@@ -39,11 +39,12 @@
 - `jinn worktree cleanup <task-file> [--lane <name>] [--json]` removes a managed task/lane worktree.
 - Dry-run/list/plan commands remain inert and explicit-path based. `jinn run` is opt-in live execution through the daemon-owned scheduler and existing Jinn session path.
 - `single_worker_with_review` run output includes reviewer-family policy explanations. Same-family reviewer fallback is forbidden by default and only enabled by `orchestration.sameFamilyReviewerFallback: true`.
+- Live run output can now end in `ok: false, state: "failed"` when any leased role session errors; blocked runs remain `state: "blocked_resource"`.
 - Fidelity gaps:
   - A SQLite store, persistent scheduler wrapper, and daemon runtime now exist for leases, allocations, queue items, and telemetry events.
   - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, `mock`, and opt-in live adapters for existing Jinn engine ids via an injected engine map. The default registry used by dry-runs remains inert-only.
   - Usage-aware headroom helpers can filter unavailable, exhausted, or below-threshold live engines when future live orchestration opts in; simulation mode does not call this filter.
-  - Worktree execution is task/lane-scoped: implementation lanes can run in isolated git worktrees, reviewers inspect the implementation worktree read-only, and the runtime reaper removes abandoned managed worktrees.
+  - Worktree execution is task/lane-scoped: implementation lanes can run in isolated git worktrees, reviewers inspect generated diff bundles instead of the implementation tree, and the runtime reaper removes abandoned managed worktrees.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
   - Dashboard controls, board-worker routing, dual-lane integration, and persistent telemetry aggregation are later milestones.
 
@@ -57,10 +58,11 @@
 - `GET /api/orchestration/allocations` returns existing durable allocations.
 - `POST /api/orchestration/run` executes `single_worker` and `single_worker_with_review` tasks through the daemon runtime.
 - Run responses include `reviewPolicy.explanations` for reviewer selection, explicit same-family fallback, and blocked reviewer allocation.
+- Blocked live runs persist a durable continuation keyed by task/coordinator and auto-resume on later resource availability.
 - These routes inherit the existing `/api/*` gateway token gate; unsupported methods on each path return `405`.
 - Fidelity gaps:
   - GET routes observe state only; `POST /api/orchestration/run` is the only M5 mutating route.
-  - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, passes isolated worktree cwd values to eligible implementation/review sessions, and releases leases on terminal paths.
+  - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, passes isolated worktree cwd values to eligible implementation sessions, hands reviewers diff bundles, and releases leases on terminal paths.
   - If no orchestration runtime exists, state routes retain the no-daemon/test fallback; the run route fails instead of opening its own live scheduler.
   - No dashboard controls, cancel API, board-worker routing, or dual-lane integration selection are wired yet.
 
