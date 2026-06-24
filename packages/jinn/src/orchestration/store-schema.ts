@@ -1,0 +1,176 @@
+import fs from "node:fs";
+import path from "node:path";
+import Database from "better-sqlite3";
+import { logger } from "../shared/logger.js";
+import { DEFAULT_LEASE_DURATION_MS, type TelemetryEvent } from "./types.js";
+import { setMeta } from "./store-utils.js";
+
+export const SCHEMA_VERSION = 2;
+export const NEXT_SEQ_META_KEY = "scheduler_next_seq";
+export const QUEUE_PAUSE_META_KEY = "queue_pause";
+
+export interface StoreOpenOptions {
+  recoverCorrupt?: boolean;
+  now?: () => Date;
+}
+
+export interface OpenedStoreDatabase {
+  db: Database.Database;
+  recoveryEvent?: TelemetryEvent;
+}
+
+const CREATE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS leases (
+  lease_id TEXT PRIMARY KEY,
+  worker_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  coordinator_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  state TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  lease_duration_ms INTEGER NOT NULL DEFAULT ${DEFAULT_LEASE_DURATION_MS},
+  heartbeat_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orch_leases_state ON leases (state);
+CREATE INDEX IF NOT EXISTS idx_orch_leases_worker_state ON leases (worker_id, state);
+CREATE INDEX IF NOT EXISTS idx_orch_leases_task ON leases (task_id);
+
+CREATE TABLE IF NOT EXISTS allocations (
+  allocation_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  coordinator_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  optional_roles_skipped_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orch_allocations_task ON allocations (task_id);
+
+CREATE TABLE IF NOT EXISTS allocation_leases (
+  allocation_id TEXT NOT NULL,
+  lease_id TEXT NOT NULL,
+  PRIMARY KEY (allocation_id, lease_id),
+  FOREIGN KEY (allocation_id) REFERENCES allocations(allocation_id) ON DELETE CASCADE,
+  FOREIGN KEY (lease_id) REFERENCES leases(lease_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS queue_items (
+  task_id TEXT NOT NULL,
+  coordinator_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  missing_roles_json TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  blocked_since TEXT NOT NULL,
+  resume_on_json TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  PRIMARY KEY (task_id, coordinator_id)
+);
+CREATE INDEX IF NOT EXISTS idx_orch_queue_priority ON queue_items (priority, blocked_since, task_id);
+
+CREATE TABLE IF NOT EXISTS telemetry_events (
+  event_id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  task_id TEXT,
+  worker_id TEXT,
+  provider TEXT,
+  family TEXT,
+  role TEXT,
+  timestamp TEXT NOT NULL,
+  detail_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_orch_telemetry_time ON telemetry_events (timestamp, event_id);
+
+CREATE TABLE IF NOT EXISTS live_run_continuations (
+  task_id TEXT NOT NULL,
+  coordinator_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  state TEXT NOT NULL,
+  task_json TEXT NOT NULL,
+  enqueued_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  last_dispatched_at TEXT,
+  allocation_id TEXT,
+  last_error TEXT,
+  PRIMARY KEY (task_id, coordinator_id)
+);
+CREATE INDEX IF NOT EXISTS idx_orch_live_run_state ON live_run_continuations (state, updated_at, task_id, coordinator_id);
+`;
+
+export function openStoreDatabase(dbPath: string, opts: StoreOpenOptions = {}): OpenedStoreDatabase {
+  try {
+    return { db: openDatabase(dbPath) };
+  } catch (err) {
+    if (opts.recoverCorrupt === false || dbPath === ":memory:" || !fs.existsSync(dbPath)) {
+      throw err;
+    }
+    const now = opts.now ?? (() => new Date());
+    const corruptPath = moveCorruptDatabase(dbPath, now);
+    const recoveredAt = now().toISOString();
+    logger.warn(`orchestration store: moved corrupt DB to ${corruptPath}; starting empty and surfacing recovery telemetry`);
+    return {
+      db: openDatabase(dbPath),
+      recoveryEvent: {
+        eventId: "evt_store_corrupt_recovered_1",
+        type: "store_corrupt_recovered",
+        timestamp: recoveredAt,
+        detail: {
+          corruptPath,
+          message: "orchestration state could not be trusted; in-flight leases and queue require operator review",
+        },
+      },
+    };
+  }
+}
+
+function openDatabase(dbPath: string): Database.Database {
+  if (dbPath !== ":memory:") {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  }
+  const db = new Database(dbPath, { timeout: 5000 });
+  try {
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    db.exec(CREATE_SCHEMA);
+    ensureLeaseDurationColumn(db);
+    setMeta(db, "schema_version", String(SCHEMA_VERSION));
+    return db;
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+}
+
+function ensureLeaseDurationColumn(db: Database.Database): void {
+  const columns = db.pragma("table_info(leases)") as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "lease_duration_ms")) return;
+  db.prepare(`ALTER TABLE leases ADD COLUMN lease_duration_ms INTEGER NOT NULL DEFAULT ${DEFAULT_LEASE_DURATION_MS}`).run();
+}
+
+function moveCorruptDatabase(dbPath: string, now: () => Date): string {
+  const basePath = nextCorruptPath(dbPath, now);
+  renameIfExists(dbPath, basePath);
+  renameIfExists(`${dbPath}-wal`, `${basePath}-wal`);
+  renameIfExists(`${dbPath}-shm`, `${basePath}-shm`);
+  return basePath;
+}
+
+function nextCorruptPath(dbPath: string, now: () => Date): string {
+  const stamp = now().toISOString().replace(/[^0-9A-Za-z]+/g, "-").replace(/-$/, "");
+  let candidate = `${dbPath}.corrupt.${stamp}`;
+  let index = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = `${dbPath}.corrupt.${stamp}.${index++}`;
+  }
+  return candidate;
+}
+
+function renameIfExists(source: string, target: string): void {
+  if (!fs.existsSync(source)) return;
+  fs.renameSync(source, target);
+}

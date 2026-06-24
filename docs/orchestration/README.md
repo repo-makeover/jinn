@@ -299,10 +299,12 @@ boolean only; invalid types are rejected by config validation.
 
 ## Durable State
 
-`packages/jinn/src/orchestration/store.ts` creates a dedicated SQLite database
-at `~/.jinn/orchestration.db` by default, with WAL mode and tables for leases,
-allocations, queue items, telemetry events, and small metadata. Tests pass
-explicit temp database paths and do not write live `~/.jinn`.
+`packages/jinn/src/orchestration/store.ts` is the durable store facade for a
+dedicated SQLite database at `~/.jinn/orchestration.db` by default.
+`store-schema.ts` owns WAL setup, migrations, and corrupt-DB quarantine;
+`store-snapshot.ts` owns scheduler snapshot load/save/delta SQL; and
+`store-continuations.ts` owns live continuation and queue-control SQL. Tests
+pass explicit temp database paths and do not write live `~/.jinn`.
 
 `packages/jinn/src/orchestration/persistent-scheduler.ts` hydrates a
 `MatrixScheduler` from stored rows, persists mutations with incremental
