@@ -1,10 +1,14 @@
 import fs from "node:fs";
+import yaml from "js-yaml";
 import { formatZodError } from "../orchestration/schemas.js";
 import { loadAllocationRequest, loadOrchestrationConfig, loadSimulationScenario } from "../orchestration/config.js";
 import { loadCoordinatorTaskBrief, planCoordinatorAllocation } from "../orchestration/coordinator.js";
+import { liveRunModeSchema } from "../orchestration/run-mode.js";
 import { PersistentMatrixScheduler } from "../orchestration/persistent-scheduler.js";
 import { MatrixScheduler, runSimulation } from "../orchestration/scheduler.js";
-import { ORCH_DB } from "../shared/paths.js";
+import { GATEWAY_INFO_FILE, ORCH_DB } from "../shared/paths.js";
+import { loadConfig } from "../shared/config.js";
+import { readGatewayInfo } from "../gateway/gateway-info.js";
 import type { AllocationResult, Lease, OrchestrationConfig, QueueItem, SchedulerSnapshot, Worker } from "../orchestration/types.js";
 
 export interface ConfigDirOptions {
@@ -18,6 +22,12 @@ export interface SchedulerAllocateOptions extends ConfigDirOptions {
 
 export interface OrchestrationStateOptions extends ConfigDirOptions {
   dbPath?: string;
+}
+
+export interface OrchestrationRunOptions {
+  mode: string;
+  task: string;
+  json?: boolean;
 }
 
 function requireConfigDir(opts: ConfigDirOptions): string {
@@ -109,6 +119,34 @@ function formatQueue(queue: QueueItem[]): string {
   return lines.join("\n");
 }
 
+function formatRunResult(result: any): string {
+  if (result?.ok === false) {
+    return [
+      `Task ${result.queueItem?.taskId ?? "(unknown)"} blocked_resource`,
+      `Missing roles: ${(result.queueItem?.missingRoles ?? []).join(", ")}`,
+      `Resume on: ${(result.queueItem?.resumeOn ?? []).join(", ")}`,
+    ].join("\n");
+  }
+  const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+  const lines = [
+    `Orchestration run ${result?.state ?? "completed"}`,
+    `Mode: ${result?.mode ?? "(unknown)"}`,
+    `Allocation: ${result?.allocation?.allocationId ?? "(unknown)"}`,
+  ];
+  for (const session of sessions) {
+    lines.push(`- ${session.role}: ${session.workerId} (${session.sessionId}) ${session.status}${session.error ? `: ${session.error}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+function readTaskYaml(filePath: string): unknown {
+  try {
+    return yaml.load(fs.readFileSync(filePath, "utf-8"));
+  } catch (err) {
+    throw new Error(`failed to read ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function readSnapshotIfPresent(config: OrchestrationConfig, opts: OrchestrationStateOptions): SchedulerSnapshot | undefined {
   const dbPath = opts.dbPath ?? ORCH_DB;
   if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) return undefined;
@@ -177,4 +215,27 @@ export async function runSchedulerSimulate(scenarioFile: string, opts: ConfigDir
     queue: scheduler.listQueue(),
   };
   print(opts.json ? result : JSON.stringify(result, null, 2), opts.json);
+}
+
+export async function runOrchestrationRun(opts: OrchestrationRunOptions): Promise<void> {
+  const mode = liveRunModeSchema.parse(opts.mode);
+  const task = readTaskYaml(opts.task);
+  const config = loadConfig();
+  const gateway = readGatewayInfo(GATEWAY_INFO_FILE);
+  if (!gateway?.apiToken) throw new Error("gateway is not running or gateway token is unavailable");
+
+  const res = await fetch(`http://${config.gateway.host}:${gateway.port || config.gateway.port}/api/orchestration/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${gateway.apiToken}`,
+    },
+    body: JSON.stringify({ mode, task }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok && res.status !== 409) {
+    const detail = body && typeof body === "object" && "detail" in body ? `: ${(body as { detail?: unknown }).detail}` : "";
+    throw new Error(`orchestration run failed (${res.status})${detail}`);
+  }
+  print(opts.json ? body : formatRunResult(body), opts.json);
 }

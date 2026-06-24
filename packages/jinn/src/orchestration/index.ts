@@ -6,4 +6,7 @@ export * from "./store.js";
 export * from "./persistent-scheduler.js";
 export * from "./routing-headroom.js";
 export * from "./coordinator.js";
+export * from "./lease-meta.js";
+export * from "./runtime.js";
+export * from "./run-mode.js";
 export * from "./adapter/index.js";

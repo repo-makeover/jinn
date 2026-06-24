@@ -33,13 +33,14 @@
 - `jinn scheduler plan <task-file> --config-dir <dir> [--db-path <path>] [--json]` expands a coordinator template into an observe-only allocation plan.
 - `jinn leases list --config-dir <dir> [--db-path <path>] [--json]` lists durable orchestration leases when a DB exists.
 - `jinn queue list --config-dir <dir> [--db-path <path>] [--json]` lists durable blocked-resource queue items when a DB exists.
-- This foundation is inert: it does not call providers, create worktrees, change gateway session execution, update the dashboard, or write to live `~/.jinn`.
+- `jinn run --mode single_worker|single_worker_with_review --task <file> [--json]` posts a live task brief to the running gateway; the daemon must have `orchestration.enabled: true`.
+- Dry-run/list/plan commands remain inert and explicit-path based. `jinn run` is opt-in live execution through the daemon-owned scheduler and existing Jinn session path.
 - Fidelity gaps:
-  - A SQLite store and persistent scheduler wrapper now exist for leases, allocations, queue items, and telemetry events, but they are code-level foundations only.
+  - A SQLite store, persistent scheduler wrapper, and daemon runtime now exist for leases, allocations, queue items, and telemetry events.
   - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, `mock`, and opt-in live adapters for existing Jinn engine ids via an injected engine map. The default registry used by dry-runs remains inert-only.
   - Usage-aware headroom helpers can filter unavailable, exhausted, or below-threshold live engines when future live orchestration opts in; simulation mode does not call this filter.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
-  - Persistent telemetry aggregation, worktree execution, live orchestration modes, and GUI controls are later milestones.
+  - Worktree execution, dashboard controls, board-worker routing, cross-family live policy, and persistent telemetry aggregation are later milestones.
 
 ## API
 
@@ -49,10 +50,13 @@
 - `GET /api/orchestration/leases` returns existing durable orchestration leases.
 - `GET /api/orchestration/queue` returns blocked-resource queue items, including missing roles and resume triggers.
 - `GET /api/orchestration/allocations` returns existing durable allocations.
-- These routes inherit the existing `/api/*` gateway token gate and reject non-GET methods with `405`.
+- `POST /api/orchestration/run` executes `single_worker` and `single_worker_with_review` tasks through the daemon runtime.
+- These routes inherit the existing `/api/*` gateway token gate; unsupported methods on each path return `405`.
 - Fidelity gaps:
-  - The routes observe state only. They do not allocate, retry, heartbeat, release, cancel, start providers, create sessions, or wire dashboard controls.
-  - If no orchestration DB exists, state routes return empty arrays rather than creating live runtime state.
+  - GET routes observe state only; `POST /api/orchestration/run` is the only M5 mutating route.
+  - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, and releases leases on terminal paths.
+  - If no orchestration runtime exists, state routes retain the no-daemon/test fallback; the run route fails instead of opening its own live scheduler.
+  - No worktrees, dashboard controls, cancel API, or board-worker routing are wired yet.
 
 ### Kiro headless engine and estimated credit gauge
 - `kiro` is a registered headless engine. Work turns spawn:

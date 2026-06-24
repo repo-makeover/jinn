@@ -47,6 +47,24 @@ describe("GET /api/orchestration/*", () => {
     expect(cap.status).toBe(405);
     expect(cap.body).toEqual({ error: "Method not allowed" });
   });
+
+  it("reads observe state from the shared runtime when one is present", async () => {
+    const ctx = makeCtx(config());
+    ctx.orchestration = {
+      runtime: {
+        listWorkers: () => [{ id: "runtimeWorker" }],
+        listLeases: () => [{ taskId: "runtime-task", state: "running" }],
+        listQueue: () => [],
+        listAllocations: () => [{ taskId: "runtime-task", state: "allocated" }],
+      } as any,
+    };
+
+    const workers = await get("/api/orchestration/workers", ctx);
+    const leases = await get("/api/orchestration/leases", ctx);
+
+    expect(workers.body).toMatchObject({ workers: [{ id: "runtimeWorker" }] });
+    expect(leases.body).toMatchObject({ leases: [{ taskId: "runtime-task" }] });
+  });
 });
 
 async function get(pathname: string, ctx: ApiContext) {

@@ -22,8 +22,9 @@ export class PersistentMatrixScheduler {
     this.ownsStore = !opts.store;
     this.scheduler = this.hydrateScheduler();
     if (opts.expireOnHydrate !== false) {
+      const before = this.scheduler.createSnapshot();
       const expired = this.scheduler.expireLeases(this.now());
-      if (expired.length > 0) this.persistOrRehydrate();
+      if (expired.length > 0) this.persistOrRehydrate(before);
     }
   }
 
@@ -85,14 +86,15 @@ export class PersistentMatrixScheduler {
   }
 
   private commitMutation<T>(mutate: () => T): T {
+    const before = this.scheduler.createSnapshot();
     const result = mutate();
-    this.persistOrRehydrate();
+    this.persistOrRehydrate(before);
     return result;
   }
 
-  private persistOrRehydrate(): void {
+  private persistOrRehydrate(before: SchedulerSnapshot): void {
     try {
-      this.store.replaceSnapshot(this.scheduler.createSnapshot());
+      this.store.applySnapshotDelta(before, this.scheduler.createSnapshot());
     } catch (err) {
       this.scheduler = this.hydrateScheduler();
       throw err;

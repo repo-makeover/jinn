@@ -1,13 +1,12 @@
 # Provider-Neutral Matrix Orchestration
 
-Status: implemented as an inert foundation with durable scheduler-state,
-provider-adapter contract modules, opt-in live-adapter plumbing, coordinator
-planning, observe-only CLI list commands, and observe-only HTTP routes. This
-layer validates configs, runs fake-worker allocation, creates leases, can read
-existing durable scheduler state, and defines store-agnostic adapters for later
-provider execution. It does not wire real providers into scheduler execution,
-create worktrees, update the dashboard, or change the current Jinn session
-execution path.
+Status: implemented as a provider-neutral foundation with durable
+scheduler-state, provider-adapter contract modules, opt-in live-adapter
+plumbing, coordinator planning, observe surfaces, and the first opt-in live run
+modes. The live modes are daemon-gated by `orchestration.enabled` and route
+through the existing Jinn session path. Worktrees, dashboard controls,
+board-worker dispatch, dual lanes, and org-worker mapping remain later
+milestones.
 
 ## Intent
 
@@ -60,9 +59,11 @@ minimum viable team for a task class. Quotas bound active provider/family leases
 
 ## CLI
 
-All orchestration CLI commands are inert and require an explicit `--config-dir`.
+Dry-run and observation commands require an explicit `--config-dir`.
 State-observation commands accept `--db-path`; tests and examples should pass a
-temp DB path instead of reading live `~/.jinn`.
+temp DB path instead of reading live `~/.jinn`. `jinn run` is different: it
+requires a running gateway with `orchestration.enabled: true` and sends the task
+brief to the daemon-owned scheduler.
 
 ```bash
 jinn workers list --config-dir docs/orchestration/examples
@@ -82,6 +83,9 @@ jinn scheduler plan docs/orchestration/examples/task-standard.yaml \
   --config-dir docs/orchestration/examples \
   --db-path /tmp/orchestration.db \
   --json
+
+jinn run --mode single_worker --task docs/orchestration/examples/task-live.yaml
+jinn run --mode single_worker_with_review --task docs/orchestration/examples/task-live.yaml --json
 ```
 
 `scheduler allocate` intentionally requires `--dry-run`. Without it, the command
@@ -93,19 +97,31 @@ planning modes. It may account for persisted leases/queue when `--db-path`
 points to an existing orchestration database, but it does not persist the plan or
 run any provider.
 
-## Observe-Only API
+`jinn run` accepts task YAML containing allocation fields plus `prompt`. The CLI
+does not open the scheduler DB directly; it posts the task to
+`POST /api/orchestration/run` with the gateway token. The daemon allocates on
+its single runtime scheduler, creates normal Jinn sessions with lease metadata in
+`transportMeta`, heartbeats the lease on the existing 5s session heartbeat, and
+releases leases in `finally` after each role turn settles.
 
-Gateway routes under `/api/orchestration/` are GET-only and inherit the existing
-`/api/*` gateway token gate:
+## API
+
+Gateway routes under `/api/orchestration/` inherit the existing `/api/*`
+gateway token gate.
 
 - `GET /api/orchestration/workers`
 - `GET /api/orchestration/leases`
 - `GET /api/orchestration/queue`
 - `GET /api/orchestration/allocations`
+- `POST /api/orchestration/run`
 
-These routes return the configured workers and existing durable scheduler state.
-They do not allocate, retry, heartbeat, release, cancel, start providers, create
-sessions, or write worktrees. Non-GET methods return `405`.
+The GET routes return the configured workers and scheduler state. When the
+daemon runtime exists, they read that shared instance; otherwise they use the
+old no-daemon/test fallback that opens a scheduler for read-only inspection.
+
+`POST /api/orchestration/run` executes only `single_worker` and
+`single_worker_with_review` tasks through the existing session runner. It does
+not create worktrees or dashboard controls. Non-supported methods return `405`.
 
 ## Scheduler Behavior
 
@@ -130,11 +146,11 @@ allocations, queue items, telemetry events, and small metadata. Tests pass
 explicit temp database paths and do not write live `~/.jinn`.
 
 `packages/jinn/src/orchestration/persistent-scheduler.ts` hydrates a
-`MatrixScheduler` from a stored snapshot, persists scheduler mutations
-transactionally, and expires stale leases deterministically on hydrate. This is
-not wired into gateway startup or live sessions. M4 observe-only CLI/API
-surfaces can read existing durable state with expiry disabled on read, so a
-plain inspection does not mutate state.
+`MatrixScheduler` from stored rows, persists mutations with incremental
+upserts/deletes, and expires stale leases deterministically on hydrate. The
+daemon constructs one runtime scheduler when `orchestration.enabled: true`,
+starts an expiry/retry timer, and closes the scheduler on shutdown. Plain CLI
+inspection still uses explicit temp paths or read-only fallbacks.
 
 ## Provider Adapters
 
@@ -187,21 +203,25 @@ simulation remain deterministic.
 - Unknown roles fail allocation before provider execution can exist.
 - Provider quota exhaustion blocks the whole required allocation instead of
   reserving a partial team.
+- Lease heartbeat renews `leaseExpiresAt` with a sliding TTL, so long turns do
+  not free a worker mid-run while the 5s heartbeat is alive.
 - Lease expiry releases worker capacity deterministically when `expireLeases`
-  runs or when the persistent wrapper hydrates stale leases.
+  runs, when the persistent wrapper hydrates stale leases, or when the runtime
+  reaper fires.
+- Corrupt DB recovery quarantines the DB and surfaces recovery telemetry instead
+  of silently presenting an ordinary empty state.
 - Adapter start rejects invalid leases before any inert engine can run.
 - Observe-only API routes reject mutating HTTP methods and return existing
   workers/leases/queue/allocations only.
-- Durable scheduler snapshots, adapter contracts, opt-in live adapters, and
-  headroom predicates are implemented, but persistent telemetry aggregation,
-  real worktrees, live daemon routing, and dashboard controls are not
-  implemented yet.
+- Durable scheduler state, adapter contracts, opt-in live adapters, headroom
+  predicates, daemon runtime ownership, and first live run modes are
+  implemented. Persistent telemetry aggregation, real worktrees, dual-lane
+  routing, board-worker integration, and dashboard controls are not implemented
+  yet.
 
 ## Later Milestones
 
 - Isolated implementation/review/integration worktrees.
-- First real `single_worker` and `single_worker_with_review` modes for low-risk
-  tasks.
 - Cross-family review policy for live runs.
 - Dual provider lanes and integration selection.
 - Durable telemetry and dashboard control surfaces.

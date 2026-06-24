@@ -8,6 +8,8 @@ export type AllocationState = "allocated" | "blocked_resource";
 export type TaskPriority = "low" | "normal" | "high";
 export type FamilyConstraint = "opposite_of_implementer" | "same_as_implementer";
 
+export const DEFAULT_LEASE_DURATION_MS = 60 * 60 * 1000;
+
 export interface Worker {
   id: string;
   provider: ProviderLane;
@@ -66,6 +68,7 @@ export interface Lease {
   state: LeaseState;
   startedAt: string;
   leaseExpiresAt: string;
+  leaseDurationMs: number;
   heartbeatAt: string;
 }
 
@@ -102,7 +105,8 @@ export interface TelemetryEvent {
     | "task_blocked_resource"
     | "lease_heartbeat"
     | "lease_released"
-    | "lease_expired";
+    | "lease_expired"
+    | "store_corrupt_recovered";
   taskId?: string;
   workerId?: string;
   provider?: string;

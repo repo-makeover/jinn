@@ -29,6 +29,7 @@ import { createModelFallbackHandoff } from "./model-fallback.js";
 import { deliverConnectorReply } from "./connector-reply.js";
 import { isTurnSuperseded, clearSupersededTurnMeta } from "./session-turn-state.js";
 import type { ApiContext } from "./api.js";
+import { parseLeaseTransportMeta } from "../orchestration/lease-meta.js";
 
 export interface TurnStallWatchdogConfig {
   tickMs: number;
@@ -102,7 +103,6 @@ export async function runWebSession(
   engine = runtimeEngine;
   logger.info(`Web session ${currentSession.id} running engine "${currentSession.engine}" (model: ${currentSession.model || "default"})`);
 
-  // Ensure status is "running" (may already be set by the POST handler)
   const currentStatus = getSession(currentSession.id);
   if (currentStatus && currentStatus.status !== "running") {
     updateSession(currentSession.id, {
@@ -111,7 +111,6 @@ export async function runWebSession(
     });
   }
 
-  // If this session has an assigned employee, load their persona
   let employee: import("../shared/types.js").Employee | undefined;
   if (currentSession.employee) {
     const { findEmployee } = await import("./org.js");
@@ -120,11 +119,6 @@ export async function runWebSession(
     employee = findEmployee(currentSession.employee, registry);
   }
 
-  // Pre-flight: fail fast with an actionable error if the engine's CLI binary
-  // isn't installed. Otherwise the (interactive PTY) engine spawns a missing
-  // command, exits silently, and the turn produces no output and no error.
-  // We surface it the way runWebSession reports errors and return normally
-  // (throwing here would escape the queue task as an unhandled rejection).
   if (isKnownEngine(currentSession.engine) && !engineAvailable(config, currentSession.engine)) {
     const errMsg = engineUnavailableMessage(config, currentSession.engine);
     logger.error(`Web session ${currentSession.id} blocked: ${errMsg}`);
@@ -136,8 +130,6 @@ export async function runWebSession(
     });
     context.emit("session:completed", { sessionId: currentSession.id, result: null, error: errMsg });
     maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-    // Wake the parent COO if this was a delegated child session (parity with
-    // the normal error path; no-op for top-level sessions).
     if (erroredSession) {
       notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
     }
@@ -159,8 +151,6 @@ export async function runWebSession(
       config,
       sessionId: currentSession.id,
       hierarchy: orgHierarchy,
-      // Hands-free voice orchestrator: layer the AURA persona on top of the
-      // base identity so it behaves as the thin voice layer above the COO.
       voicePersona: currentSession.source === "talk" ? getOrchestratorPersona() : undefined,
       talkThreads:
         currentSession.source === "talk"
@@ -173,9 +163,6 @@ export async function runWebSession(
           : undefined,
     });
 
-    // Per-engine config is keyed by engine name; unconfigured optional engines
-    // (antigravity/pi) resolve to {} so the engine falls back to dynamic bin/model
-    // resolution. Adding an engine needs no change here.
     const engineConfig =
       (config.engines as unknown as Record<string, { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string } | undefined>)[
         currentSession.engine
@@ -187,15 +174,6 @@ export async function runWebSession(
       effortLevelsForModel(config, currentSession.engine, currentSession.model ?? undefined),
     );
 
-    // --- per-turn stall watchdog (#2) + bounded auto-recovery (#3) ---
-    // The runHeartbeat below rewrites lastActivity every 5s for as long as
-    // engine.run is pending, so a HUNG delegated turn never looks stale to the
-    // status reconciler — it can wait forever. This watchdog is the deterministic
-    // backstop the reconciler can't be: if the engine emits no stream activity for
-    // `stallInactivityMs` (or the turn blows past the absolute `stallHardCeilingMs`),
-    // we interrupt it. The first stall is retried in place (bounded); once retries
-    // are exhausted the caller escalates to the parent instead of stranding a
-    // half-dead turn for a human to find.
     const stallPolicy = resolveTurnStallWatchdogConfig(config);
     const stallInactivityMs = stallPolicy.inactivityMs;
     const stallHardCeilingMs = stallPolicy.hardCeilingMs;
@@ -204,14 +182,6 @@ export async function runWebSession(
     const canKill = !!killer; // only engines we can interrupt get a watchdog
     let lastStreamAt = Date.now();
 
-    // --- model escalation (#3) ---
-    // In-place retry can't help when the MODEL/engine is the bottleneck (stalled
-    // hard, or out of usage — e.g. a big job exhausting a small model). Escalation
-    // moves the slice UP a capability ladder to a stronger model (often another
-    // provider) and re-runs it, before escalating to a human:
-    //   small (haiku/gemini-flash/qwen) → mid (gpt-5.4/sonnet) → large (gpt-5.5/opus).
-    // Bounded by `sessions.maxModelEscalations` plus the tried-rungs set; the ladder
-    // is overridable via `sessions.modelLadder`.
     const sessCfg = (config as unknown as { sessions?: Record<string, unknown> }).sessions ?? {};
     const maxEscalations = positiveNumberOr(sessCfg.maxModelEscalations, 2);
     const customLadder = Array.isArray(sessCfg.modelLadder)
@@ -276,8 +246,6 @@ export async function runWebSession(
         });
         insertMessage(currentSession.id, "notification", "🧭 Model fallback available: " + live.engine + "/" + (curModel || "default") + " → " + candidate.engine + "/" + candidate.model + ". Handoff: " + handoff.relativePath + ". Approval is required before switching.");
         context.emit("session:fallback-required", { sessionId: currentSession.id, handoffPath: handoff.relativePath, from: live.engine, to: candidate.engine, model: candidate.model, reason: failureReason });
-        // Persist a first-class approval so the dashboard queue can surface it and
-        // an operator can approve→resume. Deduped per session (createApproval).
         const approval = createApproval({
           sessionId: currentSession.id,
           type: "fallback",
@@ -345,11 +313,8 @@ export async function runWebSession(
 
     let lastHeartbeatAt = 0;
     const runHeartbeat = setInterval(() => {
-      // If the session was deleted mid-turn, stop heartbeating immediately —
-      // the engine.run promise may still take minutes to resolve, and we don't
-      // want to keep writing status:"running" rows for a session the user
-      // already removed (and risk re-creating registry state in some paths).
-      if (!getSession(currentSession.id)) {
+      const live = getSession(currentSession.id);
+      if (!live) {
         clearInterval(runHeartbeat);
         return;
       }
@@ -357,14 +322,16 @@ export async function runWebSession(
         status: "running",
         lastActivity: new Date().toISOString(),
       });
+      const leaseMeta = parseLeaseTransportMeta(live.transportMeta);
+      if (leaseMeta && context.orchestration?.runtime) {
+        try {
+          context.orchestration.runtime.heartbeatLease(leaseMeta.leaseId, leaseMeta.coordinatorId);
+        } catch (err) {
+          logger.warn(`Orchestration heartbeat failed for session ${currentSession.id}: ${err instanceof Error ? err.message : err}`);
+        }
+      }
     }, 5000);
 
-    // Mid-turn persistence: mirror the live stream into `partial` DB rows so a
-    // refresh restores in-progress blocks. Coalesced — text grows ONE row
-    // (debounced, never per-token, so SQLite isn't hammered); each tool call is
-    // its own row. All wiped + replaced by the single final message at turn end
-    // (deletePartialMessages below). Only the primary engine stream is mirrored;
-    // the rate-limit fallback stream stays WS-only (rare path).
     let partialSeq = 0;
     let curTextId: string | null = null; // the growing text-block row, null between blocks
     let curText = "";
@@ -412,8 +379,6 @@ export async function runWebSession(
 
     const turnStartedAt = Date.now();
     let result!: Awaited<ReturnType<typeof engine.run>>;
-    // Set by the watchdog when the FINAL attempt is killed for stalling; drives
-    // the escalation branch after the loop. Null after a clean (or recovered) turn.
     let stalledReason: string | null = null;
     try {
     for (let stallAttempt = 0; ; stallAttempt++) {
@@ -438,8 +403,6 @@ export async function runWebSession(
                 `[watchdog] web session ${currentSession.id} (${currentSession.engine}) stalled: ${stalledReason} ` +
                   `— interrupting${shouldRetrySameEngineAfterStall(stallAttempt, maxStallRetries) ? " and retrying" : ""}`,
               );
-              // Interrupted-prefixed reason so the engine settles the run promise;
-              // the stalledReason flag (not this text) is what routes escalation.
               killer?.kill(currentSession.id, `Interrupted: stalled — ${stalledReason}`);
             }
           }, stallPolicy.tickMs)
@@ -457,21 +420,10 @@ export async function runWebSession(
       attachments: attachments?.length ? attachments : undefined,
       sessionId: currentSession.id,
       source: currentSession.source,
-      // Any raw engine output (tool logs, progress, thinking) is proof-of-life:
-      // bump the inactivity timer so long tool calls / thinking blocks — which emit
-      // no parsed deltas — don't false-trip the stall watchdog.
       onActivity: () => { lastStreamAt = Date.now(); },
       onStream: (delta) => {
-        // Same guard as runHeartbeat: a delta may arrive after the user
-        // deleted the session; don't resurrect registry state for it.
         if (!getSession(currentSession.id)) return;
-        // Live context-meter: message_start.usage arrives as a `context` delta
-        // (once per assistant message — infrequent). Persist it immediately so the
-        // meter ticks during the turn, not just at completion. The delta also flows
-        // to the FE below for an instant in-pane update.
         if (delta.type === "context") {
-          // Only the MAIN agent's stream reaches here (the proxy suppresses
-          // sub-agent/auxiliary streams), so its usage drives the session meter.
           const ctx = Number(delta.content);
           if (Number.isFinite(ctx) && ctx > 0) {
             updateSession(currentSession.id, { lastContextTokens: ctx });
@@ -498,18 +450,11 @@ export async function runWebSession(
         } catch (err) {
           logger.warn(`Failed to emit stream delta for session ${currentSession.id}: ${err instanceof Error ? err.message : err}`);
         }
-        // Mirror the block into a persisted partial row (refresh survival). Guarded
-        // so a DB hiccup never breaks the live stream above.
         try {
           persistPartialDelta(delta);
         } catch (err) {
           logger.warn(`Failed to persist partial block for session ${currentSession.id}: ${err instanceof Error ? err.message : err}`);
         }
-        // Voice mode: stream the orchestrator's spoken text — complete sentences
-        // synthesize immediately (per-sentence streaming); the flush at completion
-        // speaks the remainder. Only `text` deltas are spoken; tool_use/context
-        // are not. Skip entirely when the client is muted (silent/read mode) —
-        // there's no point buffering or synthesizing audio the browser will discard.
         if (
           currentSession.source === "talk" &&
           !isTalkMuted(currentSession.id) &&
@@ -519,9 +464,6 @@ export async function runWebSession(
           feedTalkText(currentSession.id, delta.content, config.talk?.kokoro, context.emit);
         }
       },
-      // A turn that settled as failed but whose CLI later finished delivers the
-      // recovered text here. Append it and restore a clean idle status — unless
-      // the session is gone or a NEW turn owns it (status back to "running").
       onLateRecovery: ({ result: lateText, sessionId: engineSid }) => {
         const live = getSession(currentSession.id);
         if (!live || live.status === "running") return;
@@ -532,8 +474,6 @@ export async function runWebSession(
           lastActivity: new Date().toISOString(),
           lastError: null,
         });
-        // The parent/channel already saw this turn fail — label the late answer
-        // so it reads as a supersede, not a fresh unprompted turn.
         const labelled = `(recovered — this supersedes the earlier reported failure)\n\n${lateText}`;
         if (recovered) {
           notifyParentSession(recovered, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify });
@@ -553,9 +493,6 @@ export async function runWebSession(
         if (stallWatchdog) clearInterval(stallWatchdog);
       }
       if (!stallKilled || !shouldRetrySameEngineAfterStall(stallAttempt, maxStallRetries)) break;
-      // Bounded auto-recovery (#3): the slice stalled and retries remain. Drop the
-      // killed attempt's partial rows and re-run the same turn in place. Only after
-      // the budget is spent do we fall through to the escalation branch below.
       deletePartialMessages(currentSession.id);
       logger.warn(
         `[watchdog] web session ${currentSession.id} retrying after stall ` +
@@ -564,8 +501,6 @@ export async function runWebSession(
     }
     } finally {
       clearInterval(runHeartbeat);
-      // Stop any pending debounced text flush so it can't re-insert a partial row
-      // after the turn-end cleanup below deletes them.
       if (partialFlushTimer) { clearTimeout(partialFlushTimer); partialFlushTimer = null; }
       flushPartialText();
     }
@@ -575,14 +510,7 @@ export async function runWebSession(
       return;
     }
 
-    // #2/#3: the final attempt stalled and bounded auto-recovery is spent. Escalate
-    // as a real failure and WAKE THE PARENT so the director can reroute — rather
-    // than letting the killed turn fall through as an "Interrupted" no-op (which
-    // settles silently and strands the slice). The onLateRecovery hook still
-    // supersedes this if a slow-but-alive engine finishes within its window.
     if (stalledReason) {
-      // Before escalating to a human, try to escalate the slice to a stronger model.
-      // A successful escalation re-dispatches and owns completion.
       if (await attemptEscalation("stall", stalledReason)) return;
       const attempts = maxStallRetries + 1;
       const errMsg =
@@ -609,11 +537,6 @@ export async function runWebSession(
     const wasSuperseded = !wasInterrupted && isTurnSuperseded(currentSession.id, turnStartedAt);
     const quietPreempted = wasInterrupted || wasSuperseded;
 
-    // Turn settled. Most engines replace live partials with a single final
-    // assistant message. Antigravity's transcript is already interleaved text +
-    // tool rows, so preserve those blocks when tool cards were streamed. If the
-    // turn was preempted by a newer user message, drop stale partials/results so
-    // the old assistant answer cannot land after the new user bubble.
     const streamedBlocks = getMessages(currentSession.id).filter((m) => m.partial);
     const preserveStreamedBlocks =
       !quietPreempted && currentSession.engine === "antigravity" && streamedBlocks.some((m) => !!m.toolCall);
@@ -627,19 +550,10 @@ export async function runWebSession(
     const rateLimit = !quietPreempted ? detectRateLimit(result) : { limited: false as const };
 
     if (rateLimit.limited) {
-      // Record a deterministic per-engine reset clock — the provider's reset time if
-      // it gave one, else a 3h fallback window — so the usage oracle and the
-      // wait-until-reset recovery know when THIS engine frees up (for this turn's
-      // recovery and for future preflight checks). See shared/usage-status.ts.
       recordEngineRateLimit(currentSession.engine, rateLimit.resetsAt);
-      // Engine out of usage. Prefer escalating the slice to a STRONGER model on a
-      // different provider over idling in the wait-and-retry loop (which can stall
-      // for hours). Applies to all engines, including Claude. If no stronger model
-      // is available, fall through to the existing rate-limit machinery below.
       if (await attemptEscalation("usage", "engine usage/quota limit")) {
         return;
       }
-      // Drop any buffered voice text — we won't speak a rate-limited turn.
       if (currentSession.source === "talk") discardTalkSpeech(currentSession.id);
       const emitDelta = (delta: StreamDelta) => {
         context.emit("session:delta", {
@@ -676,9 +590,6 @@ export async function runWebSession(
               `⚠️ ${rateLimitSummary(originalEngine)} reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} switching to ${fallbackName}.`,
             );
 
-            // Switching away from the source engine — drop any warm PTY AND its armed
-            // late-recovery listener so the abandoned turn can't double-answer after
-            // the fallback delivers.
             if (engine && isInterruptibleEngine(engine)) {
               engine.kill(currentSession.id, "Interrupted: engine switched");
             }
@@ -697,7 +608,6 @@ export async function runWebSession(
             });
             if (completedFallback) {
               notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
-              // Relay the fallback turn to the originating connector channel (#51).
               if (fallbackResult.result) void deliverConnectorReply(completedFallback, fallbackResult.result, context.connectors);
             }
 
@@ -718,7 +628,6 @@ export async function runWebSession(
               : null;
             const sourceEngine = currentSession.engine;
 
-            // Send a deterministic Discord notification — does not depend on the LLM
             notifyDiscordChannel(
               `⚠️ ${rateLimitSummary(sourceEngine)} reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
             );
@@ -727,7 +636,6 @@ export async function runWebSession(
               rateLimitWaitingNotice(sourceEngine, resumeText);
             insertMessage(currentSession.id, "notification", notificationText);
 
-            // Notify parent session about rate limit (fire-and-forget)
             const waitingSession = getSession(currentSession.id);
             notifyRateLimited(
               (waitingSession ?? { ...currentSession, status: "waiting" }) as Session,
@@ -745,7 +653,6 @@ export async function runWebSession(
           },
           onRetryStream: emitDelta,
           onRetrySuccess: (retryResult) => {
-            // Usage limit cleared — handle result
             if (retryResult.result) {
               insertMessage(currentSession.id, "assistant", retryResult.result);
             }
@@ -764,7 +671,6 @@ export async function runWebSession(
                 `✅ ${rateLimitSummary(sourceEngine)} cleared. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} resumed.`,
               );
               notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
-              // Relay the resumed (rate-limit-cleared) turn to the originating connector channel (#51).
               if (retryResult.result) void deliverConnectorReply(completedAfterRetry, retryResult.result, context.connectors);
             }
 
@@ -807,15 +713,10 @@ export async function runWebSession(
       return;
     }
 
-    // Persist the assistant response
     if (result.result && !resultAlreadyPersisted && !quietPreempted) {
       insertMessage(currentSession.id, "assistant", result.result);
     }
 
-    // Voice mode: flush the remainder of the turn's spoken text (final chunk,
-    // carries last:true). Fire-and-forget so completion isn't blocked on audio.
-    // Discard (don't synthesize) on a half-finished interrupt OR when the client
-    // is muted — the browser plays nothing in silent mode.
     if (currentSession.source === "talk") {
       if (quietPreempted || isTalkMuted(currentSession.id)) discardTalkSpeech(currentSession.id);
       else void flushTalkSpeech(currentSession.id, config.talk?.kokoro, context.emit);
@@ -824,10 +725,6 @@ export async function runWebSession(
     const completedSession = updateSession(currentSession.id, {
       ...(result.sessionId?.trim() ? { engineSessionId: result.sessionId } : {}),
       ...(typeof result.contextTokens === "number" ? { lastContextTokens: result.contextTokens } : {}),
-      // An interrupt (new message arrived / user stopped) is NOT an error — land idle
-      // with no lastError, mirroring the connector path (manager.ts). Otherwise the
-      // session would stick in "error" with a misleading "Interrupted" message and
-      // fire a false parent-callback failure when the interrupt is the last action.
       status: quietPreempted ? "idle" : (result.error ? "error" : "idle"),
       lastActivity: new Date().toISOString(),
       lastError: quietPreempted ? null : (result.error ?? null),
@@ -848,9 +745,6 @@ export async function runWebSession(
       notifyParentSession(completedSession, { result: result.result, error: reportedError, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
     }
 
-    // Relay the turn back to the originating connector channel (#51). Only
-    // connector-sourced sessions reaching this path (parent callbacks, cron
-    // follow-ups) deliver; web/talk/cron + interrupted turns no-op.
     if (completedSession && !quietPreempted && result.result) {
       await deliverConnectorReply(completedSession, result.result, context.connectors);
     }
@@ -877,7 +771,6 @@ export async function runWebSession(
       logger.info(`Skipping error handling for deleted web session ${currentSession.id}: ${errMsg}`);
       return;
     }
-    // The run threw — drop any orphaned mid-turn partial blocks.
     deletePartialMessages(currentSession.id);
     const erroredSession = updateSession(currentSession.id, {
       status: "error",

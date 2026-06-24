@@ -32,53 +32,30 @@ function pushUnknownKeys(
   }
 }
 
-function validateStringArray(
-  problems: string[],
-  path: string,
-  value: unknown,
-): void {
+function validateStringArray(problems: string[], path: string, value: unknown): void {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
     problems.push(`${path} must be an array of strings`);
   }
 }
 
-function validateNumber(
-  problems: string[],
-  path: string,
-  value: unknown,
-): void {
+function validateNumber(problems: string[], path: string, value: unknown): void {
   if (typeof value !== "number") problems.push(`${path} must be a number (got ${typeof value})`);
 }
 
-function validateString(
-  problems: string[],
-  path: string,
-  value: unknown,
-): void {
+function validateString(problems: string[], path: string, value: unknown): void {
   if (typeof value !== "string") problems.push(`${path} must be a string (got ${typeof value})`);
 }
 
-function validateBoolean(
-  problems: string[],
-  path: string,
-  value: unknown,
-): void {
+function validateBoolean(problems: string[], path: string, value: unknown): void {
   if (typeof value !== "boolean") problems.push(`${path} must be a boolean (got ${typeof value})`);
 }
 
-function validateStringOrStringArray(
-  problems: string[],
-  path: string,
-  value: unknown,
-): void {
+function validateStringOrStringArray(problems: string[], path: string, value: unknown): void {
   const valid = typeof value === "string" || (Array.isArray(value) && value.every((entry) => typeof entry === "string"));
   if (!valid) problems.push(`${path} must be a string or array of strings`);
 }
 
-function validateWorkspaces(
-  problems: string[],
-  value: unknown,
-): void {
+function validateWorkspaces(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("workspaces must be a mapping");
     return;
@@ -88,10 +65,7 @@ function validateWorkspaces(
   if (value.defaultCwd !== undefined) validateString(problems, "workspaces.defaultCwd", value.defaultCwd);
 }
 
-function validateGateway(
-  problems: string[],
-  value: unknown,
-): void {
+function validateGateway(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("gateway must be a mapping");
     return;
@@ -568,10 +542,7 @@ function validateSessions(
   if (value.autoResumeOnBoot !== undefined) validateBoolean(problems, "sessions.autoResumeOnBoot", value.autoResumeOnBoot);
 }
 
-function validateBoardWorker(
-  problems: string[],
-  value: unknown,
-): void {
+function validateBoardWorker(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("boardWorker must be a mapping");
     return;
@@ -624,10 +595,20 @@ function validateBoardWorker(
   }
 }
 
-function validateCron(
-  problems: string[],
-  value: unknown,
-): void {
+function validateOrchestration(problems: string[], value: unknown): void {
+  if (!isPlainObject(value)) {
+    problems.push("orchestration must be a mapping");
+    return;
+  }
+  pushUnknownKeys(problems, value, ["enabled", "configDir", "dbPath", "leaseDurationMs", "reaperIntervalMs"], "orchestration");
+  if (value.enabled !== undefined) validateBoolean(problems, "orchestration.enabled", value.enabled);
+  if (value.configDir !== undefined) validateString(problems, "orchestration.configDir", value.configDir);
+  if (value.dbPath !== undefined) validateString(problems, "orchestration.dbPath", value.dbPath);
+  if (value.leaseDurationMs !== undefined) validateNumber(problems, "orchestration.leaseDurationMs", value.leaseDurationMs);
+  if (value.reaperIntervalMs !== undefined) validateNumber(problems, "orchestration.reaperIntervalMs", value.reaperIntervalMs);
+}
+
+function validateCron(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("cron must be a mapping");
     return;
@@ -648,10 +629,7 @@ function validateCron(
   if (value.alertThresholdMs !== undefined) validateNumber(problems, "cron.alertThresholdMs", value.alertThresholdMs);
 }
 
-function validateNotifications(
-  problems: string[],
-  value: unknown,
-): void {
+function validateNotifications(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("notifications must be a mapping");
     return;
@@ -661,10 +639,7 @@ function validateNotifications(
   if (value.channel !== undefined) validateString(problems, "notifications.channel", value.channel);
 }
 
-function validatePortal(
-  problems: string[],
-  value: unknown,
-): void {
+function validatePortal(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("portal must be a mapping");
     return;
@@ -677,10 +652,7 @@ function validatePortal(
   if (value.setupComplete !== undefined) validateBoolean(problems, "portal.setupComplete", value.setupComplete);
 }
 
-function validateContext(
-  problems: string[],
-  value: unknown,
-): void {
+function validateContext(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("context must be a mapping");
     return;
@@ -689,11 +661,7 @@ function validateContext(
   if (value.maxChars !== undefined) validateNumber(problems, "context.maxChars", value.maxChars);
 }
 
-function validateStt(
-  problems: string[],
-  value: unknown,
-  path = "stt",
-): void {
+function validateStt(problems: string[], value: unknown, path = "stt"): void {
   if (!isPlainObject(value)) {
     problems.push(`${path} must be a mapping`);
     return;
@@ -705,10 +673,7 @@ function validateStt(
   if (value.languages !== undefined) validateStringArray(problems, `${path}.languages`, value.languages);
 }
 
-function validateTalk(
-  problems: string[],
-  value: unknown,
-): void {
+function validateTalk(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("talk must be a mapping");
     return;
@@ -729,10 +694,7 @@ function validateTalk(
   }
 }
 
-function validateRemotes(
-  problems: string[],
-  value: unknown,
-): void {
+function validateRemotes(problems: string[], value: unknown): void {
   if (!isPlainObject(value)) {
     problems.push("remotes must be a mapping");
     return;
@@ -774,6 +736,7 @@ export function validateConfigShape(config: unknown): string[] {
     "logging",
     "mcp",
     "modelFallback",
+    "orchestration",
     "sessions",
     "boardWorker",
     "cron",
@@ -801,6 +764,7 @@ export function validateConfigShape(config: unknown): string[] {
   if (c.logging !== undefined) validateLogging(problems, c.logging);
   if (c.mcp !== undefined) validateMcp(problems, c.mcp);
   if (c.modelFallback !== undefined) validateModelFallback(problems, c.modelFallback);
+  if (c.orchestration !== undefined) validateOrchestration(problems, c.orchestration);
   if (c.sessions !== undefined) validateSessions(problems, c.sessions);
   if (c.boardWorker !== undefined) validateBoardWorker(problems, c.boardWorker);
   if (c.cron !== undefined) validateCron(problems, c.cron);

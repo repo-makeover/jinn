@@ -3,7 +3,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { logger } from "../shared/logger.js";
 import { ORCH_DB } from "../shared/paths.js";
-import type { Allocation, Lease, QueueItem, SchedulerSnapshot, TelemetryEvent } from "./types.js";
+import { DEFAULT_LEASE_DURATION_MS, type Allocation, type Lease, type QueueItem, type SchedulerSnapshot, type TelemetryEvent } from "./types.js";
 
 const SCHEMA_VERSION = 1;
 const NEXT_SEQ_META_KEY = "scheduler_next_seq";
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS leases (
   state TEXT NOT NULL,
   started_at TEXT NOT NULL,
   lease_expires_at TEXT NOT NULL,
+  lease_duration_ms INTEGER NOT NULL DEFAULT ${DEFAULT_LEASE_DURATION_MS},
   heartbeat_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_orch_leases_state ON leases (state);
@@ -88,6 +89,7 @@ interface LeaseRow {
   state: Lease["state"];
   started_at: string;
   lease_expires_at: string;
+  lease_duration_ms?: number;
   heartbeat_at: string;
 }
 
@@ -128,7 +130,10 @@ interface TelemetryRow {
 }
 
 export class OrchestrationStore {
-  private constructor(private readonly db: Database.Database) {}
+  private constructor(
+    private readonly db: Database.Database,
+    private readonly recoveryEvent?: TelemetryEvent,
+  ) {}
 
   static open(dbPath = ORCH_DB, opts: StoreOpenOptions = {}): OrchestrationStore {
     try {
@@ -138,8 +143,17 @@ export class OrchestrationStore {
         throw err;
       }
       const corruptPath = moveCorruptDatabase(dbPath, opts.now ?? (() => new Date()));
-      logger.warn(`orchestration store: moved corrupt DB to ${corruptPath}`);
-      return new OrchestrationStore(openDatabase(dbPath));
+      const recoveredAt = (opts.now ?? (() => new Date()))().toISOString();
+      logger.warn(`orchestration store: moved corrupt DB to ${corruptPath}; starting empty and surfacing recovery telemetry`);
+      return new OrchestrationStore(openDatabase(dbPath), {
+        eventId: "evt_store_corrupt_recovered_1",
+        type: "store_corrupt_recovered",
+        timestamp: recoveredAt,
+        detail: {
+          corruptPath,
+          message: "orchestration state could not be trusted; in-flight leases and queue require operator review",
+        },
+      });
     }
   }
 
@@ -153,6 +167,9 @@ export class OrchestrationStore {
     const allocations = this.loadAllocations(leaseById);
     const queue = this.loadQueue();
     const telemetry = this.loadTelemetry();
+    if (this.recoveryEvent && !telemetry.some((event) => event.eventId === this.recoveryEvent?.eventId)) {
+      telemetry.unshift(this.recoveryEvent);
+    }
     const nextSeq = this.loadNextSeq() ?? inferNextSeq({ allocations, leases, queue, telemetry, nextSeq: 1 });
     return { allocations, leases, queue, telemetry, nextSeq };
   }
@@ -167,9 +184,9 @@ export class OrchestrationStore {
 
       const insertLease = this.db.prepare(`
         INSERT INTO leases (
-          lease_id, worker_id, task_id, coordinator_id, role, state, started_at, lease_expires_at, heartbeat_at
+          lease_id, worker_id, task_id, coordinator_id, role, state, started_at, lease_expires_at, lease_duration_ms, heartbeat_at
         ) VALUES (
-          @leaseId, @workerId, @taskId, @coordinatorId, @role, @state, @startedAt, @leaseExpiresAt, @heartbeatAt
+          @leaseId, @workerId, @taskId, @coordinatorId, @role, @state, @startedAt, @leaseExpiresAt, @leaseDurationMs, @heartbeatAt
         )
       `);
       for (const lease of snapshot.leases) insertLease.run(lease);
@@ -237,6 +254,155 @@ export class OrchestrationStore {
       this.setMeta(NEXT_SEQ_META_KEY, String(snapshot.nextSeq));
     });
     replace();
+  }
+
+  applySnapshotDelta(before: SchedulerSnapshot, after: SchedulerSnapshot): void {
+    const beforeLeases = new Map(before.leases.map((lease) => [lease.leaseId, lease]));
+    const afterLeases = new Map(after.leases.map((lease) => [lease.leaseId, lease]));
+    const beforeAllocations = new Map(before.allocations.map((allocation) => [allocation.allocationId, allocation]));
+    const afterAllocations = new Map(after.allocations.map((allocation) => [allocation.allocationId, allocation]));
+    const beforeQueue = new Map(before.queue.map((item) => [queueKey(item), item]));
+    const afterQueue = new Map(after.queue.map((item) => [queueKey(item), item]));
+    const beforeTelemetry = new Map(before.telemetry.map((event) => [event.eventId, event]));
+    const afterTelemetry = new Map(after.telemetry.map((event) => [event.eventId, event]));
+
+    const apply = this.db.transaction(() => {
+      const deleteAllocationLease = this.db.prepare("DELETE FROM allocation_leases WHERE allocation_id = ?");
+      const deleteAllocation = this.db.prepare("DELETE FROM allocations WHERE allocation_id = ?");
+      for (const allocationId of beforeAllocations.keys()) {
+        if (afterAllocations.has(allocationId)) continue;
+        deleteAllocationLease.run(allocationId);
+        deleteAllocation.run(allocationId);
+      }
+
+      const deleteLease = this.db.prepare("DELETE FROM leases WHERE lease_id = ?");
+      for (const leaseId of beforeLeases.keys()) {
+        if (!afterLeases.has(leaseId)) deleteLease.run(leaseId);
+      }
+
+      const deleteQueueItem = this.db.prepare("DELETE FROM queue_items WHERE task_id = ? AND coordinator_id = ?");
+      for (const key of beforeQueue.keys()) {
+        if (afterQueue.has(key)) continue;
+        const [taskId, coordinatorId] = splitQueueKey(key);
+        deleteQueueItem.run(taskId, coordinatorId);
+      }
+
+      const deleteTelemetry = this.db.prepare("DELETE FROM telemetry_events WHERE event_id = ?");
+      for (const eventId of beforeTelemetry.keys()) {
+        if (!afterTelemetry.has(eventId)) deleteTelemetry.run(eventId);
+      }
+
+      const upsertLease = this.db.prepare(`
+        INSERT INTO leases (
+          lease_id, worker_id, task_id, coordinator_id, role, state, started_at, lease_expires_at, lease_duration_ms, heartbeat_at
+        ) VALUES (
+          @leaseId, @workerId, @taskId, @coordinatorId, @role, @state, @startedAt, @leaseExpiresAt, @leaseDurationMs, @heartbeatAt
+        )
+        ON CONFLICT(lease_id) DO UPDATE SET
+          worker_id = excluded.worker_id,
+          task_id = excluded.task_id,
+          coordinator_id = excluded.coordinator_id,
+          role = excluded.role,
+          state = excluded.state,
+          started_at = excluded.started_at,
+          lease_expires_at = excluded.lease_expires_at,
+          lease_duration_ms = excluded.lease_duration_ms,
+          heartbeat_at = excluded.heartbeat_at
+      `);
+      for (const [leaseId, lease] of afterLeases) {
+        if (sameJson(lease, beforeLeases.get(leaseId))) continue;
+        upsertLease.run(lease);
+      }
+
+      const upsertAllocation = this.db.prepare(`
+        INSERT INTO allocations (
+          allocation_id, task_id, coordinator_id, state, optional_roles_skipped_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(allocation_id) DO UPDATE SET
+          task_id = excluded.task_id,
+          coordinator_id = excluded.coordinator_id,
+          state = excluded.state,
+          optional_roles_skipped_json = excluded.optional_roles_skipped_json,
+          created_at = excluded.created_at
+      `);
+      const insertAllocationLease = this.db.prepare(`
+        INSERT INTO allocation_leases (allocation_id, lease_id) VALUES (?, ?)
+        ON CONFLICT(allocation_id, lease_id) DO NOTHING
+      `);
+      for (const [allocationId, allocation] of afterAllocations) {
+        if (sameAllocationRecord(allocation, beforeAllocations.get(allocationId))) continue;
+        upsertAllocation.run(
+          allocation.allocationId,
+          allocation.taskId,
+          allocation.coordinatorId,
+          allocation.state,
+          JSON.stringify(allocation.optionalRolesSkipped),
+          allocation.createdAt,
+        );
+        deleteAllocationLease.run(allocation.allocationId);
+        for (const lease of allocation.leases) {
+          insertAllocationLease.run(allocation.allocationId, lease.leaseId);
+        }
+      }
+
+      const upsertQueueItem = this.db.prepare(`
+        INSERT INTO queue_items (
+          task_id, coordinator_id, state, missing_roles_json, priority, blocked_since, resume_on_json, request_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(task_id, coordinator_id) DO UPDATE SET
+          state = excluded.state,
+          missing_roles_json = excluded.missing_roles_json,
+          priority = excluded.priority,
+          blocked_since = excluded.blocked_since,
+          resume_on_json = excluded.resume_on_json,
+          request_json = excluded.request_json
+      `);
+      for (const [key, item] of afterQueue) {
+        if (sameJson(item, beforeQueue.get(key))) continue;
+        upsertQueueItem.run(
+          item.taskId,
+          item.coordinatorId,
+          item.state,
+          JSON.stringify(item.missingRoles),
+          item.priority,
+          item.blockedSince,
+          JSON.stringify(item.resumeOn),
+          JSON.stringify(item.request),
+        );
+      }
+
+      const upsertTelemetry = this.db.prepare(`
+        INSERT INTO telemetry_events (
+          event_id, type, task_id, worker_id, provider, family, role, timestamp, detail_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id) DO UPDATE SET
+          type = excluded.type,
+          task_id = excluded.task_id,
+          worker_id = excluded.worker_id,
+          provider = excluded.provider,
+          family = excluded.family,
+          role = excluded.role,
+          timestamp = excluded.timestamp,
+          detail_json = excluded.detail_json
+      `);
+      for (const [eventId, event] of afterTelemetry) {
+        if (sameJson(event, beforeTelemetry.get(eventId))) continue;
+        upsertTelemetry.run(
+          event.eventId,
+          event.type,
+          event.taskId ?? null,
+          event.workerId ?? null,
+          event.provider ?? null,
+          event.family ?? null,
+          event.role ?? null,
+          event.timestamp,
+          event.detail ? JSON.stringify(event.detail) : null,
+        );
+      }
+
+      this.setMeta(NEXT_SEQ_META_KEY, String(after.nextSeq));
+    });
+    apply();
   }
 
   private loadLeases(): Lease[] {
@@ -328,6 +494,7 @@ function openDatabase(dbPath: string): Database.Database {
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
     db.exec(CREATE_SCHEMA);
+    ensureLeaseDurationColumn(db);
     db.prepare(`
       INSERT INTO meta (key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -349,7 +516,45 @@ function rowToLease(row: LeaseRow): Lease {
     state: row.state,
     startedAt: row.started_at,
     leaseExpiresAt: row.lease_expires_at,
+    leaseDurationMs: row.lease_duration_ms ?? DEFAULT_LEASE_DURATION_MS,
     heartbeatAt: row.heartbeat_at,
+  };
+}
+
+function ensureLeaseDurationColumn(db: Database.Database): void {
+  const columns = db.pragma("table_info(leases)") as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "lease_duration_ms")) return;
+  db.prepare(`ALTER TABLE leases ADD COLUMN lease_duration_ms INTEGER NOT NULL DEFAULT ${DEFAULT_LEASE_DURATION_MS}`).run();
+}
+
+function queueKey(item: Pick<QueueItem, "taskId" | "coordinatorId">): string {
+  return `${encodeURIComponent(item.taskId)}\t${encodeURIComponent(item.coordinatorId)}`;
+}
+
+function splitQueueKey(key: string): [string, string] {
+  const [taskId, coordinatorId] = key.split("\t");
+  return [decodeURIComponent(taskId), decodeURIComponent(coordinatorId)];
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  if (right === undefined) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function sameAllocationRecord(left: Allocation, right: Allocation | undefined): boolean {
+  if (!right) return false;
+  return JSON.stringify(allocationRecord(left)) === JSON.stringify(allocationRecord(right));
+}
+
+function allocationRecord(allocation: Allocation): unknown {
+  return {
+    allocationId: allocation.allocationId,
+    taskId: allocation.taskId,
+    coordinatorId: allocation.coordinatorId,
+    state: allocation.state,
+    optionalRolesSkipped: allocation.optionalRolesSkipped,
+    createdAt: allocation.createdAt,
+    leaseIds: allocation.leases.map((lease) => lease.leaseId),
   };
 }
 

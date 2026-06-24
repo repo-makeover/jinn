@@ -211,6 +211,24 @@ describe("MatrixScheduler", () => {
     expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-1", "coord-1")).toEqual({ ok: false, reason: "lease_expired" });
   });
 
+  it("renews lease expiry on heartbeat with the original lease duration", () => {
+    let now = fixedNow;
+    const s = new MatrixScheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]), {
+      now: () => now,
+    });
+    const result = s.requestAllocation(request({ leaseDurationMs: 1_000 }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const leaseId = result.allocation.leases[0].leaseId;
+
+    now = new Date("2026-06-23T12:00:00.750Z");
+    const renewed = s.heartbeatLease(leaseId, "coord-1");
+    expect(renewed.leaseExpiresAt).toBe("2026-06-23T12:00:01.750Z");
+
+    expect(s.expireLeases(new Date("2026-06-23T12:00:01.000Z"))).toEqual([]);
+    expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-1", "coord-1")).toEqual({ ok: true });
+  });
+
   it("retries queued work by priority", () => {
     const s = scheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]));
     const first = s.requestAllocation(request({ taskId: "running" }));
@@ -227,4 +245,3 @@ describe("MatrixScheduler", () => {
     expect(retried[0].allocation.taskId).toBe("high");
   });
 });
-

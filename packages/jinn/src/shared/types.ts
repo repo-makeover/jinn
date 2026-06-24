@@ -5,9 +5,6 @@ export interface StreamDelta {
   content: string;
   toolName?: string;
   toolId?: string;
-  /** First 200 chars of the stringified tool input. Present on PreToolUse-sourced
-   *  `tool_use` deltas (fired just before the tool runs, full input assembled).
-   *  Absent on the SSE-proxy `content_block_start` delta (input not yet known). */
   input?: string;
 }
 
@@ -17,17 +14,9 @@ export interface Engine {
 }
 
 export interface InterruptibleEngine extends Engine {
-  /** Kill a running engine process for a specific Jinn session. */
   kill(sessionId: string, reason?: string): void;
-  /** Check if a live engine process is still running for this session. */
   isAlive(sessionId: string): boolean;
-  /** Kill all live engine processes during gateway shutdown. */
   killAll(): void;
-  /** Recycle only IDLE warm PTYs (no in-flight turn), leaving active turns
-   *  untouched. Used on org-reload so the next turn cold-respawns with the fresh
-   *  persona without interrupting a turn that is currently running. Engines with
-   *  no warm-PTY reuse (batch engines spawn fresh per turn) implement this as a
-   *  no-op — there is nothing idle to recycle and live processes are active turns. */
   killIdle(): void;
 }
 
@@ -44,25 +33,12 @@ export interface EngineRunOpts {
   model?: string;
   effortLevel?: string;
   attachments?: string[];
-  /** Extra CLI flags to pass to the engine binary (e.g. ["--chrome"]) */
   cliFlags?: string[];
-  /** Path to resolved Jinn MCP config JSON. Claude gets --mcp-config; Codex gets equivalent -c mcp_servers.* overrides. */
   mcpConfigPath?: string;
   onStream?: (delta: StreamDelta) => void;
-  /** Stall-watchdog liveness hook: called on ANY raw engine output (PTY bytes —
-   *  tool logs, progress, thinking), not just parsed deltas. run-web-session uses it
-   *  to bump the inactivity timer so long tool calls / thinking don't false-trip the
-   *  stall watchdog. The hard ceiling remains the genuine-hang backstop. */
   onActivity?: () => void;
-  /** Unique Jinn session ID for tracking the spawned process. */
   sessionId?: string;
-  /** Session source ("cron", "web", "slack", …) — used by the interactive engine for lifecycle policy. */
   source?: string;
-  /** Interactive engines only: called when a turn that already settled as
-   *  failed (API-error StopFailure) later produces a real Stop — the CLI
-   *  retried past the grace window and finished. The gateway should persist
-   *  `result` as a follow-up assistant message and restore idle status.
-   *  `sessionId` is the engine-native session id ("" if unknown). */
   onLateRecovery?: (info: { result: string; sessionId: string }) => void;
 }
 
@@ -72,15 +48,8 @@ export interface EngineResult {
   cost?: number;
   durationMs?: number;
   numTurns?: number;
-  /** Most recent turn's INPUT context size (input + cache-read + cache-creation
-   *  tokens) — i.e. how full the context window currently is. Undefined when the
-   *  engine doesn't surface usage. */
   contextTokens?: number;
   error?: string;
-  /**
-   * Optional rate limit metadata returned by an engine.
-   * `resetsAt` is a Unix timestamp in seconds.
-   */
   rateLimit?: EngineRateLimitInfo;
 }
 
@@ -134,7 +103,6 @@ export interface GlobalModelFallbackConfig {
 
 export interface EngineRateLimitInfo {
   status?: string;
-  /** Unix timestamp in seconds */
   resetsAt?: number;
   rateLimitType?: string;
   overageStatus?: string;
@@ -177,7 +145,6 @@ export interface Connector {
   editMessage(target: Target, text: string): Promise<void>;
   setTypingStatus?(channelId: string, threadTs: string | undefined, status: string): Promise<void>;
   onMessage(handler: (msg: IncomingMessage) => void): void;
-  /** Return the bound employee name, if any */
   getEmployee?(): string | undefined;
 }
 
@@ -667,13 +634,11 @@ export interface ModelConfigEntry {
 }
 
 export interface EngineModelsConfig {
-  /** Default model id; falls back to the first listed model. */
   default?: string;
   effortMechanism?: EffortMechanism;
   models: ModelConfigEntry[];
 }
 
-/** `models:` block keyed by engine name (claude | codex | antigravity | grok | pi | kiro). */
 export type ModelsConfig = Record<string, EngineModelsConfig>;
 
 export interface BoardWorkerScheduleWindow {
@@ -694,40 +659,32 @@ export interface BoardWorkerConfig {
   };
 }
 
+export interface OrchestrationRuntimeConfig {
+  enabled?: boolean;
+  configDir?: string;
+  dbPath?: string;
+  leaseDurationMs?: number;
+  reaperIntervalMs?: number;
+}
+
 export interface JinnConfig {
   jinn?: { version?: string };
-  /** Per-chat working-folder selection. Optional; absent = free-browse + JINN_HOME default. */
   workspaces?: {
-    /** Allow-list of roots a session cwd must resolve inside. Empty/absent = any readable dir. */
     roots?: string[];
-    /** Default working dir offered in the new-chat picker. Absent = JINN_HOME. */
     defaultCwd?: string;
   };
   gateway: {
     port: number;
     host: string;
     streaming?: boolean;
-    /** No-output watchdog: interrupt a turn after this many idle ms. Default 180000. */
     turnStallInactivityMs?: number;
-    /** Absolute per-turn watchdog ceiling in ms. Default 2700000. */
     turnStallCeilingMs?: number;
-    /** Same-engine retries after a stall before model fallback/escalation. Default 1. */
     turnStallRetries?: number;
-    /** Opt-in unsafe local convenience: allow POST /api/files to write a custom managed path. Default false. */
     allowFileCustomPaths?: boolean;
-    /** Opt-in unsafe local convenience: allow POST /api/files {open:true} to open uploaded files. Default false. */
     allowFileOpen?: boolean;
-    /** Roots /api/files/read may serve from. Defaults to JINN_HOME plus managed file/upload roots. */
     fileReadRoots?: string[];
-    /** Explicit unsafe escape hatch: allow /api/files/read to serve any readable local file. Default false. */
     allowArbitraryFileRead?: boolean;
-    /** Include the absolute resolved path in /api/files/read responses. Default false. */
     exposeResolvedFilePaths?: boolean;
-    /** Opt-in: when set, POST /api/sessions reads the forwarded SSO identity
-     *  from this request header (set by an auth proxy such as oauth2-proxy,
-     *  Traefik forward-auth, or IAP) and persists it on the session. Accepts a
-     *  single header name or a priority-ordered list. Unset = single-user
-     *  no-op (sessions default to "web-user", header never read). */
     userHeader?: string | string[];
   };
   engines: {
@@ -737,13 +694,9 @@ export interface JinnConfig {
       model: string;
       effortLevel?: string;
       childEffortOverride?: string;
-      /** Max concurrent live PTYs across all sessions (CLI/xterm view only). Default 8. */
       maxLivePtys?: number;
     };
     codex: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
-    /** Antigravity (`agy`) engine. `bin` is optional — resolved dynamically
-     *  (PATH + common install dirs) when absent. agy ignores model/effort flags
-     *  today, so those fields are forward-looking. */
     antigravity?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     grok?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     pi?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
@@ -752,15 +705,11 @@ export interface JinnConfig {
       model?: string;
       effortLevel?: string;
       childEffortOverride?: string;
-      /** Estimated monthly Kiro credit budget. Used only for local gauge math. */
       creditBudget?: number;
-      /** UTC day-of-month when the local Kiro estimate resets. Default 1. */
       billingAnchorDay?: number;
     };
-    /** Hermes (`hermes` CLI) engine. `bin` optional — PATH-resolved. No effort. */
     hermes?: { bin?: string; model?: string };
   };
-  /** Optional model + capability registry. When absent, synthesized from engines.<name>.model. */
   models?: ModelsConfig;
   connectors: Record<string, any> & {
     web?: WebConnectorConfig;
@@ -768,21 +717,18 @@ export interface JinnConfig {
     telegram?: TelegramConnectorConfig;
     discord?: DiscordConnectorConfig;
     whatsapp?: WhatsAppConnectorConfig;
-    /** Named connector instances — allows multiple connectors of the same type */
     instances?: ConnectorInstance[];
   };
   logging: { file: boolean; stdout: boolean; level: string };
   mcp?: McpGlobalConfig;
   modelFallback?: GlobalModelFallbackConfig;
+  orchestration?: OrchestrationRuntimeConfig;
   sessions?: {
     maxDurationMinutes?: number;
     maxCostUsd?: number;
     interruptOnNewMessage?: boolean;
-    /** What to do when the active engine hits a usage/rate limit. Default: "wait" (no automatic engine switch). Set to "fallback" to opt in to switching to another configured engine while it resets. */
     rateLimitStrategy?: "wait" | "fallback";
-    /** Engine to use when rateLimitStrategy="fallback". Default: "codex". */
     fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro";
-    /** Opt-in replay of pending web queue items on gateway startup. Default false. */
     autoResumeOnBoot?: boolean;
   };
   boardWorker?: BoardWorkerConfig;
@@ -790,7 +736,6 @@ export interface JinnConfig {
     defaultDelivery?: CronDelivery;
     alertChannel?: string;
     alertConnector?: string;
-    /** If a cron job takes longer than this (ms), post a latency warning to the alert channel. Default: 300000 (5 min). */
     alertThresholdMs?: number;
   };
   notifications?: {
@@ -799,7 +744,6 @@ export interface JinnConfig {
   };
   portal?: PortalConfig;
   context?: {
-    /** Max characters for the built system prompt. Defaults to 100000. */
     maxChars?: number;
   };
   stt?: {

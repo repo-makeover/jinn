@@ -402,26 +402,31 @@ the source brief.
   daemon boot, provider adapters, worktrees, dashboard controls, retry/release
   mutation routes, or board-worker dispatch. Those remain M5+.
 
-### M5 — First real mode: `single_worker` + `single_worker_with_review` (brief Phase 6)
+### M5 — First real mode: `single_worker` + `single_worker_with_review` (complete, 2026-06-23)
 
 - **Goal:** end-to-end orchestration for **low-risk tasks only**: allocate → run turn
   through the session path → release → (optional) opposite-family reviewer reads diff →
   QA → emit telemetry.
-- **Deliverables:** `orchestration/run-mode.ts`; wire allocation → `run-web-session.ts`;
-  lease heartbeat tied to the existing `onActivity` callback; `jinn run --mode
-  single_worker[_with_review] --task <file>`.
-- **Exit gate (brief AC):** ≥5 low-risk tasks run through orchestration; **no worker
-  collision; no provider leakage into scheduler; no lost worktrees; no unbounded
-  background runs** (every run has a lease TTL + watchdog).
-- **Team:** implementer; **review:** department real-task smoke + workflow critique.
-- **M1-derived preconditions (BLOCKING for going live):** (1) replace the current
-  full-snapshot write-through (`PersistentMatrixScheduler` deletes+reinserts all tables
-  on every mutation) with **incremental upserts/deletes** before heartbeats run live —
-  per-mutation O(total-state) writes do not scale once `onActivity` heartbeats fire on
-  every turn; (2) instantiate exactly **one** `PersistentMatrixScheduler` at daemon boot
-  (hydrate once, `close()` on shutdown), not per-request; (3) on corrupt-DB recovery
-  (which quarantines and starts empty = lease/queue loss), emit an audit/telemetry event
-  and re-queue or surface the loss — never silently drop in-flight work.
+- **Delivered:** `orchestration/run-mode.ts` allocates on the daemon-owned runtime
+  scheduler, creates normal Jinn sessions with lease metadata in `transportMeta`, dispatches
+  through `runWebSession`, and releases each lease in `finally`. `run-web-session.ts`
+  renews leases from the existing 5s `runHeartbeat` interval. `orchestration/runtime.ts`
+  owns one `PersistentMatrixScheduler`, expiry/retry timer, and shutdown `close()`.
+  `orchestration.enabled` is accepted in config and defaults off when absent. M4 observe
+  routes read the shared runtime when present, with the old open-per-request path kept only
+  as no-daemon/test fallback. `jinn run --mode single_worker|single_worker_with_review
+  --task <file>` posts to `POST /api/orchestration/run`.
+- **Resolved live preconditions:** persistent scheduler mutations now use incremental
+  upserts/deletes instead of delete-all snapshot replacement; corrupt store recovery
+  quarantines the DB and surfaces recovery telemetry; heartbeat renews `leaseExpiresAt`
+  with the lease's original duration; release/expiry trigger queued-work retry.
+- **Validation:** focused M5 tests cover five low-risk mock runs, review-mode sequencing,
+  heartbeat renewal, persistent scheduler/store regressions, shared-runtime observe routes,
+  and CLI gateway posting. `pnpm --filter jinn-cli typecheck` passed.
+- **Remaining boundary:** M5 has no worktrees, dashboard controls, board-worker routing,
+  dual-lane competition, org-worker bridge, persistent telemetry JSONL, or broad live-provider
+  smoke. `single_worker_with_review` runs sequential sessions and prompts the reviewer as
+  review-only, but read-only worktree enforcement is M6.
 
 ### M6 — Worktree execution (brief Phase 5) ✦ new infrastructure
 
@@ -536,6 +541,9 @@ Split before a file approaches the limit. New runtime state under `JINN_HOME` on
 | `gateway/api/orchestration-routes.ts` | M4 | `/api/orchestration/*` handlers | ≤400 |
 | `cli/orchestration.ts` (modify) | M4 | leases/queue/plan subcommands | keep ≤500 |
 | `orchestration/run-mode.ts` | M5 | allocate→run→review→QA→release | ≤400 |
+| `orchestration/runtime.ts` | M5 | daemon-boot owner: single scheduler + expiry/retry timer + shutdown close | ≤200 |
+| `gateway/api/orchestration-routes.ts` (modify) | M5 | read shared boot instance; open-per-request only as no-daemon fallback | keep ≤400 |
+| `shared/config-schema.ts` + `types.ts` (modify) | M5 | `orchestration.enabled` flag (off by default) | small |
 | `orchestration/worktree.ts` | M6 | git worktree lifecycle + reaper | ≤350 |
 | `orchestration/cross-family.ts` | M7 | live family policy + explainability | ≤200 |
 | `orchestration/dual-lane.ts` | M8 | competing lanes + comparison | ≤400 |
@@ -625,7 +633,11 @@ high-priority queued behind normal resumes first · atomic allocation prevents d
 - **M2/M3:** adapter rejects start without owned lease; structured error on failure;
   **claude PTY-path contract test** (no headless bypass); rate-limited engine filtered.
 - **M5:** ≥5 low-risk tasks E2E with `mock`/local workers; collision impossible (two
-  tasks never lease one worker under load); lease TTL + watchdog bounds every run.
+  tasks never lease one worker under load); lease TTL + watchdog bounds every run;
+  heartbeat renews `leaseExpiresAt` (a turn longer than `leaseDurationMs` keeps its worker,
+  is not re-leased); lease released on every terminal run-web-session path (error, stall,
+  rate-limit fallback, late recovery, deleted session); observe routes read the single boot
+  instance (no stale second-handle read).
 - **M6:** lane-isolation (lane A cannot write lane B); reviewer worktree read-only;
   orphan reaper finds + removes abandoned worktrees; non-git cwd downgrade logged.
 - **M7:** reviewer-selection explainability; same-family fallback permit/forbid honored.
@@ -658,7 +670,7 @@ high-priority queued behind normal resumes first · atomic allocation prevents d
 |---|---|---|---|
 | R1 | Two dispatchers (board-worker + scheduler) collide on one engine/employee | Scheduler is single allocator (D6); board-worker defers/gated (M9) | M9 collision test; disable→regression test |
 | R2 | New per-worker leasing conflicts with per-session-key `SessionQueue` | Scheduler sits *above* session manager; different axes (D1) | M5 collision + ordering tests |
-| R3 | Agent collision (two tasks, one worker) | Valid owned lease required for all execution; adapter rejects otherwise (D2) | adapter contract test; M5 load test |
+| R3 | Agent collision (two tasks, one worker) | Valid owned lease required for all execution; adapter rejects otherwise (D2); heartbeat renews `leaseExpiresAt` so a long turn's lease never expires mid-run (M5 precond. 4) | adapter contract test; M5 load test; long-turn lease-renewal test (turn > `leaseDurationMs` keeps worker) |
 | R4 | Deadlock / half-allocated teams | Atomic allocation + lease TTLs (core); persistence preserves atomicity (M1) | atomic-allocation test (×2: core + persisted) |
 | R5 | State loss on daemon restart | Durable SQLite + hydrate-on-boot (D3, M1) | restart round-trip test |
 | R6 | Review theater (full teams for trivial tasks) | Risk-based team assembly; modes 1–5 (§6) | mode-selection tests |
@@ -770,7 +782,13 @@ Milestone-specific emphasis to append to the template:
 - **M3:** "Prove the claude worker runs via interactive PTY (cc_entrypoint=cli) with a
   contract test; filter rate-limited engines via usage-status.ts; sim mode unaffected."
 - **M5:** "≥5 low-risk tasks E2E with mock/local workers; no collision, no leak, no lost
-  worktrees, no unbounded runs (lease TTL + watchdog on every run)."
+  worktrees, no unbounded runs (lease TTL + watchdog on every run). Resolve all four
+  BLOCKING preconditions first — especially heartbeat-renews-`leaseExpiresAt` (today it
+  does not; a turn outliving `leaseDurationMs` would let the worker be re-leased). Heartbeat
+  on the 5s `runHeartbeat` interval, not raw `onActivity`. Release the lease on EVERY
+  terminal path of run-web-session via `finally`. Allocate against the one live persistent
+  scheduler, not the observe-only planner. Add `orchestration.enabled` (off by default);
+  construct the single scheduler at boot and route the M4 observe endpoints through it."
 - **M6:** "git-only worktrees, lane isolation enforced, reviewer worktrees read-only,
   orphan reaper on boot+timer, non-git cwd downgrades with a log line."
 - **M8:** "Only start once M1–M7 are stable; identical brief to both lanes; human

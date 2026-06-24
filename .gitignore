@@ -18,6 +18,10 @@ packages/jinn/.npmrc
 .remember/
 .playwright-mcp/
 
+# Giles local state output
+state/sqlite/giles_state.db*
+state/drift_clusters.jsonl
+
 # Activity logs, audits, and session logs are local-only artifacts
 logs/
 docs/logs/

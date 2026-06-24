@@ -122,7 +122,9 @@ export class MatrixScheduler {
     if (coordinatorId && lease.coordinatorId !== coordinatorId) {
       throw new Error(`lease ${leaseId} belongs to coordinator ${lease.coordinatorId}`);
     }
-    lease.heartbeatAt = this.isoNow();
+    const heartbeatAt = this.isoNow();
+    lease.heartbeatAt = heartbeatAt;
+    lease.leaseExpiresAt = new Date(Date.parse(heartbeatAt) + lease.leaseDurationMs).toISOString();
     this.record("lease_heartbeat", {
       taskId: lease.taskId,
       workerId: lease.workerId,
@@ -336,6 +338,7 @@ export class MatrixScheduler {
       state: "running",
       startedAt,
       leaseExpiresAt: expires,
+      leaseDurationMs: request.leaseDurationMs,
       heartbeatAt: startedAt,
     };
   }

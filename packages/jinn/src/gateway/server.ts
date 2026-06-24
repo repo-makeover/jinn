@@ -29,6 +29,8 @@ import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids } from "./gatew
 import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js";
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR, ORG_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
+import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
+import { createOrchestrationRuntimeFromConfig } from "../orchestration/runtime.js";
 import { startStatusReconciler } from "./status-reconciler.js";
 import { syncExternalTurn } from "./external-turns.js";
 import { pickEncoding, isCompressibleExt, compressStream } from "./compress.js";
@@ -865,6 +867,8 @@ export async function startGateway(
     reloadOrg,
     backgroundActivity,
   };
+  const orchestrationRuntime = createOrchestrationRuntimeFromConfig(currentConfig);
+  if (orchestrationRuntime) apiContext.orchestration = { runtime: orchestrationRuntime };
 
   // Re-read config.yaml into memory. Used by both the file-watcher (debounced)
   // and by API handlers that write config.yaml and need getConfig() to reflect
@@ -954,6 +958,10 @@ export async function startGateway(
       if (!isAuthenticatedRequest(req, gatewayInfo.apiToken)) {
         unauthorized(res);
         return;
+      }
+      if (pathname === "/api/orchestration/run") {
+        const handled = await handleOrchestrationRoutes(req.method || "GET", pathname, res, apiContext, req);
+        if (handled) return;
       }
       handleApiRequest(req, res, apiContext);
       return;
@@ -1169,6 +1177,7 @@ export async function startGateway(
     // interrupted below — a mid-shutdown sweep must not race the teardown.
     stopStatusReconciler();
     stopBoardWorker();
+    orchestrationRuntime?.close();
 
     // Stop caffeinate
     if (caffeinate && caffeinate.exitCode === null) {

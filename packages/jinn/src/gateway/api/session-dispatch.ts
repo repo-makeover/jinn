@@ -134,7 +134,7 @@ export function dispatchWebSessionRun(
   config: JinnConfig,
   context: ApiContext,
   opts?: { delayMs?: number; queueItemId?: string; attachments?: string[] },
-): void {
+): Promise<void> {
   const run = async () => {
     const sessionKey = session.sessionKey || session.sourceRef;
     try {
@@ -149,7 +149,7 @@ export function dispatchWebSessionRun(
   };
 
   const launch = () => {
-    run().catch((err) => {
+    return run().catch((err) => {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error(`Web session ${session.id} dispatch error: ${errMsg}`);
       const erroredOnDispatch = updateSession(session.id, {
@@ -168,10 +168,11 @@ export function dispatchWebSessionRun(
   };
 
   if (opts?.delayMs && opts.delayMs > 0) {
-    setTimeout(launch, opts.delayMs);
-  } else {
-    launch();
+    return new Promise((resolve) => {
+      setTimeout(() => resolve(launch()), opts.delayMs);
+    });
   }
+  return launch();
 }
 
 /** Resolve an array of file IDs to local filesystem paths for engine consumption. */

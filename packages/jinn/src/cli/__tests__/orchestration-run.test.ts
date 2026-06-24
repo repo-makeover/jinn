@@ -1,0 +1,86 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+let tmpHome: string;
+let prevHome: string | undefined;
+let logSpy: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+  prevHome = process.env.JINN_HOME;
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orch-run-cli-"));
+  process.env.JINN_HOME = tmpHome;
+  vi.resetModules();
+  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  writeGatewayFiles(tmpHome);
+});
+
+afterEach(() => {
+  logSpy.mockRestore();
+  vi.unstubAllGlobals();
+  if (prevHome === undefined) delete process.env.JINN_HOME;
+  else process.env.JINN_HOME = prevHome;
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+  vi.resetModules();
+});
+
+describe("jinn run orchestration client", () => {
+  it("posts a task file to the running gateway with token auth", async () => {
+    const taskFile = path.join(tmpHome, "task.yaml");
+    fs.writeFileSync(taskFile, [
+      "taskId: cli-task",
+      "coordinatorId: cli-coord",
+      "requiredRoles: [seniorImplementer]",
+      "prompt: Implement a small task",
+    ].join("\n"));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      state: "completed",
+      mode: "single_worker",
+      allocation: { allocationId: "alloc-cli" },
+      sessions: [{ role: "seniorImplementer", workerId: "mock", sessionId: "s1", status: "idle", error: null }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { runOrchestrationRun } = await import("../orchestration.js");
+    await runOrchestrationRun({ mode: "single_worker", task: taskFile, json: true });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:7799/api/orchestration/run");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer test-token" });
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      mode: "single_worker",
+      task: { taskId: "cli-task", coordinatorId: "cli-coord", prompt: "Implement a small task" },
+    });
+    expect(JSON.parse(String(logSpy.mock.calls[0][0]))).toMatchObject({ state: "completed" });
+  });
+});
+
+function writeGatewayFiles(dir: string): void {
+  fs.writeFileSync(path.join(dir, "config.yaml"), [
+    "gateway:",
+    "  port: 7777",
+    "  host: 127.0.0.1",
+    "engines:",
+    "  default: claude",
+    "  claude:",
+    "    bin: claude",
+    "    model: opus",
+    "  codex:",
+    "    bin: codex",
+    "    model: gpt",
+    "connectors: {}",
+    "logging:",
+    "  file: false",
+    "  stdout: false",
+    "  level: error",
+  ].join("\n"));
+  fs.writeFileSync(path.join(dir, "gateway.json"), JSON.stringify({
+    port: 7799,
+    pid: 123,
+    secret: "test-secret",
+    apiToken: "test-token",
+  }));
+}

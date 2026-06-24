@@ -1,5 +1,6 @@
 import type { Engine, JinnConfig } from "../../shared/types.js";
 import type { OrchestrationConfig } from "../../orchestration/types.js";
+import type { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import type { SessionManager } from "../../sessions/manager.js";
 
 export interface ApiContext {
@@ -35,6 +36,7 @@ export interface ApiContext {
   backgroundActivity?: Map<string, { activeStreams: number; lastActivityAt: number }>;
   /** Optional test/embedding override for observe-only orchestration routes. */
   orchestration?: {
+    runtime?: OrchestrationRuntime;
     config?: OrchestrationConfig;
     configDir?: string;
     dbPath?: string;

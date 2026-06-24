@@ -64,6 +64,17 @@ program
     await runStatus();
   });
 
+program
+  .command("run")
+  .description("Run an opt-in matrix orchestration task through the live gateway")
+  .requiredOption("--mode <mode>", "Run mode: single_worker or single_worker_with_review")
+  .requiredOption("--task <file>", "YAML task file containing prompt and allocation fields")
+  .option("--json", "Print raw JSON")
+  .action(async (opts: { mode: string; task: string; json?: boolean }) => {
+    const { runOrchestrationRun } = await import("../src/cli/orchestration.js");
+    await runOrchestrationRun(opts);
+  });
+
 {
   const startupCmd = program
     .command("startup")

@@ -11,7 +11,7 @@ artifacts unless explicitly published.
 - `docs/engines-hermes.md`: Hermes engine behavior and caveats.
 - `docs/orchestration/README.md`: provider-neutral matrix orchestration
   foundation, durable scheduler state, adapter contracts, CLI dry-run/observe
-  commands, and observe-only HTTP routes.
+  commands, opt-in live run modes, and orchestration HTTP routes.
 
 ## Design And Planning Archives
 

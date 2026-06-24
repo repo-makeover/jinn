@@ -133,6 +133,7 @@ function exampleLease(): Lease {
     state: "running",
     startedAt: fixedNow.toISOString(),
     leaseExpiresAt: new Date(fixedNow.getTime() + 60_000).toISOString(),
+    leaseDurationMs: 60_000,
     heartbeatAt: fixedNow.toISOString(),
   };
 }
