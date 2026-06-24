@@ -453,24 +453,42 @@ export async function handleApiRequest(
       const ids: string[] = body.ids;
       if (!Array.isArray(ids) || ids.length === 0) return badRequest(res, "ids array is required");
 
+      const sessionsToDelete = ids
+        .map((id) => getSession(id))
+        .filter((session): session is NonNullable<ReturnType<typeof getSession>> => Boolean(session));
+      const existingIds = sessionsToDelete.map((session) => session.id);
+      const missingIds = ids.filter((id) => !existingIds.includes(id));
+
       // Tear down any live/warm engine processes before deleting. kill() is safe
       // to call unconditionally — it's a no-op when nothing is running.
-      for (const id of ids) {
-        const session = getSession(id);
-        if (!session) continue;
+      for (const session of sessionsToDelete) {
         killSessionEngines(context, session, "Interrupted: session deleted");
         context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
       }
 
-      for (const id of ids) {
+      for (const id of existingIds) {
         maybeEmitTalkGraph(id, "removed", { getSession, emit: context.emit });
       }
-      const count = deleteSessions(ids);
-      for (const id of ids) {
+      const count = deleteSessions(existingIds);
+      const deletedIds = existingIds.filter((id) => !getSession(id));
+      for (const id of deletedIds) {
         context.emit("session:deleted", { sessionId: id });
       }
+      const failedIds = ids.filter((id) => !deletedIds.includes(id));
+      if (failedIds.length > 0 || count !== existingIds.length) {
+        logger.warn(`Bulk delete partial: deleted ${deletedIds.length}/${ids.length} sessions`);
+        return json(res, {
+          status: "partial",
+          count: deletedIds.length,
+          requested: ids.length,
+          deletedIds,
+          failedIds,
+          missingIds,
+          error: `Deleted ${deletedIds.length} of ${ids.length} selected sessions`,
+        }, 409);
+      }
       logger.info(`Bulk deleted ${count} sessions`);
-      return json(res, { status: "deleted", count });
+      return json(res, { status: "deleted", count, requested: ids.length, deletedIds });
     }
 
     // POST /api/sessions

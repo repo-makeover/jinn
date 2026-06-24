@@ -79,7 +79,7 @@ function mapBoardTicket(item: DepartmentBoardTicket, department: string): Kanban
     id: item.id,
     title: item.title,
     description: item.description || '',
-    status: statusMap[item.status] || 'todo',
+    status: statusMap[item.status] ?? (() => { throw new Error(`Unknown ticket status '${String(item.status)}' in ${department}/${item.id}`) })(),
     priority: priorityMap[item.priority || 'medium'] || 'medium',
     complexity: complexityMap[item.complexity || 'medium'] || 'medium',
     assigneeId: item.assignee || null,
@@ -173,6 +173,8 @@ export default function KanbanPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<KanbanTicket | null>(null)
   const [deletedTickets, setDeletedTickets] = useState<DeletedKanbanTicket[]>([])
   const [recycleBinRetentionDays, setRecycleBinRetentionDays] = useState(DEFAULT_RECYCLE_BIN_RETENTION_DAYS)
+  const [departmentRetentionDays, setDepartmentRetentionDays] = useState<Record<string, number>>({})
+  const [boardLoadWarnings, setBoardLoadWarnings] = useState<string[]>([])
 
   const loadData = useCallback(() => {
     setLoading(true)
@@ -189,10 +191,13 @@ export default function KanbanPage() {
         const boardTickets: KanbanStore = {}
         const nextDeletedTickets: DeletedKanbanTicket[] = []
         let nextRetentionDays: number | null = null
+        const nextDepartmentRetentionDays: Record<string, number> = {}
+        const warnings: string[] = []
         for (const dept of data.departments) {
           try {
             const board: DepartmentBoardResponse = await api.getDepartmentBoard(dept)
             const retentionDays = clampRecycleBinRetentionDays(board.retentionDays)
+            nextDepartmentRetentionDays[dept] = retentionDays
             nextRetentionDays = nextRetentionDays == null ? retentionDays : Math.max(nextRetentionDays, retentionDays)
             for (const item of board.tickets) {
               boardTickets[item.id] = mapBoardTicket(item, dept)
@@ -200,8 +205,10 @@ export default function KanbanPage() {
             for (const item of board.deletedTickets) {
               nextDeletedTickets.push(mapDeletedBoardTicket(item, dept))
             }
-          } catch {
-            // Department may not have a board.json, that's fine
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to load board.'
+            if (/404|not found/i.test(message)) continue
+            warnings.push(`${dept}: ${message}`)
           }
         }
 
@@ -210,6 +217,8 @@ export default function KanbanPage() {
         // and stale localStorage entries would cause ghost / wrong-state tickets.
         setTickets(boardTickets)
         setDeletedTickets(nextDeletedTickets.sort((a, b) => b.deletedAt - a.deletedAt))
+        setDepartmentRetentionDays(nextDepartmentRetentionDays)
+        setBoardLoadWarnings(warnings)
         setRecycleBinRetentionDays(nextRetentionDays ?? DEFAULT_RECYCLE_BIN_RETENTION_DAYS)
       })
       .catch((e) => setError(e.message))
@@ -251,7 +260,7 @@ export default function KanbanPage() {
       store: KanbanStore,
       deletedIds: string[] = [],
       deletedVersions: Record<string, string> = {},
-      retentionDays = recycleBinRetentionDays,
+      retentionDays: number | null = null,
     ) => {
       // Group tickets by their department
       const byDept: Record<string, KanbanTicket[]> = {}
@@ -290,12 +299,12 @@ export default function KanbanPage() {
             tickets: boardData,
             deletedIds,
             deletedVersions,
-            retentionDays,
+            retentionDays: retentionDays ?? departmentRetentionDays[dept],
           })
         }),
       )
     },
-    [departments, recycleBinRetentionDays],
+    [departments, departmentRetentionDays],
   )
 
   const persistBoardChange = useCallback(
@@ -303,7 +312,7 @@ export default function KanbanPage() {
       store: KanbanStore,
       deletedIds: string[] = [],
       deletedVersions: Record<string, string> = {},
-      retentionDays = recycleBinRetentionDays,
+      retentionDays: number | null = null,
     ) => {
       setSaveError(null)
       void persistToApi(store, deletedIds, deletedVersions, retentionDays)
@@ -414,6 +423,7 @@ export default function KanbanPage() {
   function handleRecycleBinRetentionChange(days: number) {
     const nextRetentionDays = clampRecycleBinRetentionDays(days)
     setRecycleBinRetentionDays(nextRetentionDays)
+    setDepartmentRetentionDays(Object.fromEntries(departments.map((dept) => [dept, nextRetentionDays])))
     setDeletedTickets((prev) => {
       if (nextRetentionDays <= 0) return []
       const cutoff = Date.now() - (nextRetentionDays * DAY_MS)
@@ -564,6 +574,12 @@ export default function KanbanPage() {
               </button>
             </ToolbarActions>
           </div>
+
+          {boardLoadWarnings.length > 0 && (
+            <div className="mx-[var(--space-5)] mt-[var(--space-3)] rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--system-orange)_35%,transparent)] bg-[color-mix(in_srgb,var(--system-orange)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--system-orange)]">
+              Partial board load failure: {boardLoadWarnings.join('; ')}
+            </div>
+          )}
 
           {saveError && (
             <div className="mx-[var(--space-5)] mt-[var(--space-3)] rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--system-red)_35%,transparent)] bg-[color-mix(in_srgb,var(--system-red)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--system-red)] flex items-center justify-between gap-[var(--space-3)]">

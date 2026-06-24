@@ -139,6 +139,7 @@ export function ChatSidebar({
   const [loadingMore, setLoadingMore] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<SidebarDeleteTarget | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<ArchiveDialogTarget | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const deleteButtonRef = useRef<HTMLButtonElement>(null)
   const { data: orgData } = useOrg()
   const employeeData = useMemo(() => {
@@ -278,6 +279,7 @@ export function ChatSidebar({
   async function handleDeleteEmployee(empName: string, empSessions: Session[]) {
     const ids = empSessions.map((s) => s.id)
     try {
+      setDeleteError(null)
       await bulkDeleteMutation.mutateAsync(ids)
       setPinnedSessions((prev) => {
         const next = new Set(prev)
@@ -289,7 +291,9 @@ export function ChatSidebar({
       startTransition(() => {
         if (selectedId && ids.includes(selectedId)) onNewChat()
       })
-    } catch {}
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete selected sessions.')
+    }
   }
 
   async function handleDelete(sessionId: string) {
@@ -308,6 +312,7 @@ export function ChatSidebar({
     }
 
     try {
+      setDeleteError(null)
       await deleteSessionMutation.mutateAsync(sessionId)
       setPinnedSessions((prev) => {
         if (!prev.has(sessionId)) return prev
@@ -325,7 +330,9 @@ export function ChatSidebar({
           onNewChat()
         }
       })
-    } catch {}
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete session.')
+    }
   }
 
   const handleArchiveComplete = useCallback((sessionIds: string[]) => {
@@ -863,6 +870,11 @@ export function ChatSidebar({
       </div>
 
       <div className="relative min-h-0 flex-1">
+        {deleteError ? (
+          <div role="alert" className="mx-3 mt-2 rounded-md border border-[color-mix(in_srgb,var(--system-red)_35%,transparent)] bg-[color-mix(in_srgb,var(--system-red)_10%,transparent)] px-3 py-2 text-xs text-[var(--system-red)]">
+            Delete failed: {deleteError}
+          </div>
+        ) : null}
         {/* C10: short top scrim so rows dissolve under the header instead of
             clipping at a hard seam (the header border is gone). Theme-aware. */}
         <div
@@ -974,9 +986,9 @@ export function ChatSidebar({
               onClick={() => {
                 if (!deleteTarget) return
                 if (deleteTarget.type === "employee" && deleteTarget.sessions) {
-                  handleDeleteEmployee(deleteTarget.id, deleteTarget.sessions)
+                  void handleDeleteEmployee(deleteTarget.id, deleteTarget.sessions)
                 } else {
-                  handleDelete(deleteTarget.id)
+                  void handleDelete(deleteTarget.id)
                 }
                 setDeleteTarget(null)
               }}

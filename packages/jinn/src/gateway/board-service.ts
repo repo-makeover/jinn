@@ -10,6 +10,8 @@ export const MIN_RECYCLE_BIN_RETENTION_DAYS = 0;
 export const MAX_RECYCLE_BIN_RETENTION_DAYS = 7;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const VALID_STATUSES = new Set<BoardTicketStatus>(["backlog", "todo", "in_progress", "review", "done", "blocked"]);
+const VALID_PRIORITIES = new Set<BoardTicketPriority>(["low", "medium", "high"]);
 const VALID_COMPLEXITIES = new Set<BoardTicketComplexity>(["low", "medium", "high"]);
 
 export interface BoardTicket {
@@ -165,6 +167,28 @@ export function parseBoardWritePayload(
   throw new Error("Board payload must be an array or { tickets, deletedIds, retentionDays }");
 }
 
+function assertValidBoardTicket(ticket: unknown, index: number): asserts ticket is BoardTicket {
+  if (!ticket || typeof ticket !== "object" || Array.isArray(ticket)) {
+    throw new Error(`tickets[${index}] must be an object`);
+  }
+  const t = ticket as Partial<BoardTicket>;
+  if (typeof t.id !== "string" || !t.id.trim()) throw new Error(`tickets[${index}].id must be a non-empty string`);
+  if (typeof t.title !== "string" || !t.title.trim()) throw new Error(`tickets[${index}].title must be a non-empty string`);
+  if (typeof t.status !== "string" || !VALID_STATUSES.has(t.status as BoardTicketStatus)) {
+    throw new Error(`tickets[${index}].status must be one of ${[...VALID_STATUSES].join(", ")}`);
+  }
+  if (t.priority !== undefined && (typeof t.priority !== "string" || !VALID_PRIORITIES.has(t.priority as BoardTicketPriority))) {
+    throw new Error(`tickets[${index}].priority must be one of ${[...VALID_PRIORITIES].join(", ")}`);
+  }
+  if (t.complexity !== undefined && (typeof t.complexity !== "string" || !VALID_COMPLEXITIES.has(t.complexity as BoardTicketComplexity))) {
+    throw new Error(`tickets[${index}].complexity must be one of ${[...VALID_COMPLEXITIES].join(", ")}`);
+  }
+}
+
+function assertValidBoardTickets(tickets: unknown[]): asserts tickets is BoardTicket[] {
+  tickets.forEach(assertValidBoardTicket);
+}
+
 function ticketTime(value: unknown): number | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const time = Date.parse(value);
@@ -274,6 +298,7 @@ export function writeMergedBoard(
   const file = boardPath(orgDir, department);
   const current = readBoardState(orgDir, department) ?? defaultBoardState();
   const { tickets, deletedIds, deletedVersions, retentionDays } = parseBoardWritePayload(payload);
+  assertValidBoardTickets(tickets);
   const nextRetentionDays = retentionDays ?? current.retentionDays;
   const mergedTickets = mergeBoardTickets(current.tickets, tickets, deletedIds, deletedVersions);
   const mergedDeletedTickets = pruneDeletedTickets(
