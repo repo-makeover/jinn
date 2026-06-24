@@ -148,4 +148,15 @@ describe("board-service mergeBoardTickets", () => {
     expect(board?.tickets.map((entry) => entry.id)).toEqual(["restored"]);
     expect(board?.deletedTickets).toEqual([]);
   });
+
+  it("rejects malformed ticket status instead of accepting contract drift", () => {
+    const orgDir = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-board-service-"));
+    const deptDir = path.join(orgDir, "software-delivery");
+    fs.mkdirSync(deptDir, { recursive: true });
+
+    expect(() => writeMergedBoard(orgDir, "software-delivery", {
+      tickets: [{ ...ticket("bad"), status: "mystery" }],
+    })).toThrow(/status must be one of/);
+  });
+
 });
