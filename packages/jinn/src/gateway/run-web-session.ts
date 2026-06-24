@@ -28,6 +28,7 @@ import { maybeEmitTalkGraph } from "../talk/graph.js";
 import { createModelFallbackHandoff } from "./model-fallback.js";
 import { deliverConnectorReply } from "./connector-reply.js";
 import { isTurnSuperseded, clearSupersededTurnMeta } from "./session-turn-state.js";
+import { resultAlreadyInStreamedBlocks, shouldPreserveStreamedBlocks } from "./streamed-blocks.js";
 import type { ApiContext } from "./api.js";
 import { parseLeaseTransportMeta } from "../orchestration/lease-meta.js";
 
@@ -538,12 +539,8 @@ export async function runWebSession(
     const quietPreempted = wasInterrupted || wasSuperseded;
 
     const streamedBlocks = getMessages(currentSession.id).filter((m) => m.partial);
-    const preserveStreamedBlocks =
-      !quietPreempted && currentSession.engine === "antigravity" && streamedBlocks.some((m) => !!m.toolCall);
-    const resultAlreadyPersisted =
-      preserveStreamedBlocks &&
-      !!result.result?.trim() &&
-      streamedBlocks.some((m) => !m.toolCall && m.content.trim() === result.result.trim());
+    const preserveStreamedBlocks = shouldPreserveStreamedBlocks({ quietPreempted, streamedBlocks });
+    const resultAlreadyPersisted = preserveStreamedBlocks && resultAlreadyInStreamedBlocks(result.result, streamedBlocks);
     if (preserveStreamedBlocks) finalizePartialMessages(currentSession.id);
     else deletePartialMessages(currentSession.id);
 
