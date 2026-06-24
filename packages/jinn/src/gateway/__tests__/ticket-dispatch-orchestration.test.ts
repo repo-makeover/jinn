@@ -173,6 +173,34 @@ describe("ticket dispatch orchestration bridge", () => {
     await settle();
   });
 
+  it("releases an allocated lease when the ticket is claimed before board linking", async () => {
+    seedOrg([ticket("ticket-1", "worker")]);
+    const dispatchWebSessionRun = vi.fn();
+    vi.doMock("../api/session-dispatch.js", () => ({ dispatchWebSessionRun }));
+    const { dispatchTicket } = await import("../ticket-dispatch.js");
+    const { context, runtime } = await makeContext({
+      headroomFilter: async (workers) => {
+        const claimed = readBoard();
+        claimed[0].status = "in_progress";
+        claimed[0].sessionId = "external-session";
+        fs.writeFileSync(boardPath(), JSON.stringify(claimed, null, 2));
+        return { allowed: workers, rejected: [] };
+      },
+    });
+
+    const result = await dispatchTicket(
+      "software-delivery",
+      "ticket-1",
+      { source: "manual", routeToManager: false },
+      { context, orgDir: orgDir(), now: () => Date.parse("2026-06-24T10:00:00.000Z") },
+    );
+
+    expect(result).toEqual({ ok: false, reason: "already-running" });
+    expect(runtime.listLeases()).toEqual([expect.objectContaining({ state: "released" })]);
+    expect(dispatchWebSessionRun).not.toHaveBeenCalled();
+    expect(readBoard()[0]).toMatchObject({ status: "in_progress", sessionId: "external-session" });
+  });
+
   it("fails visible instead of using legacy dispatch when orchestration runtime is unavailable", async () => {
     seedOrg([ticket("ticket-1", "worker")]);
     const dispatchWebSessionRun = vi.fn();

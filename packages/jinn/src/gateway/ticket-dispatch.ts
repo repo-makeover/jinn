@@ -134,6 +134,28 @@ function getTicket(board: BoardTicket[], ticketId: string): BoardTicket | undefi
   return board.find((ticket) => ticket && ticket.id === ticketId);
 }
 
+function ticketIsAlreadyClaimed(ticket: BoardTicket, reusableSession: Session | undefined): boolean {
+  if (ticket.status !== "in_progress" && !ticket.sessionId) return false;
+  if (!reusableSession) return true;
+  return ticket.sessionId !== reusableSession.id;
+}
+
+function refreshDispatchTicket(
+  orgDir: string,
+  department: string,
+  ticketId: string,
+  reusableSession: Session | undefined,
+):
+  | { tickets: BoardTicket[]; ticket: BoardTicket }
+  | { reason: Extract<DispatchTicketFailureReason, "not-found" | "already-running"> } {
+  const latestTickets = readBoardArray(orgDir, department);
+  if (!latestTickets) return { reason: "not-found" };
+  const latestTicket = getTicket(latestTickets, ticketId);
+  if (!latestTicket) return { reason: "not-found" };
+  if (ticketIsAlreadyClaimed(latestTicket, reusableSession)) return { reason: "already-running" };
+  return { tickets: latestTickets, ticket: latestTicket };
+}
+
 function createLeaseGuard(runtime: OrchestrationRuntime, lease: Lease, worker: Worker): BoardDispatchLeaseGuard {
   let released = false;
   const transportMeta = toLeaseTransportMeta({
@@ -269,9 +291,24 @@ export async function dispatchTicket(
     return { ok: false, reason: leaseGuard.reason };
   }
 
+  let refreshed: ReturnType<typeof refreshDispatchTicket>;
+  try {
+    refreshed = refreshDispatchTicket(deps.orgDir, department, ticketId, reusableSession);
+  } catch (err) {
+    leaseGuard?.release();
+    logger.warn(`[ticket-dispatch] failed to refresh ${department}/board.json: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false, reason: "not-found" };
+  }
+  if ("reason" in refreshed) {
+    leaseGuard?.release();
+    return { ok: false, reason: refreshed.reason };
+  }
+
+  tickets = refreshed.tickets;
+  const dispatchTicket = refreshed.ticket;
   const now = deps.now?.() ?? Date.now();
   const iso = new Date(now).toISOString();
-  const prompt = ticketPrompt(ticket);
+  const prompt = ticketPrompt(dispatchTicket);
   let session: Session;
   try {
     session = reusableSession ?? createSession({
@@ -291,16 +328,16 @@ export async function dispatchTicket(
       },
       employee: employee.name,
       model: employee.model,
-      title: ticket.title,
+      title: dispatchTicket.title,
       effortLevel: employee.effortLevel ?? undefined,
       prompt,
-      promptExcerpt: ticket.title,
+      promptExcerpt: dispatchTicket.title,
     });
 
-    ticket.status = "in_progress";
-    ticket.sessionId = session.id;
-    ticket.assignee = employee.name;
-    ticket.updatedAt = iso;
+    dispatchTicket.status = "in_progress";
+    dispatchTicket.sessionId = session.id;
+    dispatchTicket.assignee = employee.name;
+    dispatchTicket.updatedAt = iso;
     writeBoardTickets(deps.orgDir, department, tickets);
 
     const runningSession = updateSession(session.id, {

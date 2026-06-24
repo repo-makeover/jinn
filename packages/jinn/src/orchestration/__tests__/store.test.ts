@@ -86,6 +86,62 @@ describe("OrchestrationStore", () => {
     store.close();
   });
 
+
+  it("migrates queue diagnostic columns for existing orchestration databases", () => {
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE leases (
+        lease_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, task_id TEXT NOT NULL, coordinator_id TEXT NOT NULL,
+        role TEXT NOT NULL, state TEXT NOT NULL, started_at TEXT NOT NULL, lease_expires_at TEXT NOT NULL,
+        lease_duration_ms INTEGER NOT NULL DEFAULT 3600000, heartbeat_at TEXT NOT NULL
+      );
+      CREATE TABLE allocations (
+        allocation_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, coordinator_id TEXT NOT NULL, state TEXT NOT NULL,
+        optional_roles_skipped_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE allocation_leases (allocation_id TEXT NOT NULL, lease_id TEXT NOT NULL, PRIMARY KEY (allocation_id, lease_id));
+      CREATE TABLE queue_items (
+        task_id TEXT NOT NULL, coordinator_id TEXT NOT NULL, state TEXT NOT NULL, missing_roles_json TEXT NOT NULL,
+        priority TEXT NOT NULL, blocked_since TEXT NOT NULL, resume_on_json TEXT NOT NULL, request_json TEXT NOT NULL,
+        PRIMARY KEY (task_id, coordinator_id)
+      );
+      CREATE TABLE telemetry_events (
+        event_id TEXT PRIMARY KEY, type TEXT NOT NULL, task_id TEXT, worker_id TEXT, provider TEXT, family TEXT,
+        role TEXT, timestamp TEXT NOT NULL, detail_json TEXT
+      );
+    `);
+    db.prepare(`
+      INSERT INTO queue_items (task_id, coordinator_id, state, missing_roles_json, priority, blocked_since, resume_on_json, request_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "task-old",
+      "coord-old",
+      "blocked_resource",
+      JSON.stringify(["seniorImplementer"]),
+      "normal",
+      fixedNow.toISOString(),
+      JSON.stringify(["worker_released"]),
+      JSON.stringify({
+        taskId: "task-old",
+        coordinatorId: "coord-old",
+        requiredRoles: ["seniorImplementer"],
+        optionalRoles: [],
+        priority: "normal",
+        leaseDurationMs: 60_000,
+      }),
+    );
+    db.close();
+
+    const store = OrchestrationStore.open(dbPath);
+    expect(store.loadSnapshot().queue[0]).toMatchObject({
+      taskId: "task-old",
+      lastBlockedAt: fixedNow.toISOString(),
+      blockedAttempts: 1,
+    });
+    store.close();
+  });
+
   it("persists, claims, and updates live run continuations across reopen", () => {
     const store = OrchestrationStore.open(dbPath);
     store.upsertLiveContinuation({
@@ -205,6 +261,8 @@ function exampleSnapshot(): SchedulerSnapshot {
         missingRoles: ["seniorImplementer"],
         priority: "high",
         blockedSince: fixedNow.toISOString(),
+        lastBlockedAt: new Date(fixedNow.getTime() + 30_000).toISOString(),
+        blockedAttempts: 3,
         resumeOn: ["worker_released", "quota_available", "lease_expired"],
         request: {
           taskId: "task-2",

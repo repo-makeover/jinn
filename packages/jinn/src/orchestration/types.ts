@@ -120,6 +120,8 @@ export interface QueueItem {
   missingRoles: string[];
   priority: TaskPriority;
   blockedSince: string;
+  lastBlockedAt: string;
+  blockedAttempts: number;
   resumeOn: Array<"worker_released" | "quota_available" | "lease_expired">;
   request: AllocationRequest;
 }
