@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CronJob } from "../../shared/types.js";
+import { refreshJinnPaths, setJinnHomeForTest } from "../../shared/paths.js";
+import { appendRunLog, loadJobs, saveJobs } from "../jobs.js";
 
 // Stub logger so tests don't touch the real log files
 vi.mock("../../shared/logger.js", () => ({
@@ -14,30 +16,21 @@ vi.mock("../../shared/logger.js", () => ({
   },
 }));
 
-// CRON_JOBS is resolved at module load from process.env.JINN_HOME, so we point
-// it at a temp dir and re-import the module graph per test (same pattern as
-// the context.ts tests).
 let tmpHome: string;
 const prevHome = process.env.JINN_HOME;
 
 beforeEach(() => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-cron-jobs-"));
   process.env.JINN_HOME = tmpHome;
-  vi.resetModules();
+  setJinnHomeForTest(tmpHome);
 });
 
 afterEach(() => {
   if (prevHome === undefined) delete process.env.JINN_HOME;
   else process.env.JINN_HOME = prevHome;
-  vi.resetModules();
+  refreshJinnPaths();
   try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
 });
-
-async function importJobs() {
-  const jobs = await import("../jobs.js");
-  const { logger } = await import("../../shared/logger.js");
-  return { ...jobs, logger };
-}
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -52,7 +45,7 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
 
 describe("loadJobs", () => {
   it("returns [] silently when jobs.json is missing", async () => {
-    const { loadJobs, logger } = await importJobs();
+    const { logger } = await import("../../shared/logger.js");
     expect(loadJobs()).toEqual([]);
     expect(logger.error).not.toHaveBeenCalled();
   });
@@ -63,7 +56,7 @@ describe("loadJobs", () => {
     const jobsPath = path.join(cronDir, "jobs.json");
     fs.writeFileSync(jobsPath, "{ not valid json", "utf-8");
 
-    const { loadJobs, logger } = await importJobs();
+    const { logger } = await import("../../shared/logger.js");
     expect(loadJobs()).toEqual([]);
     expect(logger.error).toHaveBeenCalledTimes(1);
     expect(String(vi.mocked(logger.error).mock.calls[0][0])).toContain("Failed to parse");
@@ -78,8 +71,7 @@ describe("loadJobs", () => {
 });
 
 describe("saveJobs", () => {
-  it("round-trips jobs through loadJobs and leaves no tmp file behind", async () => {
-    const { loadJobs, saveJobs } = await importJobs();
+  it("round-trips jobs through loadJobs and leaves no tmp file behind", () => {
     const jobs = [makeJob(), makeJob({ id: "other-job", name: "Other Job", enabled: false })];
 
     saveJobs(jobs);
@@ -92,8 +84,7 @@ describe("saveJobs", () => {
 });
 
 describe("appendRunLog", () => {
-  it("retains only the newest configured number of run-log entries", async () => {
-    const { appendRunLog } = await importJobs();
+  it("retains only the newest configured number of run-log entries", () => {
     for (let i = 0; i < 3; i += 1) {
       appendRunLog("test-job", {
         runId: `run-${i}`,

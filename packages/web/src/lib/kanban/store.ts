@@ -28,10 +28,13 @@ function sanitizeTicket(id: string, raw: Record<string, unknown>): KanbanTicket 
     priority,
     complexity,
     assigneeId: typeof raw.assigneeId === 'string' ? raw.assigneeId : null,
+    source: typeof raw.source === 'string' ? raw.source : undefined,
+    sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : undefined,
     department: typeof raw.department === 'string' ? raw.department : null,
     workState,
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : 0,
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : (typeof raw.createdAt === 'number' ? raw.createdAt : 0),
+    baseUpdatedAt: typeof raw.baseUpdatedAt === 'number' ? raw.baseUpdatedAt : undefined,
     departmentId: typeof raw.departmentId === 'string' ? raw.departmentId : null,
   }
 }
@@ -85,6 +88,7 @@ export function createTicket(
       workState: 'idle',
       createdAt: now,
       updatedAt: now,
+      baseUpdatedAt: now,
       departmentId: ticket.departmentId ?? null,
     },
   }

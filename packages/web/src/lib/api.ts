@@ -130,8 +130,11 @@ export interface DepartmentBoardTicket {
   priority?: DepartmentBoardTicketPriority
   complexity?: DepartmentBoardTicketComplexity
   assignee?: string
+  source?: string
+  sessionId?: string
   createdAt?: string
   updatedAt?: string
+  baseUpdatedAt?: string
   deletedAt?: string
 }
 
@@ -144,6 +147,7 @@ export interface DepartmentBoardResponse {
 export interface UpdateDepartmentBoardPayload {
   tickets: DepartmentBoardTicket[]
   deletedIds?: string[]
+  deletedVersions?: Record<string, string>
   retentionDays?: number
 }
 

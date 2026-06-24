@@ -34,6 +34,7 @@ import type { OrchestrationRuntime } from "../orchestration/runtime.js";
 import { runAllocatedDualLaneTask } from "../orchestration/dual-lane.js";
 import { runAllocatedOrchestrationTask } from "../orchestration/run-mode.js";
 import { startStatusReconciler } from "./status-reconciler.js";
+import { createGatewayNotificationSink } from "./notification-sink.js";
 import { syncExternalTurn } from "./external-turns.js";
 import { pickEncoding, isCompressibleExt, compressStream } from "./compress.js";
 import { attachPtyWebSocket } from "./pty-ws.js";
@@ -910,6 +911,9 @@ export async function startGateway(
     reloadOrg,
     backgroundActivity,
   };
+  const notificationSink = createGatewayNotificationSink(apiContext);
+  apiContext.notificationSink = notificationSink;
+  sessionManager.setNotificationSink(notificationSink);
   orchestrationRuntime = createGatewayOrchestrationRuntime(currentConfig, employeeRegistry);
   if (orchestrationRuntime) {
     bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
@@ -973,6 +977,7 @@ export async function startGateway(
   const stopStatusReconciler = startStatusReconciler({
     engines,
     emit,
+    notificationSink,
     onAfterSweep: () => {
       reconcileOrphanedTickets({
         engines,

@@ -20,6 +20,7 @@ import {
   updateSession,
 } from "./registry.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
+import type { SessionNotificationSink } from "./notification-sink.js";
 import { buildContext } from "./context.js";
 import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
@@ -120,6 +121,7 @@ export class SessionManager {
   private connectorNames: string[];
   private queue = new SessionQueue();
   private connectorProvider: () => Map<string, Connector> = () => new Map();
+  private notificationSink: SessionNotificationSink | undefined;
 
   constructor(
     config: JinnConfig,
@@ -133,6 +135,10 @@ export class SessionManager {
 
   setConnectorProvider(provider: () => Map<string, Connector>): void {
     this.connectorProvider = provider;
+  }
+
+  setNotificationSink(sink: SessionNotificationSink): void {
+    this.notificationSink = sink;
   }
 
   setConfig(config: JinnConfig): void {
@@ -260,7 +266,7 @@ export class SessionManager {
       // Wake the parent COO if this was a delegated child session (parity with
       // the normal error path; no-op for top-level sessions).
       if (erroredSession) {
-        notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
+        notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify, sink: this.notificationSink });
       }
       return;
     }
@@ -418,7 +424,7 @@ export class SessionManager {
           // The parent/channel already saw this turn fail — label the late answer
           // so it reads as a supersede, not a fresh unprompted turn.
           const labelled = `(recovered — this supersedes the earlier reported failure)\n\n${lateText}`;
-          notifyParentSession(recovered ?? live, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify });
+          notifyParentSession(recovered ?? live, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify, sink: this.notificationSink });
           void connector.replyMessage(target, labelled).catch(() => {});
           logger.info(`Session ${session.id} recovered by late Stop after a failed turn`);
         },
@@ -474,6 +480,7 @@ export class SessionManager {
 
               notifyDiscordChannel(
                 `⚠️ ${rateLimitSummary(originalEngine)} reached. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} switching to ${fallbackName}.`,
+                { sink: this.notificationSink },
               );
 
               await connector.replyMessage(
@@ -515,7 +522,7 @@ export class SessionManager {
                 lastError: fallbackResult.error ?? null,
               });
               if (updated) {
-                notifyParentSession(updated, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+                notifyParentSession(updated, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: this.notificationSink });
               }
             },
             onWaitingStart: async ({ resumeAt }) => {
@@ -526,6 +533,7 @@ export class SessionManager {
               // Send a deterministic Discord notification — does not depend on the LLM
               notifyDiscordChannel(
                 `⚠️ ${rateLimitSummary(sourceEngine)} reached. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
+                { sink: this.notificationSink },
               );
 
               // Clear "thinking" UI and show waiting state
@@ -543,6 +551,7 @@ export class SessionManager {
                 resumeAt
                   ? resumeAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
                   : undefined,
+                { sink: this.notificationSink },
               );
 
               await connector.replyMessage(
@@ -602,17 +611,19 @@ export class SessionManager {
                 lastError: retryResult.error ?? null,
               });
               if (retryUpdated) {
-                notifyRateLimitResumed(retryUpdated);
+                notifyRateLimitResumed(retryUpdated, { sink: this.notificationSink });
                 notifyDiscordChannel(
                   `✅ ${rateLimitSummary(sourceEngine)} cleared. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} resumed.`,
+                  { sink: this.notificationSink },
                 );
-                notifyParentSession(retryUpdated, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+                notifyParentSession(retryUpdated, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: this.notificationSink });
               }
             },
             onTimeout: async () => {
               const timeoutError = rateLimitTimeoutError(sourceEngine);
               notifyDiscordChannel(
                 `❌ ${timeoutError}. Session ${session.id}${session.employee ? ` (${session.employee})` : ""} has been stopped.`,
+                { sink: this.notificationSink },
               );
               await connector.replyMessage(target, "Usage limit didn't reset in time. Please try again later.").catch(() => {});
               updateSession(session.id, {
@@ -676,7 +687,7 @@ export class SessionManager {
         markTranscriptSyncedThrough(session.id, result.sessionId);
       }
       if (updatedSession) {
-        notifyParentSession(updatedSession, { result: result.result, error: wasInterrupted ? null : (result.error ?? null), cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+        notifyParentSession(updatedSession, { result: result.result, error: wasInterrupted ? null : (result.error ?? null), cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: this.notificationSink });
       }
 
       logger.info(
@@ -693,7 +704,7 @@ export class SessionManager {
         lastError: errMsg,
       });
       if (erroredSession) {
-        notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
+        notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify, sink: this.notificationSink });
       }
 
       // Clear typing indicator on error

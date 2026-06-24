@@ -24,6 +24,7 @@ export interface BoardTicket {
   sessionId?: string;
   createdAt: string;
   updatedAt: string;
+  baseUpdatedAt?: string;
   [k: string]: unknown;
 }
 
@@ -35,6 +36,16 @@ export interface BoardState {
   tickets: BoardTicket[];
   deletedTickets: DeletedBoardTicket[];
   retentionDays: number;
+}
+
+export class BoardConflictError extends Error {
+  constructor(
+    message: string,
+    public readonly ticketIds: string[],
+  ) {
+    super(message);
+    this.name = "BoardConflictError";
+  }
 }
 
 export function boardTicketComplexity(ticket: Pick<BoardTicket, "complexity">): BoardTicketComplexity {
@@ -123,10 +134,12 @@ export function readBoardArray(orgDir: string, department: string): BoardTicket[
 
 export function parseBoardWritePayload(
   payload: unknown,
-): { tickets: BoardTicket[]; deletedIds: Set<string>; retentionDays: number | null } {
-  if (Array.isArray(payload)) return { tickets: payload as BoardTicket[], deletedIds: new Set(), retentionDays: null };
+): { tickets: BoardTicket[]; deletedIds: Set<string>; deletedVersions: Map<string, string>; retentionDays: number | null } {
+  if (Array.isArray(payload)) {
+    return { tickets: payload as BoardTicket[], deletedIds: new Set(), deletedVersions: new Map(), retentionDays: null };
+  }
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const p = payload as { tickets?: unknown; deletedIds?: unknown; retentionDays?: unknown };
+    const p = payload as { tickets?: unknown; deletedIds?: unknown; deletedVersions?: unknown; retentionDays?: unknown };
     if (!Array.isArray(p.tickets)) throw new Error("tickets must be an array");
     const deletedIds = new Set<string>();
     if (Array.isArray(p.deletedIds)) {
@@ -134,17 +147,98 @@ export function parseBoardWritePayload(
         if (typeof id === "string" && id.trim()) deletedIds.add(id);
       }
     }
+    const deletedVersions = new Map<string, string>();
+    if (p.deletedVersions && typeof p.deletedVersions === "object" && !Array.isArray(p.deletedVersions)) {
+      for (const [id, updatedAt] of Object.entries(p.deletedVersions as Record<string, unknown>)) {
+        if (deletedIds.has(id) && typeof updatedAt === "string" && updatedAt.trim()) {
+          deletedVersions.set(id, updatedAt);
+        }
+      }
+    }
     return {
       tickets: p.tickets as BoardTicket[],
       deletedIds,
+      deletedVersions,
       retentionDays: p.retentionDays == null ? null : clampRecycleBinRetentionDays(p.retentionDays),
     };
   }
   throw new Error("Board payload must be an array or { tickets, deletedIds, retentionDays }");
 }
 
-export function mergeBoardTickets(current: BoardTicket[], incoming: BoardTicket[], deletedIds = new Set<string>()): BoardTicket[] {
-  const filteredIncoming = incoming.filter((ticket) => ticket && ticket.id && !deletedIds.has(ticket.id));
+function ticketTime(value: unknown): number | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+}
+
+function assertFreshBoardTicket(current: BoardTicket | undefined, baseUpdatedAt: unknown, action: "update" | "delete"): void {
+  if (!current) return;
+  const currentTime = ticketTime(current.updatedAt);
+  const baseTime = ticketTime(baseUpdatedAt);
+  if (currentTime == null || baseTime == null || currentTime <= baseTime) return;
+  throw new BoardConflictError(
+    `board conflict: ticket "${current.id}" changed since this board was loaded; refresh before ${action}`,
+    [current.id],
+  );
+}
+
+function isActiveSessionTicket(ticket: BoardTicket): boolean {
+  return (
+    typeof ticket.sessionId === "string" &&
+    ticket.sessionId.trim().length > 0 &&
+    ticket.status !== "done" &&
+    ticket.status !== "blocked"
+  );
+}
+
+function assertDoesNotReplaceActiveSession(current: BoardTicket | undefined, incoming: BoardTicket): void {
+  if (!current || !isActiveSessionTicket(current)) return;
+  const replacesSession = (
+    typeof incoming.sessionId === "string" &&
+    incoming.sessionId.trim().length > 0 &&
+    incoming.sessionId !== current.sessionId
+  );
+  const replacesSource = incoming.source != null && incoming.source !== current.source;
+  if (!replacesSession && !replacesSource) return;
+  throw new BoardConflictError(
+    `board conflict: ticket "${current.id}" has active session state; refresh before saving`,
+    [current.id],
+  );
+}
+
+export function mergeBoardTickets(
+  current: BoardTicket[],
+  incoming: BoardTicket[],
+  deletedIds = new Set<string>(),
+  deletedVersions = new Map<string, string>(),
+): BoardTicket[] {
+  const currentById = new Map(current.map((ticket) => [ticket.id, ticket]));
+  const validIncoming = incoming.filter((ticket) => ticket && ticket.id && !deletedIds.has(ticket.id));
+  for (const ticket of validIncoming) {
+    const currentTicket = currentById.get(ticket.id);
+    assertFreshBoardTicket(currentTicket, ticket.baseUpdatedAt ?? ticket.updatedAt, "update");
+    assertDoesNotReplaceActiveSession(currentTicket, ticket);
+  }
+  const filteredIncoming = validIncoming.map((ticket) => {
+    const currentTicket = currentById.get(ticket.id);
+    const { baseUpdatedAt: _baseUpdatedAt, ...stored } = ticket;
+    if (currentTicket && isActiveSessionTicket(currentTicket)) {
+      stored.sessionId = currentTicket.sessionId;
+      if (currentTicket.source != null) stored.source = currentTicket.source;
+    }
+    return stored as BoardTicket;
+  });
+  for (const deletedId of deletedIds) {
+    const currentTicket = currentById.get(deletedId);
+    if (!currentTicket || !isActiveSessionTicket(currentTicket)) continue;
+    if (!deletedVersions.has(deletedId)) {
+      throw new BoardConflictError(
+        `board conflict: ticket "${deletedId}" has active session state; refresh before deleting`,
+        [deletedId],
+      );
+    }
+    assertFreshBoardTicket(currentTicket, deletedVersions.get(deletedId), "delete");
+  }
   const incomingIds = new Set(filteredIncoming.map((ticket) => ticket.id).filter(Boolean));
   const merged = [...filteredIncoming];
   for (const ticket of current) {
@@ -179,9 +273,9 @@ export function writeMergedBoard(
 ): BoardTicket[] {
   const file = boardPath(orgDir, department);
   const current = readBoardState(orgDir, department) ?? defaultBoardState();
-  const { tickets, deletedIds, retentionDays } = parseBoardWritePayload(payload);
+  const { tickets, deletedIds, deletedVersions, retentionDays } = parseBoardWritePayload(payload);
   const nextRetentionDays = retentionDays ?? current.retentionDays;
-  const mergedTickets = mergeBoardTickets(current.tickets, tickets, deletedIds);
+  const mergedTickets = mergeBoardTickets(current.tickets, tickets, deletedIds, deletedVersions);
   const mergedDeletedTickets = pruneDeletedTickets(
     mergeDeletedTickets(current, mergedTickets, deletedIds, new Date().toISOString()),
     nextRetentionDays,

@@ -205,6 +205,13 @@ existing run heartbeat renews the lease while the session runs. Ticket dispatch
 owns release: setup failures release immediately, and launched runs release in a
 `finally` handler after `dispatchWebSessionRun()` settles.
 
+Kanban board saves use per-ticket optimistic concurrency. The web client sends
+the last observed server `updatedAt` as `baseUpdatedAt`, and the gateway rejects
+stale board updates or stale active-ticket deletions with HTTP `409` and
+`reason: "board-conflict"`. This prevents an operator layout loaded before a
+background dispatch from silently moving a running ticket back to `todo` or
+dropping its `sessionId`.
+
 ## Scheduler Behavior
 
 - Required roles allocate atomically: all required leases are created, or no

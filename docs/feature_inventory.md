@@ -21,6 +21,15 @@
 - `0` means immediate purge.
 - Tickets remain restorable from the "Recently deleted" section until their retention window expires.
 
+### Kanban optimistic save protection
+- `packages/jinn/src/gateway/board-service.ts`
+- `packages/web/src/routes/kanban/page.tsx`
+- Web board saves send each ticket's last observed `updatedAt` as `baseUpdatedAt`.
+- The gateway rejects stale ticket updates or stale deletion attempts with HTTP `409`
+  and `reason: "board-conflict"` instead of overwriting newer server state.
+- Running board-linked tickets preserve active `sessionId` and `source` metadata across
+  fresh saves so a stale layout cannot silently move a dispatched ticket back to `todo`.
+
 ## CLI
 
 ### Provider-neutral matrix orchestration dry-runs and observe surfaces
@@ -89,6 +98,15 @@
 - The manual dispatch route maps scheduler-specific failures to HTTP `409`.
 - When orchestration is disabled, ticket dispatch keeps the legacy direct dispatch behavior.
 
+### Internal session notification delivery
+- `packages/jinn/src/sessions/notification-sink.ts`
+- `packages/jinn/src/gateway/notification-sink.ts`
+- Gateway-owned session callbacks use an injected in-process notification sink for
+  parent-session, attached-talk, rate-limit, completion, and connector notifications.
+- The direct sink avoids localhost loopback HTTP calls and repeated config file parsing
+  on gateway hot paths. Callback helpers retain the old loopback path as a fallback
+  for non-gateway and compatibility contexts.
+
 ### Kiro headless engine and estimated credit gauge
 - `kiro` is a registered headless engine. Work turns spawn:
   - `kiro-cli chat --no-interactive --trust-all-tools --model <model> [--effort <level>] [--resume-id <engineSessionId>] <prompt>`
@@ -108,3 +126,14 @@
   - `session.transportMeta.boardTicketId === ticket.id`
   - persisted `ticket.sessionId` matching the session id or engine session id
   - channel/session keys containing the ticket id
+
+## Runtime Paths
+
+### Live Jinn path context
+- `packages/jinn/src/shared/paths.ts`
+- Runtime path exports remain import-compatible, but they now refresh from a shared
+  path context instead of being fixed permanently at first module evaluation.
+- Tests and runtime helpers can call `setJinnHomeForTest(<path>)` or
+  `refreshJinnPaths()` to redirect `JINN_HOME`-derived paths without a module reset.
+- `getJinnPaths()` returns an explicit snapshot for code that should avoid reading
+  mutable module bindings directly.

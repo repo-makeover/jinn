@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import yaml from "js-yaml";
-import { normalizeBoardWorkerConfig, normalizeClaudeEngineConfig, validateConfigShape } from "../config.js";
+import {
+  normalizeBoardWorkerConfig,
+  normalizeClaudeEngineConfig,
+  saveConfigAtomic,
+  validateConfigShape,
+} from "../config.js";
+import { refreshJinnPaths, setJinnHomeForTest } from "../paths.js";
 
 describe("normalizeClaudeEngineConfig", () => {
   it("applies the maxLivePtys default", () => {
@@ -237,27 +243,23 @@ describe("validateConfigShape", () => {
 });
 
 describe("saveConfigAtomic", () => {
-  // CONFIG_PATH is resolved at module load from process.env.JINN_HOME, so we
-  // point it at a temp dir and re-import the module (same pattern as the cron
-  // jobs tests).
   let tmpHome: string;
   const prevHome = process.env.JINN_HOME;
 
   beforeEach(() => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-config-save-"));
     process.env.JINN_HOME = tmpHome;
-    vi.resetModules();
+    setJinnHomeForTest(tmpHome);
   });
 
   afterEach(() => {
     if (prevHome === undefined) delete process.env.JINN_HOME;
     else process.env.JINN_HOME = prevHome;
-    vi.resetModules();
+    refreshJinnPaths();
     try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it("writes valid YAML to config.yaml and leaves no tmp file behind", async () => {
-    const { saveConfigAtomic } = await import("../config.js");
+  it("writes valid YAML to config.yaml and leaves no tmp file behind", () => {
     const configPath = path.join(tmpHome, "config.yaml");
     const cfg = { gateway: { port: 7777 }, talk: { engine: "claude", note: "x".repeat(200) } };
 
@@ -269,8 +271,7 @@ describe("saveConfigAtomic", () => {
     expect(fs.readdirSync(tmpHome).filter((f) => f.includes(".tmp"))).toEqual([]);
   });
 
-  it("replaces an existing config.yaml", async () => {
-    const { saveConfigAtomic } = await import("../config.js");
+  it("replaces an existing config.yaml", () => {
     const configPath = path.join(tmpHome, "config.yaml");
     fs.writeFileSync(configPath, "old: true\n");
 

@@ -4,6 +4,7 @@ import { assertFetchOk, jsonApiHeaders } from "../gateway/internal-auth.js";
 import { logger } from "../shared/logger.js";
 import type { Session } from "../shared/types.js";
 import { hydrateAllAttachments, talkSessionsAttachedTo } from "../talk/attachments.js";
+import type { SessionNotificationOptions, SessionNotificationSink } from "./notification-sink.js";
 
 /**
  * Notify the parent session that a child session has replied.
@@ -13,19 +14,19 @@ import { hydrateAllAttachments, talkSessionsAttachedTo } from "../talk/attachmen
 export function notifyParentSession(
   childSession: Session,
   result: { result?: string | null; error?: string | null; cost?: number; durationMs?: number },
-  options?: { alwaysNotify?: boolean },
+  options?: { alwaysNotify?: boolean } & SessionNotificationOptions,
 ): void {
   // Attachment wakes are a SEPARATE relationship from parent ownership: a talk
   // session can soft-link any session and must be woken when it finishes, even if
   // that session has no parent (or its parent is elsewhere). So this runs before
   // the parent early-returns and is independent of alwaysNotify.
-  notifyAttachedTalkSessions(childSession, result);
+  notifyAttachedTalkSessions(childSession, result, { sink: options?.sink });
 
   if (!childSession.parentSessionId) return;
   if (options?.alwaysNotify === false) return;
 
   // Run asynchronously — do not await in the caller
-  _sendNotification(childSession, result).catch((err) => {
+  _sendNotification(childSession, result, options?.sink).catch((err) => {
     logger.warn(`[callbacks] Failed to notify parent session ${childSession.parentSessionId}: ${err instanceof Error ? err.message : String(err)}`);
   });
 }
@@ -76,8 +77,9 @@ export function buildTalkWake(
 export function notifyAttachedTalkSessions(
   completedSession: Session,
   result: { result?: string | null; error?: string | null },
+  options?: SessionNotificationOptions,
 ): void {
-  _notifyAttached(completedSession, result).catch((err) => {
+  _notifyAttached(completedSession, result, options?.sink).catch((err) => {
     logger.warn(`[callbacks] Failed to wake attached talk sessions: ${err instanceof Error ? err.message : String(err)}`);
   });
 }
@@ -85,6 +87,7 @@ export function notifyAttachedTalkSessions(
 async function _notifyAttached(
   completedSession: Session,
   result: { result?: string | null; error?: string | null },
+  sink?: SessionNotificationSink,
 ): Promise<void> {
   // Lazy one-time scan so attachments persisted before a restart are visible
   // (this is the first/primary talkSessionsAttachedTo consumer on the wake path).
@@ -101,7 +104,7 @@ async function _notifyAttached(
     const talk = getSession(talkId);
     if (!talk || talk.source !== "talk") continue;
     if (talk.status === "error") continue;
-    await _sendRaw(talkId, message, displayMessage);
+    await _sendRaw(talkId, message, displayMessage, sink);
   }
 }
 
@@ -112,13 +115,14 @@ async function _notifyAttached(
 export function notifyRateLimited(
   childSession: Session,
   estimatedResumeTime?: string, // ISO timestamp or human-readable
+  options?: SessionNotificationOptions,
 ): void {
   if (!childSession.parentSessionId) return;
 
   _sendNotification(childSession, {
     error: null,
     result: `⏳ Session is rate-limited and will auto-resume${estimatedResumeTime ? ` around ${estimatedResumeTime}` : ' when the limit resets'}. No action needed.`,
-  }).catch((err) => {
+  }, options?.sink).catch((err) => {
     logger.warn(`[callbacks] Failed to send rate-limit notification: ${err instanceof Error ? err.message : String(err)}`);
   });
 }
@@ -129,6 +133,7 @@ export function notifyRateLimited(
  */
 export function notifyRateLimitResumed(
   childSession: Session,
+  options?: SessionNotificationOptions,
 ): void {
   if (!childSession.parentSessionId) return;
 
@@ -144,7 +149,7 @@ export function notifyRateLimitResumed(
     message = `🔄 Employee "${employeeName}" (session ${childSession.id}) has resumed after rate limit cleared.`;
   }
 
-  _sendRaw(childSession.parentSessionId, message).catch((err) => {
+  _sendRaw(childSession.parentSessionId, message, undefined, options?.sink).catch((err) => {
     logger.warn(`[callbacks] Failed to send resume notification: ${err instanceof Error ? err.message : String(err)}`);
   });
 }
@@ -152,6 +157,7 @@ export function notifyRateLimitResumed(
 async function _sendNotification(
   childSession: Session,
   result: { result?: string | null; error?: string | null; cost?: number; durationMs?: number },
+  sink?: SessionNotificationSink,
 ): Promise<void> {
   const parent = getSession(childSession.parentSessionId!);
   if (!parent) return; // Parent gone or expired
@@ -188,7 +194,7 @@ async function _sendNotification(
     displayMessage = `📩 ${employeeName} replied\n${_clean(raw, 220)}`;
   }
 
-  await _sendRaw(childSession.parentSessionId!, message, displayMessage);
+  await _sendRaw(childSession.parentSessionId!, message, displayMessage, sink);
 }
 
 /** Trim to a word boundary for a tidy human-facing preview. */
@@ -205,13 +211,17 @@ function _clean(text: string, max: number): string {
  * Used for rate-limit alerts that must not depend on the LLM.
  * Fire-and-forget — errors are logged but never rethrown.
  */
-export function notifyDiscordChannel(message: string): void {
-  _sendDiscordNotification(message).catch((err) => {
+export function notifyDiscordChannel(message: string, options?: SessionNotificationOptions): void {
+  _sendDiscordNotification(message, options?.sink).catch((err) => {
     logger.warn(`[callbacks] Failed to send Discord notification: ${err instanceof Error ? err.message : String(err)}`);
   });
 }
 
-async function _sendDiscordNotification(message: string): Promise<void> {
+async function _sendDiscordNotification(message: string, sink?: SessionNotificationSink): Promise<void> {
+  if (sink) {
+    await sink.sendConnectorNotification(message);
+    return;
+  }
   let port = 7777;
   let connector = "discord";
   let channel: string | undefined;
@@ -242,7 +252,13 @@ async function _sendRaw(
   parentSessionId: string,
   message: string,
   displayMessage?: string,
+  sink?: SessionNotificationSink,
 ): Promise<void> {
+  if (sink) {
+    await sink.sendSessionNotification(parentSessionId, message, displayMessage);
+    return;
+  }
+
   let port = 7777;
   try {
     const config = loadConfig();

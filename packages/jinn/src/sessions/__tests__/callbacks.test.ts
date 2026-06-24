@@ -28,8 +28,9 @@ vi.mock("../../gateway/gateway-info.js", () => ({
   })),
 }));
 
-import { notifyParentSession, notifyRateLimitResumed } from "../callbacks.js";
+import { notifyDiscordChannel, notifyParentSession, notifyRateLimitResumed } from "../callbacks.js";
 import { getSession, listSessionsBySource } from "../registry.js";
+import { loadConfig } from "../../shared/config.js";
 import { attach, __resetAttachmentsForTest } from "../../talk/attachments.js";
 import { logger } from "../../shared/logger.js";
 import type { Session } from "../../shared/types.js";
@@ -189,6 +190,24 @@ describe("notifyParentSession", () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("401 Unauthorized"));
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("missing token"));
+  });
+
+  it("uses an injected sink instead of loopback fetch/config loading", async () => {
+    vi.mocked(loadConfig).mockClear();
+    const child = makeSession();
+    const sink = {
+      sendSessionNotification: vi.fn().mockResolvedValue(undefined),
+      sendConnectorNotification: vi.fn().mockResolvedValue(undefined),
+    };
+
+    notifyParentSession(child, { result: "Some result" }, { sink });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sink.sendSessionNotification).toHaveBeenCalledOnce();
+    expect(sink.sendSessionNotification.mock.calls[0][0]).toBe("parent-001");
+    expect(sink.sendSessionNotification.mock.calls[0][1]).toContain("Some result");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
   });
 });
 
@@ -546,6 +565,52 @@ describe("notifyParentSession — attached talk-session wakes", () => {
     expect(fetchSpy.mock.calls[0][0]).toBe("http://127.0.0.1:7777/api/sessions/talk-1/message");
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     expect(body.message).toContain('📩 Thread "Audit job" reported back');
+  });
+
+  it("wakes attached talk sessions through an injected sink", async () => {
+    const sink = {
+      sendSessionNotification: vi.fn().mockResolvedValue(undefined),
+      sendConnectorNotification: vi.fn().mockResolvedValue(undefined),
+    };
+    attach("talk-1", "child-001", "observe", {
+      getSession: () => talkSession,
+      updateSessionMeta: () => {},
+    });
+    vi.mocked(getSession).mockImplementation((id: string) =>
+      id === "talk-1" ? talkSession : undefined,
+    );
+
+    const child = makeSession({ id: "child-001", parentSessionId: "elsewhere", title: "Audit job" });
+    notifyParentSession(child, { result: "All clear" }, { sink });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sink.sendSessionNotification).toHaveBeenCalledOnce();
+    expect(sink.sendSessionNotification.mock.calls[0][0]).toBe("talk-1");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("notifyDiscordChannel", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.fetch = originalFetch as typeof fetch;
+  });
+
+  it("uses an injected connector sink without loopback fetch/config loading", async () => {
+    vi.mocked(loadConfig).mockClear();
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const sink = {
+      sendSessionNotification: vi.fn().mockResolvedValue(undefined),
+      sendConnectorNotification: vi.fn().mockResolvedValue(undefined),
+    };
+
+    notifyDiscordChannel("usage limit reached", { sink });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sink.sendConnectorNotification).toHaveBeenCalledWith("usage limit reached");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
   });
 });
 

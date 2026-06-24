@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  BoardConflictError,
   DEFAULT_RECYCLE_BIN_RETENTION_DAYS,
   boardTicketComplexity,
   mergeBoardTickets,
@@ -36,7 +37,59 @@ describe("board-service mergeBoardTickets", () => {
 
   it("allows explicit deletion of a session ticket", () => {
     const current = [ticket("session-s1", "session")];
-    expect(mergeBoardTickets(current, [], new Set(["session-s1"]))).toEqual([]);
+    expect(mergeBoardTickets(
+      current,
+      [],
+      new Set(["session-s1"]),
+      new Map([["session-s1", current[0].updatedAt]]),
+    )).toEqual([]);
+  });
+
+  it("rejects stale updates before they can erase active session state", () => {
+    const current = [{
+      ...ticket("session-s1", "session"),
+      status: "in_progress" as const,
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    }];
+    const staleIncoming = [{
+      ...ticket("session-s1"),
+      status: "todo" as const,
+      baseUpdatedAt: "2026-06-22T00:00:00.000Z",
+      updatedAt: "2026-06-22T00:00:00.000Z",
+    }];
+
+    expect(() => mergeBoardTickets(current, staleIncoming)).toThrow(BoardConflictError);
+  });
+
+  it("rejects deleting an active session ticket without a delete version", () => {
+    const current = [{
+      ...ticket("session-s1", "session"),
+      status: "in_progress" as const,
+    }];
+
+    expect(() => mergeBoardTickets(current, [], new Set(["session-s1"]))).toThrow(BoardConflictError);
+  });
+
+  it("allows a fresh update that omits active session metadata and preserves server state", () => {
+    const current = [{
+      ...ticket("session-s1", "session"),
+      status: "in_progress" as const,
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    }];
+    const incoming = [{
+      ...ticket("session-s1"),
+      status: "in_progress" as const,
+      title: "renamed",
+      baseUpdatedAt: current[0].updatedAt,
+      updatedAt: "2026-06-22T01:05:00.000Z",
+    }];
+
+    const { baseUpdatedAt: _baseUpdatedAt, ...stored } = incoming[0];
+    expect(mergeBoardTickets(current, incoming)).toEqual([{
+      ...stored,
+      sessionId: current[0].sessionId,
+      source: current[0].source,
+    }]);
   });
 
   it("accepts array payloads and object payloads with deletedIds", () => {
@@ -83,6 +136,7 @@ describe("board-service mergeBoardTickets", () => {
     writeMergedBoard(orgDir, "software-delivery", {
       tickets: [],
       deletedIds: ["restored"],
+      deletedVersions: { restored: ticket("restored").updatedAt },
       retentionDays: DEFAULT_RECYCLE_BIN_RETENTION_DAYS,
     });
     writeMergedBoard(orgDir, "software-delivery", {

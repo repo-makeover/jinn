@@ -1,6 +1,7 @@
 import type { Engine } from "../shared/types.js";
 import { listSessions, updateSession } from "../sessions/registry.js";
 import { notifyParentSession } from "../sessions/callbacks.js";
+import type { SessionNotificationSink } from "../sessions/notification-sink.js";
 import { logger } from "../shared/logger.js";
 
 const DEFAULT_INTERVAL_MS = 15_000;
@@ -21,6 +22,7 @@ export interface StatusReconcilerDeps {
   intervalMs?: number;
   staleMs?: number;
   onAfterSweep?: () => void;
+  notificationSink?: SessionNotificationSink;
   /** Test override. */
   now?: () => number;
   /** Carry-over between sweeps: sessions seen stuck once. A session is only
@@ -99,7 +101,7 @@ export function sweepOnce(deps: StatusReconcilerDeps): number {
     // Fire-and-forget wake to the delegating parent (no-op for top-level sessions
     // with no parentSessionId). This is the link that was missing: detection
     // existed, but its signal never reached the director.
-    notifyParentSession(session, { error: stallError });
+    notifyParentSession(session, { error: stallError }, { sink: deps.notificationSink });
     logger.warn(
       `[reconciler] session ${session.id} (${session.engine}) was stuck status=running with no live turn ` +
       `(heartbeat stale ${Math.round(staleFor / 1000)}s) — reset to idle, parent notified`,

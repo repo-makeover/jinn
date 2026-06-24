@@ -6,6 +6,7 @@ import {
   deleteSession,
   getFile,
   getSession,
+  insertMessage,
   listAllPendingQueueItems,
   updateSession,
 } from "../../sessions/registry.js";
@@ -162,7 +163,7 @@ export function dispatchWebSessionRun(
         result: null,
         error: errMsg,
       });
-      if (erroredOnDispatch) notifyAttachedTalkSessions(erroredOnDispatch, { error: errMsg });
+      if (erroredOnDispatch) notifyAttachedTalkSessions(erroredOnDispatch, { error: errMsg }, { sink: context.notificationSink });
       maybeEmitTalkGraph(session.id, "completed", { getSession, emit: context.emit });
     });
   };
@@ -173,6 +174,25 @@ export function dispatchWebSessionRun(
     });
   }
   return launch();
+}
+
+export function dispatchSessionNotification(
+  sessionId: string,
+  message: string,
+  displayMessage: string | undefined,
+  context: ApiContext,
+): void {
+  const existingSession = getSession(sessionId);
+  if (!existingSession) return;
+  const session = maybeRevertEngineOverride(existingSession);
+  const engine = context.sessionManager.getEngine(session.engine);
+  if (!engine) throw new Error(`Engine "${session.engine}" not available`);
+
+  const banner = displayMessage && displayMessage.trim() ? displayMessage : message;
+  insertMessage(session.id, "notification", banner);
+  context.emit("session:notification", { sessionId: session.id, message: banner });
+  context.sessionManager.getQueue().clearCancelled(session.sessionKey || session.sourceRef || session.id);
+  dispatchWebSessionRun(session, message, engine, context.getConfig(), context);
 }
 
 /** Resolve an array of file IDs to local filesystem paths for engine consumption. */

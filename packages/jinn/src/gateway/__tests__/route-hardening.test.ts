@@ -238,6 +238,57 @@ describe("PUT /api/org/departments/:name/board — assignee department boundary"
   });
 });
 
+describe("PUT /api/org/departments/:name/board — optimistic concurrency", () => {
+  it("returns 409 when a stale board save would overwrite active session state", async () => {
+    const softwareDir = path.join(orgDir, "software-delivery");
+    fs.mkdirSync(softwareDir, { recursive: true });
+    fs.writeFileSync(path.join(softwareDir, "board.json"), JSON.stringify([{
+      id: "ticket-running",
+      title: "Running",
+      description: "",
+      status: "in_progress",
+      priority: "medium",
+      complexity: "medium",
+      assignee: "worker",
+      source: "session",
+      sessionId: "session-123",
+      createdAt: "2026-06-22T00:00:00.000Z",
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    }]));
+
+    const cap = makeRes();
+    await handleApiRequest(
+      makeReq("PUT", "/api/org/departments/software-delivery/board", {
+        tickets: [{
+          id: "ticket-running",
+          title: "Running",
+          description: "",
+          status: "todo",
+          priority: "medium",
+          complexity: "medium",
+          assignee: "worker",
+          createdAt: "2026-06-22T00:00:00.000Z",
+          updatedAt: "2026-06-22T00:00:00.000Z",
+          baseUpdatedAt: "2026-06-22T00:00:00.000Z",
+        }],
+      }),
+      cap.res,
+      ctx,
+    );
+
+    expect(cap.status).toBe(409);
+    expect(cap.body).toMatchObject({
+      reason: "board-conflict",
+      ticketIds: ["ticket-running"],
+    });
+    const stored = JSON.parse(fs.readFileSync(path.join(softwareDir, "board.json"), "utf-8"));
+    expect(stored[0]).toMatchObject({
+      status: "in_progress",
+      sessionId: "session-123",
+    });
+  });
+});
+
 describe("GET /api/status", () => {
   it("reports error when no configured engine is available", async () => {
     invalidateModelRegistry();

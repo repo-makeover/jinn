@@ -83,10 +83,13 @@ function mapBoardTicket(item: DepartmentBoardTicket, department: string): Kanban
     priority: priorityMap[item.priority || 'medium'] || 'medium',
     complexity: complexityMap[item.complexity || 'medium'] || 'medium',
     assigneeId: item.assignee || null,
+    source: item.source,
+    sessionId: item.sessionId,
     department,
     workState: 'idle',
     createdAt: item.createdAt ? new Date(item.createdAt).getTime() : Date.now(),
     updatedAt: item.updatedAt ? new Date(item.updatedAt).getTime() : Date.now(),
+    baseUpdatedAt: item.updatedAt ? new Date(item.updatedAt).getTime() : undefined,
     departmentId: department,
   }
 }
@@ -247,6 +250,7 @@ export default function KanbanPage() {
     async (
       store: KanbanStore,
       deletedIds: string[] = [],
+      deletedVersions: Record<string, string> = {},
       retentionDays = recycleBinRetentionDays,
     ) => {
       // Group tickets by their department
@@ -276,12 +280,16 @@ export default function KanbanPage() {
             priority: t.priority,
             complexity: t.complexity,
             assignee: t.assigneeId ?? undefined,
+            source: t.source,
+            sessionId: t.sessionId,
             createdAt: new Date(t.createdAt).toISOString(),
             updatedAt: new Date(t.updatedAt).toISOString(),
+            baseUpdatedAt: new Date(t.baseUpdatedAt ?? t.updatedAt).toISOString(),
           }))
           return api.updateDepartmentBoard(dept, {
             tickets: boardData,
             deletedIds,
+            deletedVersions,
             retentionDays,
           })
         }),
@@ -294,13 +302,28 @@ export default function KanbanPage() {
     (
       store: KanbanStore,
       deletedIds: string[] = [],
+      deletedVersions: Record<string, string> = {},
       retentionDays = recycleBinRetentionDays,
     ) => {
       setSaveError(null)
-      void persistToApi(store, deletedIds, retentionDays).catch((err) => {
-        setSaveError(err instanceof Error ? err.message : 'Failed to save board changes.')
-        loadData()
-      })
+      void persistToApi(store, deletedIds, deletedVersions, retentionDays)
+        .then(() => {
+          setTickets((current) => {
+            let changed = false
+            const next: KanbanStore = { ...current }
+            for (const [id, saved] of Object.entries(store)) {
+              const live = current[id]
+              if (!live || live.updatedAt !== saved.updatedAt || live.baseUpdatedAt === saved.updatedAt) continue
+              next[id] = { ...live, baseUpdatedAt: saved.updatedAt }
+              changed = true
+            }
+            return changed ? next : current
+          })
+        })
+        .catch((err) => {
+          setSaveError(err instanceof Error ? err.message : 'Failed to save board changes.')
+          loadData()
+        })
     },
     [persistToApi, loadData, recycleBinRetentionDays],
   )
@@ -348,9 +371,12 @@ export default function KanbanPage() {
 
   function handleDeleteTicket(ticketId: string) {
     const deletedTicket = tickets[ticketId]
+    const deletedVersions = deletedTicket
+      ? { [ticketId]: new Date(deletedTicket.baseUpdatedAt ?? deletedTicket.updatedAt).toISOString() }
+      : {}
     setTickets((prev) => {
       const next = deleteTicket(prev, ticketId)
-      persistBoardChange(next, [ticketId])
+      persistBoardChange(next, [ticketId], deletedVersions)
       return next
     })
     if (deletedTicket && recycleBinRetentionDays > 0) {
@@ -393,7 +419,7 @@ export default function KanbanPage() {
       const cutoff = Date.now() - (nextRetentionDays * DAY_MS)
       return prev.filter((ticket) => ticket.deletedAt >= cutoff)
     })
-    persistBoardChange(tickets, [], nextRetentionDays)
+    persistBoardChange(tickets, [], {}, nextRetentionDays)
   }
 
   function handleAssigneeChange(ticketId: string, assigneeId: string | null) {

@@ -97,7 +97,7 @@ export async function runWebSession(
     });
     context.emit("session:completed", { sessionId: currentSession.id, result: null, error: errMsg });
     maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
-    if (erroredSession) notifyParentSession(erroredSession, { error: errMsg });
+    if (erroredSession) notifyParentSession(erroredSession, { error: errMsg }, { sink: context.notificationSink });
     return;
   }
   engine = runtimeEngine;
@@ -131,7 +131,7 @@ export async function runWebSession(
     context.emit("session:completed", { sessionId: currentSession.id, result: null, error: errMsg });
     maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
     if (erroredSession) {
-      notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
+      notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
     }
     return;
   }
@@ -476,7 +476,7 @@ export async function runWebSession(
         });
         const labelled = `(recovered — this supersedes the earlier reported failure)\n\n${lateText}`;
         if (recovered) {
-          notifyParentSession(recovered, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify });
+          notifyParentSession(recovered, { result: labelled, error: null }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
           void deliverConnectorReply(recovered, labelled, context.connectors);
         }
         context.emit("session:completed", {
@@ -527,7 +527,7 @@ export async function runWebSession(
       context.emit("session:completed", { sessionId: currentSession.id, result: null, error: errMsg, stalled: true });
       maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
       if (stalledSession) {
-        notifyParentSession(stalledSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
+        notifyParentSession(stalledSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
         void deliverConnectorReply(stalledSession, `⛔ ${errMsg}`, context.connectors);
       }
       return;
@@ -588,6 +588,7 @@ export async function runWebSession(
 
             notifyDiscordChannel(
               `⚠️ ${rateLimitSummary(originalEngine)} reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} switching to ${fallbackName}.`,
+              { sink: context.notificationSink },
             );
 
             if (engine && isInterruptibleEngine(engine)) {
@@ -607,7 +608,7 @@ export async function runWebSession(
               lastError: fallbackResult.error ?? null,
             });
             if (completedFallback) {
-              notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+              notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
               if (fallbackResult.result) void deliverConnectorReply(completedFallback, fallbackResult.result, context.connectors);
             }
 
@@ -630,6 +631,7 @@ export async function runWebSession(
 
             notifyDiscordChannel(
               `⚠️ ${rateLimitSummary(sourceEngine)} reached. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} paused${resumeText ? ` until ${resumeText}` : ""}.`,
+              { sink: context.notificationSink },
             );
 
             const notificationText =
@@ -642,6 +644,7 @@ export async function runWebSession(
               resumeAt
                 ? resumeAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
                 : undefined,
+              { sink: context.notificationSink },
             );
 
             context.emit("session:rate-limited", {
@@ -666,11 +669,12 @@ export async function runWebSession(
             });
 
             if (completedAfterRetry) {
-              notifyRateLimitResumed(completedAfterRetry);
+              notifyRateLimitResumed(completedAfterRetry, { sink: context.notificationSink });
               notifyDiscordChannel(
                 `✅ ${rateLimitSummary(sourceEngine)} cleared. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} resumed.`,
+                { sink: context.notificationSink },
               );
-              notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+              notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
               if (retryResult.result) void deliverConnectorReply(completedAfterRetry, retryResult.result, context.connectors);
             }
 
@@ -690,6 +694,7 @@ export async function runWebSession(
             const timeoutError = rateLimitTimeoutError(sourceEngine);
             notifyDiscordChannel(
               `❌ ${timeoutError}. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} has been stopped.`,
+              { sink: context.notificationSink },
             );
             const erroredSession = updateSession(currentSession.id, {
               status: "error",
@@ -697,7 +702,7 @@ export async function runWebSession(
               lastError: timeoutError,
             });
             if (erroredSession) {
-              notifyParentSession(erroredSession, { error: timeoutError }, { alwaysNotify: employee?.alwaysNotify });
+              notifyParentSession(erroredSession, { error: timeoutError }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
             }
             context.emit("session:completed", {
               sessionId: currentSession.id,
@@ -742,7 +747,7 @@ export async function runWebSession(
     clearSupersededTurnMeta(currentSession.id);
     const reportedError = quietPreempted ? null : (result.error ?? null);
     if (completedSession && !quietPreempted) {
-      notifyParentSession(completedSession, { result: result.result, error: reportedError, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+      notifyParentSession(completedSession, { result: result.result, error: reportedError, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
     }
 
     if (completedSession && !quietPreempted && result.result) {
@@ -778,7 +783,7 @@ export async function runWebSession(
       lastError: errMsg,
     });
     if (erroredSession) {
-      notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify });
+      notifyParentSession(erroredSession, { error: errMsg }, { alwaysNotify: employee?.alwaysNotify, sink: context.notificationSink });
     }
     context.emit("session:completed", {
       sessionId: currentSession.id,

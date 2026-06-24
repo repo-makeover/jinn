@@ -27,7 +27,6 @@ import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
 import { handleFilesRequest, handleSessionAttachment, fileIdsToMedia, rehomeAttachmentsToSession } from "./files.js";
 import { readJsonBody, readBodyRaw } from "./http-helpers.js";
 import { readJsonlTail } from "./jsonl-tail.js";
-import { notifyParentSession, notifyAttachedTalkSessions } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
 import { handleHookPost, isLoopback } from "./hook-endpoint.js";
 import { handleTalkApi } from "../talk/routes.js";
@@ -58,7 +57,7 @@ import { resolveUserHeader } from "./connector-reply.js";
 export { resolveUserHeader, deliverConnectorReply } from "./connector-reply.js";
 import { supersedeRunningTurn } from "./session-turn-state.js";
 import { createPtyAccessToken } from "./auth.js";
-import { defaultBoardState, readBoardArray, readBoardState, writeMergedBoard } from "./board-service.js";
+import { BoardConflictError, defaultBoardState, readBoardArray, readBoardState, writeMergedBoard } from "./board-service.js";
 import { dispatchTicket } from "./ticket-dispatch.js";
 import { findEmployee, scanOrg } from "./org.js";
 import {
@@ -1189,6 +1188,13 @@ export async function handleApiRequest(
         writeMergedBoard(ORG_DIR, p.name, _parsed.body);
       } catch (err) {
         logger.warn(`PUT /api/org/departments/${p.name}/board failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (err instanceof BoardConflictError) {
+          return json(res, {
+            reason: "board-conflict",
+            error: err.message,
+            ticketIds: err.ticketIds,
+          }, 409);
+        }
         return badRequest(res, err instanceof Error ? err.message : "Invalid board payload");
       }
       context.emit("board:updated", { department: p.name });
