@@ -4,6 +4,7 @@ import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
 import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.js";
@@ -254,15 +255,10 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
     return promise;
   }
 
-  /** env for the agy PTY: inherit, force a real TERM. Do NOT strip GEMINI_*
-   *  (agy shares the ~/.gemini account dir for its cached credential). */
+  /** env for the agy PTY: force a real TERM and strip common host secrets.
+   *  Do NOT strip GEMINI_*; agy uses cached Gemini auth outside this env. */
   private buildPtyEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined) env[k] = v;
-    }
-    env.TERM = "xterm-256color";
-    return env;
+    return buildEngineEnv({ TERM: "xterm-256color" }, { allowUnsafeTokens: false });
   }
 
   private buildArgs(resumeConvId: string | undefined, model?: string): string[] {

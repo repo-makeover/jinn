@@ -3,6 +3,7 @@ import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { PtyLifecycleManager } from "./pty-lifecycle.js";
 import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
@@ -110,14 +111,11 @@ export class HermesInteractiveEngine implements InterruptibleEngine, PtyViewEngi
   // ── Private spawn ─────────────────────────────────────────────────────────
 
   private buildEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined) env[k] = v;
-    }
-    env.TERM = "xterm-256color";
-    env.HERMES_YOLO_MODE = "1";
-    env.HERMES_ACCEPT_HOOKS = "1";
-    return env;
+    return buildEngineEnv({
+      TERM: "xterm-256color",
+      HERMES_YOLO_MODE: "1",
+      HERMES_ACCEPT_HOOKS: "1",
+    });
   }
 
   private async spawn(jinnSessionId: string, opts: PtyIdleSpawnOpts): Promise<ReturnType<typeof createPtyHandle>> {

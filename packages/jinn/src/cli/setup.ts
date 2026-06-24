@@ -2,10 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { execSync, spawn } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
+import { promisify } from "node:util";
 import yaml from "js-yaml";
 import { isInstalled, resolveBin } from "../shared/resolve-bin.js";
 import { safeWriteFile } from "../shared/safe-write.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import {
   JINN_HOME,
   CONFIG_PATH,
@@ -25,6 +27,7 @@ import { getPackageVersion } from "../shared/version.js";
 import { assertSafeDestructiveHome } from "./instances.js";
 import { SKILLS_NPX_SPEC } from "./skills.js";
 
+const execFileAsync = promisify(execFile);
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
@@ -37,6 +40,18 @@ function ok(msg: string) {
 
 function warn(msg: string) {
   console.log(`  ${YELLOW}[warn]${RESET} ${msg}`);
+}
+
+async function preCacheSkillsCli(): Promise<void> {
+  try {
+    await execFileAsync("npx", ["--yes", SKILLS_NPX_SPEC, "--version"], {
+      env: buildEngineEnv({}),
+      timeout: 15_000,
+      windowsHide: true,
+    });
+  } catch {
+    warn("Skills CLI pre-cache failed (non-fatal)");
+  }
 }
 
 function fail(msg: string) {
@@ -643,8 +658,8 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     created.push(settingsPath);
   }
 
-  // Pre-cache skills CLI for instant searches later
-  spawn('npx', ['--yes', SKILLS_NPX_SPEC, '--version'], { stdio: 'ignore', detached: true }).unref();
+  // Pre-cache skills CLI for instant searches later; best-effort and bounded.
+  await preCacheSkillsCli();
 
   // Detect project context and suggest relevant skills
   detectProjectContext(portalSlug);

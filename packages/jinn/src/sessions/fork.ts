@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from "uuid";
 import { logger } from "../shared/logger.js";
 import { safeWriteFile } from "../shared/safe-write.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { spawnPty } from "../engines/pty-stream.js";
 import type { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 
@@ -41,6 +42,10 @@ export interface ForkClaudeOpts {
   cwd: string;
   /** When set, the fork uses interactive (no -p) and releases the source PTY first. */
   interactive?: InteractiveForkCtx;
+}
+
+export function buildClaudeForkEnv(additions: Record<string, string> = {}): Record<string, string> {
+  return buildEngineEnv(additions, { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_"] });
 }
 
 /**
@@ -73,7 +78,7 @@ export async function forkClaudeSession(opts: ForkClaudeOpts): Promise<ForkResul
     cwd,
     encoding: "utf-8",
     timeout: 60_000,
-    env: { ...process.env, PATH: process.env.PATH },
+    env: buildClaudeForkEnv(),
   });
 
   const lastLine = result.trim().split("\n").pop();
@@ -120,13 +125,8 @@ async function forkClaudeSessionInteractive(
     "Session duplicated — this is a snapshot of the original conversation.",
   ];
 
-  // Clean env: drop CLAUDE_CODE_* / CLAUDECODE inherited from gateway, add NO_FLICKER.
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-    if (v !== undefined) env[k] = v;
-  }
-  env.CLAUDE_CODE_NO_FLICKER = "1";
+  // Clean env: drop gateway Claude hooks and common host secrets; add NO_FLICKER.
+  const env = buildClaudeForkEnv({ CLAUDE_CODE_NO_FLICKER: "1" });
 
   logger.info(`Interactive fork: spawning ${bin} ${args.join(" ")}`);
   const proc = await spawnPty(bin, args, {

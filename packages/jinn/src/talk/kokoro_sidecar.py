@@ -140,10 +140,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             wav = _synth(text, voice, speed, lang)
         except FileNotFoundError as exc:
-            self._json(503, {"error": str(exc)})
+            print(f"kokoro: model not found: {exc}", file=sys.stderr, flush=True)
+            self._json(503, {"error": "model_missing"})
             return
         except Exception as exc:  # synthesis failure
-            self._json(500, {"error": f"synth failed: {exc}"})
+            print(f"kokoro: synthesis failed: {exc}", file=sys.stderr, flush=True)
+            self._json(500, {"error": "synthesis_failed"})
             return
 
         self.send_response(200)
@@ -163,12 +165,16 @@ def main() -> int:
     args = parser.parse_args()
 
     _model_dir = os.path.abspath(args.model_dir)
+    if not os.path.isdir(_model_dir):
+        print("KOKORO_SIDECAR_MODEL_DIR_MISSING", flush=True)
+        return 1
 
     if args.warm:
         try:
             _load_model()
         except Exception as exc:  # report but still serve so /health is reachable
-            print(f"KOKORO_SIDECAR_WARM_FAILED {exc}", flush=True)
+            print("KOKORO_SIDECAR_WARM_FAILED", flush=True)
+            print(f"kokoro warm-load detail: {exc}", file=sys.stderr, flush=True)
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     # Print AFTER bind so the parent only sees this once the socket accepts.

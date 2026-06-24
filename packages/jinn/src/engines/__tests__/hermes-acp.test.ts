@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
 import { HermesRpc } from "../hermes-jsonrpc.js";
-import { HermesAcpEngine } from "../hermes-acp.js";
+import { HermesAcpEngine, buildHermesAcpEnv } from "../hermes-acp.js";
 
 // ---------------------------------------------------------------------------
 // Fake-server helpers
@@ -191,5 +191,28 @@ describe("HermesAcpEngine.run", () => {
     expect(r.error).toBeUndefined();
     expect(r.sessionId).toBe("NEW-1");
     expect(r.result).toBe("fallback ok");
+  });
+});
+
+describe("buildHermesAcpEnv", () => {
+  it("preserves Hermes approvals but strips inherited host API tokens", () => {
+    const prevAnthropic = process.env.ANTHROPIC_API_KEY;
+    const prevOpenAi = process.env.OPENAI_API_KEY;
+    try {
+      process.env.ANTHROPIC_API_KEY = "anthropic-secret";
+      process.env.OPENAI_API_KEY = "openai-secret";
+
+      const env = buildHermesAcpEnv();
+
+      expect(env.HERMES_YOLO_MODE).toBe("1");
+      expect(env.HERMES_ACCEPT_HOOKS).toBe("1");
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+    } finally {
+      if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prevAnthropic;
+      if (prevOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevOpenAi;
+    }
   });
 });

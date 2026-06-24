@@ -26,7 +26,7 @@ vi.mock("node:os", async (importOriginal) => {
   };
 });
 
-import { claudeProjectDir } from "../fork.js";
+import { buildClaudeForkEnv, claudeProjectDir } from "../fork.js";
 
 describe("claudeProjectDir", () => {
   const base = path.join("/home/test", ".claude", "projects");
@@ -51,5 +51,32 @@ describe("claudeProjectDir", () => {
     expect(claudeProjectDir("/Users/x/My Projects/app_v2 (béta)")).toBe(
       path.join(base, "-Users-x-My-Projects-app-v2--b-ta-"),
     );
+  });
+});
+
+describe("buildClaudeForkEnv", () => {
+  it("strips Claude gateway hooks and Anthropic tokens from fork processes", () => {
+    const prevClaudeCode = process.env.CLAUDE_CODE_SESSION;
+    const prevClaudeCodeBare = process.env.CLAUDECODE;
+    const prevToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    try {
+      process.env.CLAUDE_CODE_SESSION = "hook-session";
+      process.env.CLAUDECODE = "1";
+      process.env.ANTHROPIC_AUTH_TOKEN = "anthropic-token";
+
+      const env = buildClaudeForkEnv({ CLAUDE_CODE_NO_FLICKER: "1" });
+
+      expect(env.CLAUDE_CODE_SESSION).toBeUndefined();
+      expect(env.CLAUDECODE).toBeUndefined();
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+      expect(env.CLAUDE_CODE_NO_FLICKER).toBe("1");
+    } finally {
+      if (prevClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION;
+      else process.env.CLAUDE_CODE_SESSION = prevClaudeCode;
+      if (prevClaudeCodeBare === undefined) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = prevClaudeCodeBare;
+      if (prevToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+      else process.env.ANTHROPIC_AUTH_TOKEN = prevToken;
+    }
   });
 });
