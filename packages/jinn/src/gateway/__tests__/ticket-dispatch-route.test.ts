@@ -51,6 +51,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock("../ticket-dispatch.js");
   if (prevHome === undefined) delete process.env.JINN_HOME;
   else process.env.JINN_HOME = prevHome;
   fs.rmSync(tmpHome, { recursive: true, force: true });
@@ -151,5 +152,32 @@ describe("POST /api/org/departments/:name/tickets/:id/dispatch", () => {
     expect(cap.status).toBe(400);
     expect(cap.body).toMatchObject({ reason: "foreign-department-assignee" });
     expect(registry.listSessions()).toHaveLength(0);
+  }, 15_000);
+
+  it("maps orchestration allocation failures to 409", async () => {
+    vi.doMock("../ticket-dispatch.js", () => ({
+      dispatchTicket: vi.fn(() => ({ ok: false, reason: "orchestration-busy" })),
+    }));
+    const api = await import("../api.js");
+    const cap = makeRes();
+    const ctx = {
+      getConfig: () => ({ gateway: {}, engines: { default: "claude", claude: { bin: "claude", model: "opus" } } }),
+      connectors: new Map(),
+      startTime: Date.now(),
+      emit: vi.fn(),
+      sessionManager: {
+        getEngine: () => undefined,
+        getQueue: () => ({ enqueue: vi.fn(), getPendingCount: () => 0, getTransportState: (_key: string, status: string) => status }),
+      },
+    } as any;
+
+    await api.handleApiRequest(
+      makeReq("POST", "/api/org/departments/software-delivery/tickets/ticket-1/dispatch"),
+      cap.res,
+      ctx,
+    );
+
+    expect(cap.status).toBe(409);
+    expect(cap.body).toMatchObject({ reason: "orchestration-busy" });
   }, 15_000);
 });

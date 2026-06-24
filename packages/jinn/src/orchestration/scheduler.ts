@@ -41,6 +41,10 @@ export interface SchedulerOptions {
   reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
 }
 
+export interface AllocationRequestOptions {
+  queueOnBlock?: boolean;
+}
+
 interface CandidateState {
   workerLeaseCounts: Map<string, number>;
   providerCounts: Map<string, number>;
@@ -73,7 +77,8 @@ export class MatrixScheduler {
     if (opts.snapshot) this.hydrate(opts.snapshot);
   }
 
-  requestAllocation(request: AllocationRequest): AllocationResult {
+  requestAllocation(request: AllocationRequest, opts: AllocationRequestOptions = {}): AllocationResult {
+    const queueOnBlock = opts.queueOnBlock !== false;
     this.expireLeases(this.now());
     const activeState = this.activeState();
     const selected: Array<{ role: string; worker: Worker }> = [];
@@ -94,12 +99,16 @@ export class MatrixScheduler {
     }
 
     if (missingRoles.length > 0) {
-      const queueItem = this.queueBlocked(request, missingRoles);
-      this.record("task_blocked_resource", {
-        taskId: request.taskId,
-        timestamp: queueItem.blockedSince,
-        detail: { missingRoles },
-      });
+      const queueItem = queueOnBlock
+        ? this.queueBlocked(request, missingRoles)
+        : this.buildBlockedQueueItem(request, missingRoles, this.isoNow());
+      if (queueOnBlock) {
+        this.record("task_blocked_resource", {
+          taskId: request.taskId,
+          timestamp: queueItem.blockedSince,
+          detail: { missingRoles },
+        });
+      }
       return { ok: false, queueItem, reviewPolicy: { explanations } };
     }
 
@@ -445,18 +454,22 @@ export class MatrixScheduler {
       existing.request = request;
       return { ...existing, request: { ...existing.request } };
     }
-    const item: QueueItem = {
+    const item = this.buildBlockedQueueItem(request, missingRoles, this.isoNow());
+    this.queue.push(item);
+    return { ...item, request: { ...item.request } };
+  }
+
+  private buildBlockedQueueItem(request: AllocationRequest, missingRoles: string[], blockedSince: string): QueueItem {
+    return {
       taskId: request.taskId,
       coordinatorId: request.coordinatorId,
       state: "blocked_resource",
       missingRoles,
       priority: request.priority,
-      blockedSince: this.isoNow(),
+      blockedSince,
       resumeOn: ["worker_released", "quota_available", "lease_expired"],
       request,
     };
-    this.queue.push(item);
-    return { ...item, request: { ...item.request } };
   }
 
   private getRunningLease(leaseId: string): Lease {

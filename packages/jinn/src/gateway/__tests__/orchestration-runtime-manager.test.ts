@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { swapOrchestrationRuntime } from "../orchestration-runtime-manager.js";
+import { refreshOrchestrationRuntimeForOrgReload, swapOrchestrationRuntime } from "../orchestration-runtime-manager.js";
 import type { ApiContext } from "../api/context.js";
 import type { JinnConfig } from "../../shared/types.js";
 
@@ -35,6 +35,33 @@ describe("swapOrchestrationRuntime", () => {
 
     expect(bound).toBeUndefined();
     expect(ctx.orchestration?.runtime).toBeUndefined();
+    expect(current.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("refreshOrchestrationRuntimeForOrgReload", () => {
+  it("defers org-worker refresh while active orchestration work is running", () => {
+    const current = runtime(true);
+    const next = runtime(false);
+    const ctx = makeContext(current.instance);
+
+    const bound = refreshOrchestrationRuntimeForOrgReload(ctx, config(true), current.instance, () => next.instance);
+
+    expect(bound).toBe(current.instance);
+    expect(ctx.orchestration?.runtime).toBe(current.instance);
+    expect(current.close).not.toHaveBeenCalled();
+    expect(next.close).not.toHaveBeenCalled();
+  });
+
+  it("swaps to a fresh runtime on org reload after drain", () => {
+    const current = runtime(false);
+    const next = runtime(false);
+    const ctx = makeContext(current.instance);
+
+    const bound = refreshOrchestrationRuntimeForOrgReload(ctx, config(true), current.instance, () => next.instance);
+
+    expect(bound).toBe(next.instance);
+    expect(ctx.orchestration?.runtime).toBe(next.instance);
     expect(current.close).toHaveBeenCalledOnce();
   });
 });

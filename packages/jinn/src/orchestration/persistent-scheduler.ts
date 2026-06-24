@@ -45,6 +45,10 @@ export class PersistentMatrixScheduler {
     return this.commitMutation(() => this.scheduler.requestAllocation(request));
   }
 
+  tryAllocationNow(request: AllocationRequest): AllocationResult {
+    return this.commitMutation(() => this.scheduler.requestAllocation(request, { queueOnBlock: false }));
+  }
+
   heartbeatLease(leaseId: string, coordinatorId?: string): Lease {
     return this.commitMutation(() => this.scheduler.heartbeatLease(leaseId, coordinatorId));
   }

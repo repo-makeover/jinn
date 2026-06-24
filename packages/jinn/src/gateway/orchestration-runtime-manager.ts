@@ -1,4 +1,5 @@
 import { createOrchestrationRuntimeFromConfig, type OrchestrationRuntime } from "../orchestration/runtime.js";
+import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import type { ApiContext } from "./api/context.js";
 
@@ -25,6 +26,20 @@ export function swapOrchestrationRuntime(
   currentRuntime?.close();
   unbindRuntime(apiContext);
   return undefined;
+}
+
+export function refreshOrchestrationRuntimeForOrgReload(
+  apiContext: ApiContext,
+  config: JinnConfig,
+  currentRuntime: OrchestrationRuntime | undefined,
+  createRuntime: (nextConfig: JinnConfig) => OrchestrationRuntime | undefined = createOrchestrationRuntimeFromConfig,
+): OrchestrationRuntime | undefined {
+  if (config.orchestration?.enabled !== true) return currentRuntime;
+  if (currentRuntime?.hasActiveWork()) {
+    logger.warn("Orchestration org-worker bridge refresh deferred until active work drains");
+    return currentRuntime;
+  }
+  return swapOrchestrationRuntime(apiContext, config, currentRuntime, createRuntime);
 }
 
 function bindRuntime(apiContext: ApiContext, runtime: OrchestrationRuntime): void {

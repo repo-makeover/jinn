@@ -49,8 +49,9 @@
   - Usage-aware headroom helpers can filter unavailable, exhausted, or below-threshold live engines when future live orchestration opts in; simulation mode does not call this filter.
   - Worktree execution is task/lane-scoped: implementation lanes can run in isolated git worktrees, reviewers inspect generated diff bundles instead of the implementation tree, and the runtime reaper removes abandoned managed worktrees.
   - Dual-lane mode allocates OpenAI and Anthropic implementer roles atomically, sends both lanes an identical prompt in isolated worktrees, returns a deterministic comparison report, and requires explicit human selection. It does not apply the selected patch to the base repo.
+  - Board-originated ticket dispatch is scheduler-aware when `orchestration.enabled: true`: manual dispatch and the board worker allocate an exact synthesized org worker role before session launch and release the lease after the run settles.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
-  - Dashboard controls, board-worker routing, automatic patch integration, and persistent telemetry aggregation are later milestones.
+  - Dashboard controls, automatic patch integration, and persistent telemetry aggregation are later milestones.
 
 ## API
 
@@ -71,7 +72,18 @@
   - GET routes observe state only; `POST /api/orchestration/run` is the only M5 mutating route.
   - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, passes isolated worktree cwd values to eligible implementation sessions, hands reviewers diff bundles, and releases leases on terminal paths.
   - If no orchestration runtime exists, state routes retain the no-daemon/test fallback; the run route fails instead of opening its own live scheduler.
-  - No dashboard controls, cancel API, board-worker routing, or automatic dual-lane patch application are wired yet.
+  - No dashboard controls, cancel API, or automatic dual-lane patch application are wired yet.
+
+### Kanban ticket dispatch scheduler bridge
+- `packages/jinn/src/gateway/org-worker-bridge.ts`
+- `packages/jinn/src/gateway/ticket-dispatch.ts`
+- `packages/jinn/src/gateway/board-worker.ts`
+- `packages/jinn/src/gateway/orchestration-runtime-factory.ts`
+- When `orchestration.enabled: true`, manual ticket dispatch and the background board worker allocate an exact in-memory org-derived scheduler role before creating/running the board-linked session.
+- A busy exact worker returns `orchestration-busy` and leaves the ticket in `todo`; no orchestration queue item is created because the board is already the durable backlog.
+- Missing runtime or missing org-worker mapping returns `orchestration-unavailable` or `orchestration-worker-unmapped` and does not fall back to legacy direct dispatch.
+- The manual dispatch route maps scheduler-specific failures to HTTP `409`.
+- When orchestration is disabled, ticket dispatch keeps the legacy direct dispatch behavior.
 
 ### Kiro headless engine and estimated credit gauge
 - `kiro` is a registered headless engine. Work turns spawn:

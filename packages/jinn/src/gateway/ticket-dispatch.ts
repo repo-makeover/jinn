@@ -1,10 +1,14 @@
 import { createSession, getSession, getSessionBySessionKey, updateSession } from "../sessions/registry.js";
 import type { Employee, JsonObject, Session } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
+import { toLeaseTransportMeta } from "../orchestration/lease-meta.js";
+import { resolveLiveLeaseDurationMs, type OrchestrationRuntime } from "../orchestration/runtime.js";
+import type { AllocationRequest, Lease, TaskPriority } from "../orchestration/types.js";
 import { dispatchWebSessionRun } from "./api/session-dispatch.js";
 import { findEmployee, scanOrg } from "./org.js";
 import { readBoardArray, writeBoardTickets, type BoardTicket } from "./board-service.js";
 import type { ApiContext } from "./api/context.js";
+import { orgWorkerIdForName, orgWorkerRoleForName } from "./org-worker-bridge.js";
 
 export type DispatchTicketFailureReason =
   | "no-assignee"
@@ -12,7 +16,10 @@ export type DispatchTicketFailureReason =
   | "unknown-employee"
   | "foreign-department-assignee"
   | "no-manager"
-  | "already-running";
+  | "already-running"
+  | "orchestration-unavailable"
+  | "orchestration-worker-unmapped"
+  | "orchestration-busy";
 
 export type DispatchTicketResult =
   | { ok: true; sessionId: string }
@@ -31,6 +38,12 @@ export interface DispatchTicketOptions {
 
 type BoardDispatchState = "session_created" | "board_linked";
 
+interface BoardDispatchLeaseGuard {
+  lease: Lease;
+  transportMeta: JsonObject;
+  release: () => void;
+}
+
 function boardDispatchMeta(session: Session): Record<string, unknown> {
   const meta = session.transportMeta;
   return meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {};
@@ -39,9 +52,11 @@ function boardDispatchMeta(session: Session): Record<string, unknown> {
 function withBoardDispatchState(
   session: Session,
   state: BoardDispatchState,
+  leaseMeta?: JsonObject,
 ): JsonObject {
   return {
     ...boardDispatchMeta(session),
+    ...(leaseMeta ?? {}),
     boardDispatchState: state,
   };
 }
@@ -73,6 +88,12 @@ function ticketPrompt(ticket: BoardTicket): string {
   return description ? `${title}\n\n${description}` : title;
 }
 
+function priorityForTicket(ticket: BoardTicket): TaskPriority {
+  if (ticket.priority === "high") return "high";
+  if (ticket.priority === "low") return "low";
+  return "normal";
+}
+
 export function findDepartmentManager(department: string, registry: Map<string, Employee>): Employee | undefined {
   return [...registry.values()]
     .filter((employee) => employee.department === department && employee.rank === "manager")
@@ -100,6 +121,81 @@ export function resolveDispatchEmployee(
 
 function getTicket(board: BoardTicket[], ticketId: string): BoardTicket | undefined {
   return board.find((ticket) => ticket && ticket.id === ticketId);
+}
+
+function createLeaseGuard(runtime: OrchestrationRuntime, lease: Lease): BoardDispatchLeaseGuard {
+  let released = false;
+  const transportMeta = toLeaseTransportMeta({
+    leaseId: lease.leaseId,
+    taskId: lease.taskId,
+    coordinatorId: lease.coordinatorId,
+    workerId: lease.workerId,
+    role: lease.role,
+    mode: "single_worker",
+  });
+  return {
+    lease,
+    transportMeta,
+    release: () => {
+      if (released) return;
+      released = true;
+      try {
+        runtime.releaseLease(lease.leaseId, lease.coordinatorId);
+      } catch (err) {
+        logger.warn(`[ticket-dispatch] orchestration release failed for lease ${lease.leaseId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  };
+}
+
+function allocateBoardDispatchLease(
+  department: string,
+  ticket: BoardTicket,
+  employee: Employee,
+  opts: DispatchTicketOptions,
+  deps: DispatchTicketDeps,
+  sessionKey: string,
+): BoardDispatchLeaseGuard | { reason: Extract<DispatchTicketFailureReason, "orchestration-unavailable" | "orchestration-worker-unmapped" | "orchestration-busy"> } | undefined {
+  if (deps.context.getConfig().orchestration?.enabled !== true) return undefined;
+  const runtime = deps.context.orchestration?.runtime;
+  if (!runtime) return { reason: "orchestration-unavailable" };
+
+  const workerId = orgWorkerIdForName(employee.name);
+  const roleId = orgWorkerRoleForName(employee.name);
+  const hasWorker = runtime.listWorkers().some((worker) => worker.id === workerId);
+  const hasRole = runtime.config.roles.some((role) => role.id === roleId);
+  if (!hasWorker || !hasRole) return { reason: "orchestration-worker-unmapped" };
+
+  const request: AllocationRequest = {
+    taskId: sessionKey,
+    coordinatorId: `ticket-dispatch:${opts.source}`,
+    requiredRoles: [roleId],
+    optionalRoles: [],
+    priority: priorityForTicket(ticket),
+    leaseDurationMs: resolveLiveLeaseDurationMs(deps.context.getConfig()),
+  };
+  let result;
+  try {
+    result = runtime.tryAllocationNow(request);
+  } catch (err) {
+    logger.warn(
+      `[ticket-dispatch] orchestration allocation failed for ${department}/${ticket.id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { reason: "orchestration-unavailable" };
+  }
+  if (!result.ok) return { reason: "orchestration-busy" };
+  const lease = result.allocation.leases.find((candidate) => candidate.workerId === workerId && candidate.role === roleId);
+  if (!lease) {
+    for (const allocated of result.allocation.leases) {
+      try {
+        runtime.releaseLease(allocated.leaseId, allocated.coordinatorId);
+      } catch {
+        // best-effort cleanup before reporting the invariant as unmapped
+      }
+    }
+    return { reason: "orchestration-worker-unmapped" };
+  }
+  return createLeaseGuard(runtime, lease);
 }
 
 export function dispatchTicket(
@@ -155,68 +251,81 @@ export function dispatchTicket(
   if (!engine) {
     throw new Error(`Engine "${employee.engine}" not available for ${employee.name}`);
   }
+  const leaseGuard = allocateBoardDispatchLease(department, ticket, employee, opts, deps, sessionKey);
+  if (leaseGuard && "reason" in leaseGuard) {
+    logger.info(`[ticket-dispatch] skipped ${department}/${ticketId}: ${leaseGuard.reason}`);
+    return { ok: false, reason: leaseGuard.reason };
+  }
 
   const now = deps.now?.() ?? Date.now();
   const iso = new Date(now).toISOString();
   const prompt = ticketPrompt(ticket);
-  const session = reusableSession ?? createSession({
-    engine: employee.engine,
-    source: opts.source,
-    sourceRef: `${opts.source}:${department}:${ticketId}:${now}`,
-    connector: opts.source,
-    sessionKey,
-    replyContext: { source: opts.source, department, ticketId },
-    transportMeta: {
-      boardDepartment: department,
-      boardTicketId: ticketId,
-      boardDispatchState: "session_created",
-      dispatchSource: opts.source,
-      routedToManager: opts.routeToManager,
-    },
-    employee: employee.name,
-    model: employee.model,
-    title: ticket.title,
-    effortLevel: employee.effortLevel ?? undefined,
-    prompt,
-    promptExcerpt: ticket.title,
-  });
+  let session: Session;
+  try {
+    session = reusableSession ?? createSession({
+      engine: employee.engine,
+      source: opts.source,
+      sourceRef: `${opts.source}:${department}:${ticketId}:${now}`,
+      connector: opts.source,
+      sessionKey,
+      replyContext: { source: opts.source, department, ticketId },
+      transportMeta: {
+        ...(leaseGuard?.transportMeta ?? {}),
+        boardDepartment: department,
+        boardTicketId: ticketId,
+        boardDispatchState: "session_created",
+        dispatchSource: opts.source,
+        routedToManager: opts.routeToManager,
+      },
+      employee: employee.name,
+      model: employee.model,
+      title: ticket.title,
+      effortLevel: employee.effortLevel ?? undefined,
+      prompt,
+      promptExcerpt: ticket.title,
+    });
 
-  ticket.status = "in_progress";
-  ticket.sessionId = session.id;
-  ticket.assignee = employee.name;
-  ticket.updatedAt = iso;
-  writeBoardTickets(deps.orgDir, department, tickets);
+    ticket.status = "in_progress";
+    ticket.sessionId = session.id;
+    ticket.assignee = employee.name;
+    ticket.updatedAt = iso;
+    writeBoardTickets(deps.orgDir, department, tickets);
 
-  const runningSession = updateSession(session.id, {
-    status: "running",
-    lastActivity: iso,
-    lastError: null,
-    transportMeta: withBoardDispatchState(session, "board_linked"),
-  }) ?? {
-    ...session,
-    status: "running" as const,
-    lastActivity: iso,
-    lastError: null,
-    transportMeta: withBoardDispatchState(session, "board_linked"),
-  };
+    const runningSession = updateSession(session.id, {
+      status: "running",
+      lastActivity: iso,
+      lastError: null,
+      transportMeta: withBoardDispatchState(session, "board_linked", leaseGuard?.transportMeta),
+    }) ?? {
+      ...session,
+      status: "running" as const,
+      lastActivity: iso,
+      lastError: null,
+      transportMeta: withBoardDispatchState(session, "board_linked", leaseGuard?.transportMeta),
+    };
 
-  deps.context.emit("board:updated", { department });
-  deps.context.emit("ticket:dispatched", {
-    department,
-    ticketId,
-    sessionId: session.id,
-    employee: employee.name,
-    source: opts.source,
-    routeToManager: opts.routeToManager,
-  });
+    deps.context.emit("board:updated", { department });
+    deps.context.emit("ticket:dispatched", {
+      department,
+      ticketId,
+      sessionId: session.id,
+      employee: employee.name,
+      source: opts.source,
+      routeToManager: opts.routeToManager,
+    });
 
-  dispatchWebSessionRun(
-    runningSession,
-    prompt,
-    engine,
-    deps.context.getConfig(),
-    deps.context,
-  );
+    const run = dispatchWebSessionRun(
+      runningSession,
+      prompt,
+      engine,
+      deps.context.getConfig(),
+      deps.context,
+    );
+    if (leaseGuard) void run.finally(() => leaseGuard.release());
+  } catch (err) {
+    leaseGuard?.release();
+    throw err;
+  }
 
   return { ok: true, sessionId: session.id };
 }

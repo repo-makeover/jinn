@@ -97,6 +97,10 @@ export class OrchestrationRuntime {
     return this.scheduler.requestAllocation(request);
   }
 
+  tryAllocationNow(request: AllocationRequest): AllocationResult {
+    return this.scheduler.tryAllocationNow(request);
+  }
+
   heartbeatLease(leaseId: string, coordinatorId?: string): Lease {
     return this.scheduler.heartbeatLease(leaseId, coordinatorId);
   }

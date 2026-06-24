@@ -1,6 +1,6 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 and M1–M8 are **complete** (Codex, 2026-06-24).
+> **Status:** Phase 1 and M1–M9 are **complete** (Codex, 2026-06-24).
 > This is the **full-capability roadmap** from inert scaffold to real,
 > daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
@@ -492,16 +492,29 @@ the source brief.
   those remain later/operator workflow concerns.
 - **Team:** implementer; **review:** department integration review recommended.
 
-### M9 — Org→Worker bridge + board-worker reconciliation (brief Phase 3, deferred)
+### M9 — Org→Worker bridge + board-worker reconciliation (brief Phase 3) (complete, 2026-06-24)
 
 - **Goal:** optionally synthesize workers from `~/.jinn/org/*` employees (D6); make the
   scheduler the single allocator; gate/route `board-worker` through it.
-- **Deliverables:** `orchestration/org-worker-adapter.ts` (read-only over
-  `gateway/org.ts` `scanOrg`); a config switch so `board-worker.ts` defers to the
-  scheduler when orchestration is enabled.
-- **Exit gate:** no double-dispatch of the same employee/engine across board-worker and
-  scheduler (collision test); org YAML never written by the adapter; disabling
-  orchestration restores prior board-worker behavior exactly.
+- **Delivered:** gateway-side `org-worker-bridge.ts` reads `scanOrg()` output and
+  synthesizes deterministic in-memory scheduler workers/roles with exact-match
+  board-dispatch capabilities; no org YAML or orchestration YAML is written. Gateway
+  runtime construction augments loaded orchestration config with the synthesized
+  workers when `orchestration.enabled === true`, including startup/config reload/org
+  reload wiring and active-work deferred refresh. `MatrixScheduler`/runtime now expose
+  immediate no-queue allocation for board tickets. `ticket-dispatch.ts` uses scheduler
+  leases for manual and board-worker dispatch when orchestration is enabled, preserves
+  board/session metadata and legacy behavior when disabled, attaches lease metadata for
+  heartbeat renewal, releases on setup failure and after `dispatchWebSessionRun()` settles,
+  and returns scheduler-specific failure reasons. Manual dispatch maps scheduler-specific
+  failures to HTTP `409`.
+- **Exit gate:** passed for org bridge synthesis, no durable queue item on immediate
+  no-capacity allocation, release waking normal queued orchestration work, lease metadata
+  and release ownership around manual dispatch, board-write failure cleanup/idempotency,
+  exact-worker busy skip leaving the ticket `todo`, fail-visible no-runtime behavior, API
+  `409` mapping, and unchanged legacy direct path when orchestration is disabled.
+- **Remaining boundary:** M9 does not add a new config key, CLI command, dashboard
+  control, durable telemetry JSONL, or automatic patch integration.
 - **Team:** implementer; **review:** department — collision + regression focus.
 
 ### M10 — Durable telemetry & empirical routing (brief Phase 9)
@@ -577,7 +590,8 @@ Split before a file approaches the limit. New runtime state under `JINN_HOME` on
 | `orchestration/worktree.ts` | M6 | git worktree lifecycle + reaper | ≤350 |
 | `orchestration/cross-family.ts` | M7 | live family policy + explainability | ≤200 |
 | `orchestration/dual-lane.ts` | M8 | competing lanes + comparison | ≤400 |
-| `orchestration/org-worker-adapter.ts` | M9 | read org → synthesize workers | ≤250 |
+| `gateway/org-worker-bridge.ts` | M9 | read org → synthesize workers/roles | ≤250 |
+| `gateway/orchestration-runtime-factory.ts` | M9 | augment runtime config with org workers | ≤100 |
 | `orchestration/telemetry.ts` | M10 | jsonl emit + summarize + score | ≤300 |
 | `scripts/orchestration-smoke.mjs` | M3+ | opt-in real-provider smoke | ≤200 |
 | `shared/paths.ts` (modify) | M1 | add `ORCH_DB`, orchestration dirs | small |

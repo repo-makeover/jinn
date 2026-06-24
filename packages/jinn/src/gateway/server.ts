@@ -30,7 +30,7 @@ import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js"
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR, ORG_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
-import { createOrchestrationRuntimeFromConfig, type OrchestrationRuntime } from "../orchestration/runtime.js";
+import type { OrchestrationRuntime } from "../orchestration/runtime.js";
 import { runAllocatedDualLaneTask } from "../orchestration/dual-lane.js";
 import { runAllocatedOrchestrationTask } from "../orchestration/run-mode.js";
 import { startStatusReconciler } from "./status-reconciler.js";
@@ -59,7 +59,8 @@ import { syncBoardForEvent } from "./board-sync.js";
 import { logBoardSummary } from "./board-service.js";
 import { startBoardWorker } from "./board-worker.js";
 import { reconcileOrphanedTickets } from "./orphaned-ticket-reconciler.js";
-import { swapOrchestrationRuntime } from "./orchestration-runtime-manager.js";
+import { refreshOrchestrationRuntimeForOrgReload, swapOrchestrationRuntime } from "./orchestration-runtime-manager.js";
+import { createGatewayOrchestrationRuntime } from "./orchestration-runtime-factory.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -826,6 +827,7 @@ export async function startGateway(
       .finally(() => emit("engines:updated", {}));
   };
   refreshDynamicModels(currentConfig);
+  let orchestrationRuntime: OrchestrationRuntime | undefined;
 
   // Synchronously re-scan org/ into the in-memory registry and drop warm PTYs so the
   // next turn respawns with a fresh system prompt. Shared by the API employee-update
@@ -845,6 +847,13 @@ export async function startGateway(
     antigravityEngine.killIdle();
     grokInteractiveEngine.killIdle();
     hermesInteractiveEngine.killIdle();
+    orchestrationRuntime = refreshOrchestrationRuntimeForOrgReload(
+      apiContext,
+      currentConfig,
+      orchestrationRuntime,
+      (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
+    );
+    bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
     emit("org:changed", {});
   };
 
@@ -894,7 +903,7 @@ export async function startGateway(
     reloadOrg,
     backgroundActivity,
   };
-  let orchestrationRuntime = createOrchestrationRuntimeFromConfig(currentConfig);
+  orchestrationRuntime = createGatewayOrchestrationRuntime(currentConfig, employeeRegistry);
   if (orchestrationRuntime) {
     bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
     apiContext.orchestration = { runtime: orchestrationRuntime };
@@ -911,7 +920,12 @@ export async function startGateway(
       invalidateModelRegistry(); // rebuild the model/capability registry from the new config
       refreshDynamicModels(currentConfig); // re-discover dynamic models (engine bins/auth may have changed)
       reloadScheduler(loadJobs(), currentConfig, connectorMap);
-      orchestrationRuntime = swapOrchestrationRuntime(apiContext, currentConfig, orchestrationRuntime);
+      orchestrationRuntime = swapOrchestrationRuntime(
+        apiContext,
+        currentConfig,
+        orchestrationRuntime,
+        (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
+      );
       bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
       logger.info("Config reloaded successfully");
       logBoardSummary(ORG_DIR, (msg) => logger.info(msg));

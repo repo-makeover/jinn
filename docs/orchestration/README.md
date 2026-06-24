@@ -9,8 +9,9 @@ for isolated implementation lanes plus diff-only review bundles. Live
 cross-family reviewer policy is implemented with fail-closed same-family
 fallback and structured explanations. Dual-lane competition is implemented for
 explicit OpenAI/Anthropic lane runs with deterministic comparison reports and a
-human selection gate. Dashboard controls, board-worker dispatch, and org-worker mapping remain
-later milestones.
+human selection gate. Board-originated ticket dispatch is scheduler-aware when
+`orchestration.enabled: true`; dashboard controls and durable telemetry
+aggregation remain later milestones.
 
 ## Intent
 
@@ -37,7 +38,8 @@ Use these terms in code and operator-facing orchestration docs:
 - Capability: named skill or execution capability.
 
 Do not use employee, manager, department, boss, or reportee in the orchestration
-module. The existing Jinn org system can map to workers later through an adapter.
+module. The existing Jinn org system maps to workers through a gateway-side
+bridge so orchestration core vocabulary stays provider-neutral.
 
 ## Config Files
 
@@ -170,6 +172,30 @@ persist a durable continuation and auto-resume on later resource availability.
 Failed continuations remain inspectable and can be retried explicitly through
 the continuation routes. Manual retry does not target still-queued
 continuations, which continue to resume only on scheduler resource events.
+
+## Org Board Dispatch
+
+When `orchestration.enabled: true`, manual kanban ticket dispatch and the
+background board worker allocate an exact scheduler role for the selected org
+assignee or department manager before creating/running the board session. The
+gateway-side bridge reads `scanOrg()` output, synthesizes deterministic
+workers/roles in memory, and never writes org YAML or user orchestration YAML.
+
+Board tickets stay the durable backlog. Board-originated dispatch uses an
+immediate allocation path: if the exact org worker is busy or quota-constrained,
+Jinn does not create a scheduler queue item. The ticket remains `todo` and the
+dispatch returns/logs `orchestration-busy`. If orchestration is enabled but the
+runtime or org-worker mapping is unavailable, dispatch returns/logs
+`orchestration-unavailable` or `orchestration-worker-unmapped` and does not fall
+back to legacy direct dispatch. When orchestration is disabled, manual dispatch
+and board-worker dispatch retain the legacy direct path.
+
+Board-linked sessions keep their existing `employee`, `model`, `effortLevel`,
+board metadata, ticket status, and idempotent retry behavior. The scheduler
+lease metadata is added to `session.transportMeta.orchestrationLease`, so the
+existing run heartbeat renews the lease while the session runs. Ticket dispatch
+owns release: setup failures release immediately, and launched runs release in a
+`finally` handler after `dispatchWebSessionRun()` settles.
 
 ## Scheduler Behavior
 

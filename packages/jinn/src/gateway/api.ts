@@ -1169,6 +1169,7 @@ export async function handleApiRequest(
         if (result.reason === "no-assignee") return json(res, { reason: result.reason, error: "Assign someone first." }, 400);
         if (result.reason === "foreign-department-assignee") return json(res, { reason: result.reason, error: "Assignee does not belong to this department." }, 400);
         if (result.reason === "already-running") return json(res, { reason: result.reason, error: "Ticket already has a running session." }, 409);
+        if (result.reason.startsWith("orchestration-")) return json(res, { reason: result.reason, error: result.reason }, 409);
         if (result.reason === "not-found") return notFound(res);
         return json(res, { reason: result.reason, error: result.reason }, 404);
       }

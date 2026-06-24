@@ -19,6 +19,39 @@ afterEach(() => {
 });
 
 describe("OrchestrationRuntime continuation dispatch", () => {
+  it("tryAllocationNow persists successful leases without changing normal allocation behavior", () => {
+    const runtime1 = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const immediate = runtime1.tryAllocationNow(request("board-ticket-1", "ticket-dispatch:manual"));
+
+    expect(immediate.ok).toBe(true);
+    if (!immediate.ok) return;
+    expect(runtime1.listQueue()).toEqual([]);
+    runtime1.close();
+
+    const runtime2 = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    expect(runtime2.listLeases()).toEqual([
+      expect.objectContaining({
+        leaseId: immediate.allocation.leases[0].leaseId,
+        taskId: "board-ticket-1",
+        coordinatorId: "ticket-dispatch:manual",
+        state: "running",
+      }),
+    ]);
+    runtime2.close();
+  });
+
+  it("tryAllocationNow reports no capacity without creating queue items", () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const first = runtime.tryAllocationNow(request("board-ticket-1", "ticket-dispatch:manual"));
+    expect(first.ok).toBe(true);
+
+    const busy = runtime.tryAllocationNow(request("board-ticket-2", "ticket-dispatch:manual"));
+
+    expect(busy.ok).toBe(false);
+    expect(runtime.listQueue()).toEqual([]);
+    runtime.close();
+  });
+
   it("resumes a persisted blocked live continuation after restart", async () => {
     const runtime1 = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
     const first = runtime1.requestAllocation(request("task-1", "coord-1"));
@@ -42,6 +75,26 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     expect(resumed[0]).toMatchObject({ taskId: "task-2" });
     await waitFor(() => runtime2.listLiveContinuations().find((entry) => entry.taskId === "task-2")?.state === "completed");
     runtime2.close();
+  });
+
+  it("released immediate leases wake normal queued orchestration work", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const immediate = runtime.tryAllocationNow(request("board-ticket-1", "ticket-dispatch:manual"));
+    expect(immediate.ok).toBe(true);
+    if (!immediate.ok) return;
+    const blocked = runtime.requestAllocation(request("task-2", "coord-2"));
+    expect(blocked.ok).toBe(false);
+    runtime.queueLiveContinuation(continuation("task-2", "coord-2"));
+    const resumed: Array<{ taskId: string; allocationId: string }> = [];
+    runtime.setResumeQueuedRunHandler(async ({ continuation, allocation }) => {
+      resumed.push({ taskId: continuation.taskId, allocationId: allocation.allocationId });
+    });
+
+    runtime.releaseLease(immediate.allocation.leases[0].leaseId, "ticket-dispatch:manual");
+
+    await waitFor(() => resumed.length === 1);
+    expect(resumed[0]).toMatchObject({ taskId: "task-2" });
+    runtime.close();
   });
 
   it("releases resumed allocations that have no live continuation to dispatch", async () => {
