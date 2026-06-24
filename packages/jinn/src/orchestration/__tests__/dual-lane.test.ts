@@ -26,7 +26,14 @@ afterEach(() => {
 
 describe("dual-lane orchestration", () => {
   it("runs identical prompts in isolated worktrees and requires explicit selection", async () => {
-    const { OrchestrationRuntime, runOrchestrationTask, selectDualLaneWinner, readDualLaneManifest } = await loadModules();
+    const {
+      OrchestrationRuntime,
+      runOrchestrationTask,
+      selectDualLaneWinner,
+      readDualLaneManifest,
+      readOrchestrationTelemetry,
+      ORCHESTRATION_TELEMETRY_LOG,
+    } = await loadModules();
     const repo = path.join(tmpHome, "repo");
     initGitRepo(repo);
     const engine = new LaneWritingEngine();
@@ -79,6 +86,17 @@ describe("dual-lane orchestration", () => {
     expect(fs.readFileSync(selection.archive.diffPath, "utf-8")).toContain("anthropic.txt");
     expect(fs.existsSync(worktreePaths.find((worktreePath) => worktreePath.includes("-anthropic")) ?? "")).toBe(false);
     expect(readDualLaneManifest("task-dual")?.state).toBe("selected");
+    const telemetry = readOrchestrationTelemetry(ORCHESTRATION_TELEMETRY_LOG).records;
+    expect(telemetry).toHaveLength(4);
+    expect(telemetry.filter((record) => record.mode === "dual_lane" && record.disposition === "completed")).toHaveLength(2);
+    expect(telemetry.find((record) => record.worker_id === "mockOpenAI" && record.disposition === "selected")).toMatchObject({
+      files_changed: 1,
+      tests_added: 0,
+    });
+    expect(telemetry.find((record) => record.worker_id === "mockAnthropic" && record.disposition === "discarded")).toMatchObject({
+      files_changed: 1,
+      tests_added: 0,
+    });
     runtime.close();
   });
 
@@ -152,12 +170,13 @@ describe("dual-lane orchestration", () => {
 });
 
 async function loadModules() {
-  const [runtime, runMode, dualLane, state, registry] = await Promise.all([
+  const [runtime, runMode, dualLane, state, registry, telemetry] = await Promise.all([
     import("../runtime.js"),
     import("../run-mode.js"),
     import("../dual-lane.js"),
     import("../dual-lane-state.js"),
     import("../../sessions/registry.js"),
+    import("../telemetry.js"),
   ]);
   registry.initDb();
   return {
@@ -165,6 +184,8 @@ async function loadModules() {
     runOrchestrationTask: runMode.runOrchestrationTask,
     selectDualLaneWinner: dualLane.selectDualLaneWinner,
     readDualLaneManifest: state.readDualLaneManifest,
+    readOrchestrationTelemetry: telemetry.readOrchestrationTelemetry,
+    ORCHESTRATION_TELEMETRY_LOG: telemetry.ORCHESTRATION_TELEMETRY_LOG,
   };
 }
 

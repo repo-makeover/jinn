@@ -3,7 +3,11 @@ import type { Employee, JsonObject, Session } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { toLeaseTransportMeta } from "../orchestration/lease-meta.js";
 import { resolveLiveLeaseDurationMs, type OrchestrationRuntime } from "../orchestration/runtime.js";
-import type { AllocationRequest, Lease, TaskPriority } from "../orchestration/types.js";
+import type { AllocationRequest, Lease, TaskPriority, Worker } from "../orchestration/types.js";
+import {
+  appendOrchestrationTelemetry,
+  type OrchestrationRunTelemetryRecord,
+} from "../orchestration/telemetry.js";
 import { dispatchWebSessionRun } from "./api/session-dispatch.js";
 import { findEmployee, scanOrg } from "./org.js";
 import { readBoardArray, writeBoardTickets, type BoardTicket } from "./board-service.js";
@@ -40,8 +44,15 @@ type BoardDispatchState = "session_created" | "board_linked";
 
 interface BoardDispatchLeaseGuard {
   lease: Lease;
+  worker: Worker;
   transportMeta: JsonObject;
   release: () => void;
+}
+
+interface CapturedCompletion {
+  cost?: number;
+  durationMs?: number;
+  error?: unknown;
 }
 
 function boardDispatchMeta(session: Session): Record<string, unknown> {
@@ -123,7 +134,7 @@ function getTicket(board: BoardTicket[], ticketId: string): BoardTicket | undefi
   return board.find((ticket) => ticket && ticket.id === ticketId);
 }
 
-function createLeaseGuard(runtime: OrchestrationRuntime, lease: Lease): BoardDispatchLeaseGuard {
+function createLeaseGuard(runtime: OrchestrationRuntime, lease: Lease, worker: Worker): BoardDispatchLeaseGuard {
   let released = false;
   const transportMeta = toLeaseTransportMeta({
     leaseId: lease.leaseId,
@@ -135,6 +146,7 @@ function createLeaseGuard(runtime: OrchestrationRuntime, lease: Lease): BoardDis
   });
   return {
     lease,
+    worker,
     transportMeta,
     release: () => {
       if (released) return;
@@ -162,9 +174,9 @@ function allocateBoardDispatchLease(
 
   const workerId = orgWorkerIdForName(employee.name);
   const roleId = orgWorkerRoleForName(employee.name);
-  const hasWorker = runtime.listWorkers().some((worker) => worker.id === workerId);
+  const worker = runtime.listWorkers().find((candidate) => candidate.id === workerId);
   const hasRole = runtime.config.roles.some((role) => role.id === roleId);
-  if (!hasWorker || !hasRole) return { reason: "orchestration-worker-unmapped" };
+  if (!worker || !hasRole) return { reason: "orchestration-worker-unmapped" };
 
   const request: AllocationRequest = {
     taskId: sessionKey,
@@ -195,7 +207,7 @@ function allocateBoardDispatchLease(
     }
     return { reason: "orchestration-worker-unmapped" };
   }
-  return createLeaseGuard(runtime, lease);
+  return createLeaseGuard(runtime, lease, worker);
 }
 
 export function dispatchTicket(
@@ -314,18 +326,107 @@ export function dispatchTicket(
       routeToManager: opts.routeToManager,
     });
 
+    let completion: CapturedCompletion | undefined;
+    let runError: unknown;
+    const telemetryContext = leaseGuard
+      ? contextWithCompletionCapture(deps.context, runningSession.id, (payload) => {
+        completion = payload;
+      })
+      : deps.context;
     const run = dispatchWebSessionRun(
       runningSession,
       prompt,
       engine,
       deps.context.getConfig(),
-      deps.context,
+      telemetryContext,
     );
-    if (leaseGuard) void run.finally(() => leaseGuard.release());
+    if (leaseGuard) {
+      void run.then(
+        () => {
+          appendBoardDispatchTelemetrySafely(buildBoardDispatchTelemetry(leaseGuard, runningSession.id, employee.model, opts.source, completion, null));
+          leaseGuard.release();
+        },
+        (err) => {
+          runError = err;
+          appendBoardDispatchTelemetrySafely(buildBoardDispatchTelemetry(leaseGuard, runningSession.id, employee.model, opts.source, completion, runError));
+          leaseGuard.release();
+        },
+      );
+    }
   } catch (err) {
     leaseGuard?.release();
     throw err;
   }
 
   return { ok: true, sessionId: session.id };
+}
+
+function contextWithCompletionCapture(
+  context: ApiContext,
+  sessionId: string,
+  capture: (payload: CapturedCompletion) => void,
+): ApiContext {
+  return {
+    ...context,
+    emit: (event: string, payload: unknown) => {
+      if (event === "session:completed" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+        const record = payload as Record<string, unknown>;
+        if (record.sessionId === sessionId) {
+          capture({
+            cost: typeof record.cost === "number" ? record.cost : undefined,
+            durationMs: typeof record.durationMs === "number" ? record.durationMs : undefined,
+            error: record.error,
+          });
+        }
+      }
+      context.emit(event, payload);
+    },
+  };
+}
+
+function buildBoardDispatchTelemetry(
+  guard: BoardDispatchLeaseGuard,
+  sessionId: string,
+  model: string | undefined,
+  source: string,
+  completion: CapturedCompletion | undefined,
+  runError: unknown,
+): OrchestrationRunTelemetryRecord {
+  const session = getSession(sessionId);
+  return {
+    task_id: guard.lease.taskId,
+    coordinator_id: guard.lease.coordinatorId,
+    session_id: sessionId,
+    lease_id: guard.lease.leaseId,
+    worker_id: guard.worker.id,
+    provider: guard.worker.provider,
+    family: guard.worker.family,
+    model: session?.model ?? model ?? null,
+    role: guard.lease.role,
+    mode: "single_worker",
+    source,
+    cost: finiteNumber(completion?.cost),
+    latency_ms: finiteNumber(completion?.durationMs),
+    tokens: session?.lastContextTokens ?? null,
+    files_changed: null,
+    tests_added: null,
+    tests_passed: null,
+    review_blockers: null,
+    human_edits: null,
+    regressions: null,
+    disposition: session?.status === "error" || session?.lastError || completion?.error || runError ? "failed" : "completed",
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function appendBoardDispatchTelemetrySafely(record: OrchestrationRunTelemetryRecord): void {
+  try {
+    appendOrchestrationTelemetry(record);
+  } catch (err) {
+    logger.warn(`[ticket-dispatch] orchestration telemetry append failed for ${record.task_id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

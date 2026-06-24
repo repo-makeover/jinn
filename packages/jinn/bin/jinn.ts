@@ -235,6 +235,15 @@ program
       const { runSchedulerSimulate } = await import("../src/cli/orchestration.js");
       await runSchedulerSimulate(scenarioFile, opts);
     });
+
+  schedulerCmd
+    .command("stats")
+    .option("--path <file>", "Telemetry JSONL path (defaults to this instance's logs/orchestration-telemetry.jsonl)")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { path?: string; json?: boolean }) => {
+      const { runSchedulerStats } = await import("../src/cli/orchestration.js");
+      await runSchedulerStats(opts);
+    });
 }
 
 {

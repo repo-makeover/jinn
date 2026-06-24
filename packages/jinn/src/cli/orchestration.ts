@@ -13,6 +13,7 @@ import {
   resolveTaskBaseCwd,
   resolveWorktreeOptions,
 } from "../orchestration/worktree.js";
+import { readOrchestrationTelemetry, summarizeOrchestrationTelemetry, type OrchestrationTelemetrySummary } from "../orchestration/telemetry.js";
 import { GATEWAY_INFO_FILE, ORCH_DB } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
 import { readGatewayInfo } from "../gateway/gateway-info.js";
@@ -46,6 +47,11 @@ export interface OrchestrationContinuationRetryOptions {
 export interface DualLaneSelectOptions {
   taskId: string;
   winner: string;
+  json?: boolean;
+}
+
+export interface SchedulerStatsOptions {
+  path?: string;
   json?: boolean;
 }
 
@@ -246,6 +252,34 @@ function formatDualLaneSelectionResult(result: any): string {
   ].join("\n");
 }
 
+function formatTelemetrySummary(summary: OrchestrationTelemetrySummary): string {
+  if (summary.totals.count === 0) return `No orchestration telemetry records.${summary.skippedLines ? ` Skipped corrupt lines: ${summary.skippedLines}.` : ""}`;
+  const lines = [
+    `Telemetry records: ${summary.totals.count}`,
+    `Skipped corrupt lines: ${summary.skippedLines}`,
+    `Total cost: $${summary.totals.totalCost.toFixed(4)}`,
+    `Average latency: ${summary.totals.avgLatencyMs ?? 0}ms`,
+    `Total tokens: ${summary.totals.totalTokens}`,
+    "By provider:",
+  ];
+  for (const [provider, bucket] of Object.entries(summary.byProvider).sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`- ${provider}: ${bucket.count} run(s), score ${bucket.score}, cost $${bucket.totalCost.toFixed(4)}`);
+  }
+  lines.push("By family:");
+  for (const [family, bucket] of Object.entries(summary.byFamily).sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`- ${family}: ${bucket.count} run(s), score ${bucket.score}`);
+  }
+  lines.push("By role:");
+  for (const [role, bucket] of Object.entries(summary.byRole).sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`- ${role}: ${bucket.count} run(s), score ${bucket.score}`);
+  }
+  lines.push("By worker:");
+  for (const [worker, bucket] of Object.entries(summary.byWorker).sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`- ${worker}: ${bucket.count} run(s), score ${bucket.score}`);
+  }
+  return lines.join("\n");
+}
+
 function formatReviewPolicy(reviewPolicy: any): string[] {
   const explanations = Array.isArray(reviewPolicy?.explanations) ? reviewPolicy.explanations : [];
   if (explanations.length === 0) return [];
@@ -341,6 +375,12 @@ export async function runSchedulerSimulate(scenarioFile: string, opts: ConfigDir
     queue: scheduler.listQueue(),
   };
   print(opts.json ? result : JSON.stringify(result, null, 2), opts.json);
+}
+
+export async function runSchedulerStats(opts: SchedulerStatsOptions): Promise<void> {
+  const read = readOrchestrationTelemetry(opts.path);
+  const summary = summarizeOrchestrationTelemetry(read);
+  print(opts.json ? summary : formatTelemetrySummary(summary), opts.json);
 }
 
 export async function runOrchestrationRun(opts: OrchestrationRunOptions): Promise<void> {

@@ -668,6 +668,7 @@ export interface OrchestrationRuntimeConfig {
   worktreeRoot?: string;
   maxWorktrees?: number;
   sameFamilyReviewerFallback?: boolean;
+  empiricalRouting?: boolean;
 }
 
 export interface JinnConfig {

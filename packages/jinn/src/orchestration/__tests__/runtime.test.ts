@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrchestrationRuntime } from "../runtime.js";
 import type { LiveRunContinuationRecord } from "../live-run.js";
 import type { OrchestrationConfig } from "../types.js";
+import type { JinnConfig } from "../../shared/types.js";
 
 let tmpDir: string;
 let dbPath: string;
@@ -132,6 +133,60 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     expect(resumed[0]).toMatchObject({ taskId: "task-3" });
     runtime.close();
   });
+
+  it("loads empirical routing scores while skipping corrupt telemetry lines", async () => {
+    const prevHome = process.env.JINN_HOME;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orch-runtime-telemetry-"));
+    process.env.JINN_HOME = home;
+    vi.resetModules();
+    try {
+      fs.mkdirSync(path.join(home, "logs"), { recursive: true });
+      fs.writeFileSync(path.join(home, "logs", "orchestration-telemetry.jsonl"), [
+        "{corrupt",
+        JSON.stringify({
+          task_id: "historical-task",
+          coordinator_id: "historical-coord",
+          session_id: "historical-session",
+          lease_id: "historical-lease",
+          worker_id: "betaImplementer",
+          provider: "mock",
+          family: "local",
+          model: "mock",
+          role: "seniorImplementer",
+          mode: "single_worker",
+          source: "orchestration",
+          cost: null,
+          latency_ms: null,
+          tokens: null,
+          files_changed: null,
+          tests_added: null,
+          tests_passed: null,
+          review_blockers: null,
+          human_edits: null,
+          regressions: null,
+          disposition: "selected",
+          timestamp: "2026-06-24T10:00:00.000Z",
+        }),
+      ].join("\n"));
+      const runtimeModule = await import("../runtime.js");
+      const runtime = runtimeModule.createOrchestrationRuntimeFromConfig(jinnConfig(path.join(home, "orchestration.db")), {
+        config: twoWorkerConfig(),
+        startReaper: false,
+      });
+      expect(runtime).toBeDefined();
+      if (!runtime) return;
+      const result = runtime.requestAllocation(request("empirical-task", "coord"));
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.allocation.leases[0].workerId).toBe("betaImplementer");
+      runtime.close();
+    } finally {
+      if (prevHome === undefined) delete process.env.JINN_HOME;
+      else process.env.JINN_HOME = prevHome;
+      fs.rmSync(home, { recursive: true, force: true });
+      vi.resetModules();
+    }
+  });
 });
 
 function continuation(
@@ -193,6 +248,31 @@ function config(): OrchestrationConfig {
     coordinatorTemplates: [],
     quotas: { providers: {}, families: {} },
   };
+}
+
+function twoWorkerConfig(): OrchestrationConfig {
+  const cfg = config();
+  return {
+    ...cfg,
+    workers: [
+      { ...cfg.workers[0], id: "alphaImplementer" },
+      { ...cfg.workers[0], id: "betaImplementer" },
+    ],
+  };
+}
+
+function jinnConfig(dbPath: string): JinnConfig {
+  return {
+    gateway: { port: 7777, host: "127.0.0.1" },
+    engines: {
+      default: "codex",
+      claude: { bin: "claude", model: "opus" },
+      codex: { bin: "codex", model: "gpt" },
+    },
+    connectors: {},
+    logging: { file: false, stdout: false, level: "error" },
+    orchestration: { enabled: true, empiricalRouting: true, dbPath },
+  } as JinnConfig;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {

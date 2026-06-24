@@ -52,6 +52,7 @@ describe("ticket dispatch orchestration bridge", () => {
     vi.doMock("../api/session-dispatch.js", () => ({ dispatchWebSessionRun }));
     const { dispatchTicket } = await import("../ticket-dispatch.js");
     const registry = await import("../../sessions/registry.js");
+    const telemetry = await import("../../orchestration/telemetry.js");
     const { context, runtime } = await makeContext();
 
     const result = dispatchTicket(
@@ -81,6 +82,18 @@ describe("ticket dispatch orchestration bridge", () => {
     await settle();
 
     expect(runtime.listLeases()).toEqual([expect.objectContaining({ state: "released" })]);
+    const records = telemetry.readOrchestrationTelemetry(telemetry.ORCHESTRATION_TELEMETRY_LOG).records;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      task_id: "manual:software-delivery:ticket-1",
+      coordinator_id: "ticket-dispatch:manual",
+      session_id: result.sessionId,
+      provider: "mock",
+      family: "local",
+      mode: "single_worker",
+      source: "manual",
+      disposition: "completed",
+    });
   });
 
   it("releases the lease when board write fails after allocation and remains retryable", async () => {

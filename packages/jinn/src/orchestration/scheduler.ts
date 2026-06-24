@@ -39,6 +39,7 @@ export interface SchedulerOptions {
   now?: () => Date;
   snapshot?: SchedulerSnapshot;
   reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
+  workerScores?: Record<string, number>;
 }
 
 export interface AllocationRequestOptions {
@@ -65,6 +66,7 @@ export class MatrixScheduler {
   private readonly queue: QueueItem[] = [];
   private readonly telemetry: TelemetryEvent[] = [];
   private readonly reviewPolicy: CrossFamilyReviewPolicy;
+  private readonly workerScores: Record<string, number>;
   private nextSeq = 1;
 
   constructor(private readonly config: OrchestrationConfig, opts: SchedulerOptions = {}) {
@@ -74,6 +76,7 @@ export class MatrixScheduler {
     this.reviewPolicy = opts.reviewPolicy
       ? resolveCrossFamilyReviewPolicy(opts.reviewPolicy)
       : DEFAULT_CROSS_FAMILY_REVIEW_POLICY;
+    this.workerScores = opts.workerScores ?? {};
     if (opts.snapshot) this.hydrate(opts.snapshot);
   }
 
@@ -369,7 +372,7 @@ export class MatrixScheduler {
   ): Worker[] {
     return this.workers
       .filter((worker) => this.workerQualifies(worker, role, selected, state, familyMode))
-      .sort((a, b) => compareWorkers(a, b, role));
+      .sort((a, b) => compareWorkers(a, b, role, this.workerScores));
   }
 
   private workerQualifies(
@@ -551,13 +554,15 @@ function increment(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
 }
 
-function compareWorkers(a: Worker, b: Worker, role: RoleDefinition): number {
+function compareWorkers(a: Worker, b: Worker, role: RoleDefinition, workerScores: Record<string, number> = {}): number {
   const tier = preferenceRank(a.tier, role.preferredTiers) - preferenceRank(b.tier, role.preferredTiers);
   if (tier !== 0) return tier;
   const cost = preferenceRank(a.costClass, role.preferredCostClasses) - preferenceRank(b.costClass, role.preferredCostClasses);
   if (cost !== 0) return cost;
   const baseCost = (COST_RANK[a.costClass] ?? 99) - (COST_RANK[b.costClass] ?? 99);
   if (baseCost !== 0) return baseCost;
+  const score = (workerScores[b.id] ?? 0) - (workerScores[a.id] ?? 0);
+  if (score !== 0) return score;
   return a.id.localeCompare(b.id);
 }
 

@@ -15,11 +15,17 @@ import {
   cleanupWorktree,
   createImplementationWorktree,
   createReviewBundle,
+  diffWorktree,
   resolveTaskBaseCwd,
   type ReviewBundleHandle,
   type WorktreeHandle,
   type WorktreeOptions,
 } from "./worktree.js";
+import {
+  appendOrchestrationTelemetry,
+  telemetryCountsFromDiff,
+  type OrchestrationRunTelemetryRecord,
+} from "./telemetry.js";
 
 export const liveRunModeSchema = z.enum(LIVE_RUN_MODES);
 
@@ -66,6 +72,9 @@ export interface OrchestrationRunSession {
   sessionId: string;
   leaseId: string;
   workerId: string;
+  provider: string;
+  family: string;
+  model: string | null;
   role: string;
   status: string;
   error: string | null;
@@ -83,6 +92,12 @@ export type ImplementationWorkspace =
 export type OrchestrationLeaseWorkspace =
   | ImplementationWorkspace
   | { mode: "review_bundle"; cwd: string; bundle: ReviewBundleHandle; worktreePath?: string };
+
+interface CapturedCompletion {
+  cost?: number;
+  durationMs?: number;
+  error?: unknown;
+}
 
 export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): Promise<OrchestrationRunTaskResult> {
   if (opts.context.getConfig().orchestration?.enabled !== true) {
@@ -271,14 +286,37 @@ export async function runOrchestrationLeaseTurn(opts: {
   insertMessage(session.id, "user", opts.prompt);
   updateSession(session.id, { status: "running", lastActivity: new Date().toISOString(), lastError: null });
 
+  let completion: CapturedCompletion | undefined;
+  const telemetryContext = contextWithCompletionCapture(opts.context, session.id, (payload) => {
+    completion = payload;
+  });
+  let dispatchError: unknown;
+
   try {
-    await dispatchWebSessionRun(session, opts.prompt, engine, opts.context.getConfig(), opts.context);
+    await dispatchWebSessionRun(session, opts.prompt, engine, opts.context.getConfig(), telemetryContext);
+  } catch (err) {
+    dispatchError = err;
+    throw err;
   } finally {
     try {
       runtime.releaseLease(opts.lease.leaseId, opts.lease.coordinatorId);
     } catch (err) {
       logger.warn(`Orchestration release failed for lease ${opts.lease.leaseId}: ${err instanceof Error ? err.message : err}`);
     }
+    const completed = getSession(session.id);
+    appendRunTelemetrySafely(buildRunTelemetry({
+      lease: opts.lease,
+      worker: opts.worker,
+      workspace: opts.workspace,
+      sessionId: session.id,
+      model: completed?.model ?? opts.model ?? null,
+      mode: opts.mode,
+      source: "orchestration",
+      status: completed?.status ?? "interrupted",
+      error: completed?.lastError ?? completion?.error ?? dispatchError ?? null,
+      completion,
+      tokens: completed?.lastContextTokens ?? null,
+    }));
   }
 
   const completed = getSession(session.id);
@@ -286,6 +324,9 @@ export async function runOrchestrationLeaseTurn(opts: {
     sessionId: session.id,
     leaseId: opts.lease.leaseId,
     workerId: opts.worker.id,
+    provider: opts.worker.provider,
+    family: opts.worker.family,
+    model: completed?.model ?? opts.model ?? null,
     role: opts.lease.role,
     status: completed?.status ?? "interrupted",
     error: completed?.lastError ?? null,
@@ -297,6 +338,91 @@ export async function runOrchestrationLeaseTurn(opts: {
     reviewBundlePath: "bundle" in opts.workspace ? opts.workspace.bundle.path : undefined,
     reviewPolicy: opts.reviewPolicy,
   };
+}
+
+function contextWithCompletionCapture(
+  context: ApiContext,
+  sessionId: string,
+  capture: (payload: CapturedCompletion) => void,
+): ApiContext {
+  return {
+    ...context,
+    emit: (event: string, payload: unknown) => {
+      if (event === "session:completed" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+        const record = payload as Record<string, unknown>;
+        if (record.sessionId === sessionId) {
+          capture({
+            cost: typeof record.cost === "number" ? record.cost : undefined,
+            durationMs: typeof record.durationMs === "number" ? record.durationMs : undefined,
+            error: record.error,
+          });
+        }
+      }
+      context.emit(event, payload);
+    },
+  };
+}
+
+function buildRunTelemetry(opts: {
+  lease: Lease;
+  worker: Worker;
+  workspace: OrchestrationLeaseWorkspace;
+  sessionId: string;
+  model: string | null;
+  mode: LiveRunMode;
+  source: string;
+  status: string;
+  error: unknown;
+  completion?: CapturedCompletion;
+  tokens: number | null;
+}): OrchestrationRunTelemetryRecord {
+  const counts = workspaceTelemetryCounts(opts.workspace);
+  return {
+    task_id: opts.lease.taskId,
+    coordinator_id: opts.lease.coordinatorId,
+    session_id: opts.sessionId,
+    lease_id: opts.lease.leaseId,
+    worker_id: opts.worker.id,
+    provider: opts.worker.provider,
+    family: opts.worker.family,
+    model: opts.model,
+    role: opts.lease.role,
+    mode: opts.mode,
+    source: opts.source,
+    cost: finiteNumber(opts.completion?.cost),
+    latency_ms: finiteNumber(opts.completion?.durationMs),
+    tokens: opts.tokens,
+    files_changed: counts?.filesChanged ?? null,
+    tests_added: counts?.testsAdded ?? null,
+    tests_passed: null,
+    review_blockers: null,
+    human_edits: null,
+    regressions: null,
+    disposition: opts.status === "error" || opts.error ? "failed" : "completed",
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function workspaceTelemetryCounts(workspace: OrchestrationLeaseWorkspace): { filesChanged: number; testsAdded: number } | null {
+  if (workspace.mode !== "implementation_worktree") return null;
+  try {
+    return telemetryCountsFromDiff(diffWorktree(workspace.handle));
+  } catch (err) {
+    logger.warn(`Orchestration telemetry diff failed for task ${workspace.handle.taskId}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+function appendRunTelemetrySafely(record: OrchestrationRunTelemetryRecord): void {
+  try {
+    appendOrchestrationTelemetry(record);
+  } catch (err) {
+    logger.warn(`Orchestration telemetry append failed for ${record.task_id}/${record.role}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function prepareLeaseWorkspace(opts: {

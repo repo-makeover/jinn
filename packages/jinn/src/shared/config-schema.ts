@@ -609,6 +609,7 @@ function validateOrchestration(problems: string[], value: unknown): void {
     "worktreeRoot",
     "maxWorktrees",
     "sameFamilyReviewerFallback",
+    "empiricalRouting",
   ], "orchestration");
   if (value.enabled !== undefined) validateBoolean(problems, "orchestration.enabled", value.enabled);
   if (value.configDir !== undefined) validateString(problems, "orchestration.configDir", value.configDir);
@@ -620,6 +621,7 @@ function validateOrchestration(problems: string[], value: unknown): void {
   if (value.sameFamilyReviewerFallback !== undefined) {
     validateBoolean(problems, "orchestration.sameFamilyReviewerFallback", value.sameFamilyReviewerFallback);
   }
+  if (value.empiricalRouting !== undefined) validateBoolean(problems, "orchestration.empiricalRouting", value.empiricalRouting);
 }
 
 function validateCron(problems: string[], value: unknown): void {

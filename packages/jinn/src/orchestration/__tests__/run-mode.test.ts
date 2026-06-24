@@ -90,6 +90,45 @@ describe("runOrchestrationTask", () => {
     runtime.close();
   });
 
+  it("emits one durable telemetry record for a successful single-worker run", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime, readOrchestrationTelemetry, ORCHESTRATION_TELEMETRY_LOG } = await loadModules();
+    const engine = new RecordingEngine();
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath: ":memory:", startReaper: false });
+    const ctx = makeContext(runtime, engine);
+
+    const result = await runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-telemetry",
+        coordinatorId: "coord-telemetry",
+        requiredRoles: ["seniorImplementer"],
+        mode: "single_worker",
+        prompt: "Implement telemetry-covered task",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    const read = readOrchestrationTelemetry(ORCHESTRATION_TELEMETRY_LOG);
+    expect(read.skippedLines).toBe(0);
+    expect(read.records).toHaveLength(1);
+    expect(read.records[0]).toMatchObject({
+      task_id: "task-telemetry",
+      coordinator_id: "coord-telemetry",
+      worker_id: "mockImplementer",
+      provider: "mock",
+      family: "local",
+      role: "seniorImplementer",
+      mode: "single_worker",
+      source: "orchestration",
+      cost: 0.001,
+      latency_ms: 123,
+      tokens: 456,
+      disposition: "completed",
+    });
+    expect(fs.readFileSync(ORCHESTRATION_TELEMETRY_LOG, "utf-8")).not.toContain("Implement telemetry-covered task");
+    runtime.close();
+  });
+
   it("blocks live review runs when only same-family reviewers qualify and fallback is disabled", async () => {
     const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
     const engine = new RecordingEngine();
@@ -186,8 +225,8 @@ describe("runOrchestrationTask", () => {
     runtime.close();
   });
 
-  it("routes reviewer to a diff-only bundle and cleans up the implementation worktree", async () => {
-    const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
+  it("routes reviewer to a diff-only bundle, records diff counts, and cleans up the implementation worktree", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime, readOrchestrationTelemetry, ORCHESTRATION_TELEMETRY_LOG } = await loadModules();
     const repo = path.join(tmpHome, "repo");
     initGitRepo(repo);
     const engine = new RecordingEngine();
@@ -225,6 +264,11 @@ describe("runOrchestrationTask", () => {
     expect(engine.reviewerSawImplementationFile).toBe(false);
     expect(fs.existsSync(result.sessions[0].cwd)).toBe(false);
     expect(fs.existsSync(result.sessions[1].cwd)).toBe(false);
+    const records = readOrchestrationTelemetry(ORCHESTRATION_TELEMETRY_LOG).records;
+    const implementerTelemetry = records.find((record) => record.role === "seniorImplementer");
+    const reviewerTelemetry = records.find((record) => record.role === "independentReviewer");
+    expect(implementerTelemetry).toMatchObject({ files_changed: 1, tests_added: 0 });
+    expect(reviewerTelemetry).toMatchObject({ files_changed: null, tests_added: null });
     expect(runtime.listLeases().map((lease) => lease.state)).toEqual(["released", "released"]);
     runtime.close();
   });
@@ -284,10 +328,11 @@ describe("runOrchestrationTask", () => {
 });
 
 async function loadModules() {
-  const [runMode, runtime, registry] = await Promise.all([
+  const [runMode, runtime, registry, telemetry] = await Promise.all([
     import("../run-mode.js"),
     import("../runtime.js"),
     import("../../sessions/registry.js"),
+    import("../telemetry.js"),
   ]);
   registry.initDb();
   return {
@@ -295,6 +340,8 @@ async function loadModules() {
     runAllocatedOrchestrationTask: runMode.runAllocatedOrchestrationTask,
     OrchestrationRuntime: runtime.OrchestrationRuntime,
     getSession: registry.getSession,
+    readOrchestrationTelemetry: telemetry.readOrchestrationTelemetry,
+    ORCHESTRATION_TELEMETRY_LOG: telemetry.ORCHESTRATION_TELEMETRY_LOG,
   };
 }
 
@@ -341,7 +388,7 @@ class RecordingEngine implements Engine {
       fs.writeFileSync(path.join(opts.cwd, "implemented.txt"), "implemented\n");
     }
     opts.onStream?.({ type: "text", content: "mock complete" });
-    return { sessionId: opts.sessionId ?? "mock-session", result: "mock complete" };
+    return { sessionId: opts.sessionId ?? "mock-session", result: "mock complete", cost: 0.001, durationMs: 123, contextTokens: 456 };
   });
 }
 

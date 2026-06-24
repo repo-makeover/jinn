@@ -8,6 +8,7 @@ import { listProtectedDualLaneTaskIds } from "./dual-lane-state.js";
 import type { LiveRunContinuationRecord } from "./live-run.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
 import { OrchestrationStore } from "./store.js";
+import { computeWorkerScores, readOrchestrationTelemetry } from "./telemetry.js";
 import {
   DEFAULT_LEASE_DURATION_MS,
   type Allocation,
@@ -33,6 +34,7 @@ export interface OrchestrationRuntimeOptions {
   worktreeRoot?: string;
   maxWorktrees?: number;
   reviewPolicy?: Partial<CrossFamilyReviewPolicy>;
+  workerScores?: Record<string, number>;
 }
 
 export interface ResumeQueuedRun {
@@ -78,6 +80,7 @@ export class OrchestrationRuntime {
       store: this.store,
       now: opts.now,
       reviewPolicy: opts.reviewPolicy,
+      workerScores: opts.workerScores,
     });
     this.reaperIntervalMs = Math.max(1, Math.floor(opts.reaperIntervalMs ?? DEFAULT_REAPER_INTERVAL_MS));
     this.worktrees = {
@@ -325,6 +328,7 @@ export function createOrchestrationRuntimeFromConfig(
     worktreeRoot: config.orchestration.worktreeRoot,
     maxWorktrees: config.orchestration.maxWorktrees,
     reviewPolicy: resolveCrossFamilyReviewPolicy(config.orchestration),
+    workerScores: opts.workerScores ?? resolveEmpiricalWorkerScores(config),
     ...opts,
   });
 }
@@ -358,4 +362,18 @@ function buildContinuationRequest(record: LiveRunContinuationRecord, config: Orc
     mode: record.mode as CoordinatorMode,
   }, config);
   return brief.request;
+}
+
+function resolveEmpiricalWorkerScores(config: JinnConfig): Record<string, number> | undefined {
+  if (config.orchestration?.empiricalRouting !== true) return undefined;
+  try {
+    const telemetry = readOrchestrationTelemetry();
+    if (telemetry.skippedLines > 0) {
+      logger.warn(`Orchestration empirical routing skipped ${telemetry.skippedLines} malformed telemetry line(s)`);
+    }
+    return computeWorkerScores(telemetry.records);
+  } catch (err) {
+    logger.warn(`Orchestration empirical routing disabled for this boot: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
 }

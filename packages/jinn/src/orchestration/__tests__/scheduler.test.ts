@@ -117,6 +117,31 @@ describe("MatrixScheduler", () => {
     expect(s.validateLeaseForWorker("codexSenior", result.allocation.leases[0].leaseId, "task-1", "coord-1")).toEqual({ ok: true });
   });
 
+  it("uses empirical worker scores only as a deterministic tie-break", () => {
+    const cfg = config([
+      worker({ id: "alphaSenior", provider: "openai", family: "openai", costClass: "low" }),
+      worker({ id: "betaSenior", provider: "openai", family: "openai", costClass: "low" }),
+    ]);
+
+    const defaultResult = scheduler(cfg).requestAllocation(request());
+    expect(defaultResult.ok).toBe(true);
+    if (!defaultResult.ok) return;
+    expect(defaultResult.allocation.leases[0].workerId).toBe("alphaSenior");
+
+    const scoredResult = scheduler(cfg, { workerScores: { betaSenior: 10 } }).requestAllocation(request());
+    expect(scoredResult.ok).toBe(true);
+    if (!scoredResult.ok) return;
+    expect(scoredResult.allocation.leases[0].workerId).toBe("betaSenior");
+
+    const costPreferred = scheduler(config([
+      worker({ id: "cheapSenior", provider: "openai", family: "openai", costClass: "near_zero" }),
+      worker({ id: "expensiveSenior", provider: "openai", family: "openai", costClass: "high" }),
+    ]), { workerScores: { expensiveSenior: 100 } }).requestAllocation(request());
+    expect(costPreferred.ok).toBe(true);
+    if (!costPreferred.ok) return;
+    expect(costPreferred.allocation.leases[0].workerId).toBe("cheapSenior");
+  });
+
   it("queues the second task when one max-concurrency worker is busy", () => {
     const s = scheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]));
     expect(s.requestAllocation(request({ taskId: "task-1" })).ok).toBe(true);

@@ -21,6 +21,12 @@ import {
 } from "./dual-lane-state.js";
 import type { Allocation, AllocationRequest, QueueItem, ReviewPolicySummary, Worker } from "./types.js";
 import {
+  appendOrchestrationTelemetry,
+  telemetryCountsFromDiff,
+  type OrchestrationRunTelemetryRecord,
+  type TelemetryDiffCounts,
+} from "./telemetry.js";
+import {
   cleanupWorktree,
   createImplementationWorktree,
   diffWorktree,
@@ -250,6 +256,8 @@ export function selectDualLaneWinner(opts: {
     return { ok: false, reason: "invalid_lane", message: `dual-lane run ${opts.taskId} does not contain winner ${winnerLane}` };
   }
 
+  const winnerCounts = laneTelemetryCounts(winner);
+  const loserCounts = laneTelemetryCounts(loser);
   const archive = archiveLane(manifest.taskId, loser);
   cleanupWorktree(loser.worktree);
   loser.archive = archive;
@@ -260,6 +268,7 @@ export function selectDualLaneWinner(opts: {
     archivedLane: loser.id,
     lanes: manifest.lanes.map((lane) => lane.id === loser.id ? loser : lane),
   });
+  appendDualLaneSelectionTelemetrySafely(updated, winner, loser, winnerCounts, loserCounts);
 
   return {
     ok: true,
@@ -269,6 +278,69 @@ export function selectDualLaneWinner(opts: {
     archivedLane: loser.id,
     winnerWorktreePath: winner.worktree.path,
     archive,
+  };
+}
+
+function laneTelemetryCounts(lane: DualLaneManifestLane): TelemetryDiffCounts | null {
+  try {
+    return telemetryCountsFromDiff(diffWorktree(lane.worktree));
+  } catch (err) {
+    logger.warn(`Dual-lane telemetry diff failed for ${lane.id} lane ${lane.workerId}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+function appendDualLaneSelectionTelemetrySafely(
+  manifest: ReturnType<typeof updateDualLaneManifest>,
+  winner: DualLaneManifestLane,
+  loser: DualLaneManifestLane,
+  winnerCounts: TelemetryDiffCounts | null,
+  loserCounts: TelemetryDiffCounts | null,
+): void {
+  const timestamp = manifest.updatedAt;
+  const records: OrchestrationRunTelemetryRecord[] = [
+    selectionTelemetryRecord(manifest, winner, "selected", winnerCounts, timestamp),
+    selectionTelemetryRecord(manifest, loser, "discarded", loserCounts, timestamp),
+  ];
+  for (const record of records) {
+    try {
+      appendOrchestrationTelemetry(record);
+    } catch (err) {
+      logger.warn(`Dual-lane telemetry append failed for ${record.task_id}/${record.worker_id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
+function selectionTelemetryRecord(
+  manifest: ReturnType<typeof updateDualLaneManifest>,
+  lane: DualLaneManifestLane,
+  disposition: "selected" | "discarded",
+  counts: TelemetryDiffCounts | null,
+  timestamp: string,
+): OrchestrationRunTelemetryRecord {
+  return {
+    task_id: manifest.taskId,
+    coordinator_id: manifest.coordinatorId,
+    session_id: lane.session.sessionId,
+    lease_id: lane.leaseId,
+    worker_id: lane.workerId,
+    provider: lane.session.provider,
+    family: lane.family,
+    model: lane.session.model,
+    role: lane.role,
+    mode: "dual_lane",
+    source: "orchestration",
+    cost: null,
+    latency_ms: null,
+    tokens: null,
+    files_changed: counts?.filesChanged ?? null,
+    tests_added: counts?.testsAdded ?? null,
+    tests_passed: null,
+    review_blockers: null,
+    human_edits: null,
+    regressions: null,
+    disposition,
+    timestamp,
   };
 }
 

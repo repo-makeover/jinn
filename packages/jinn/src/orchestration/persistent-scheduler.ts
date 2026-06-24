@@ -23,6 +23,7 @@ export class PersistentMatrixScheduler {
     this.ownsStore = !opts.store;
     this.schedulerOptions = {
       reviewPolicy: opts.reviewPolicy,
+      workerScores: opts.workerScores,
     };
     this.scheduler = this.hydrateScheduler();
     if (opts.expireOnHydrate !== false) {

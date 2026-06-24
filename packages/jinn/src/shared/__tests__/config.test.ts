@@ -195,14 +195,16 @@ describe("validateConfigShape", () => {
       orchestration: {
         enabled: true,
         sameFamilyReviewerFallback: true,
+        empiricalRouting: false,
       },
     })).toEqual([]);
 
     const problems = validateConfigShape({
       engines: { claude: { bin: "claude", model: "opus" } },
-      orchestration: { sameFamilyReviewerFallback: "true" },
+      orchestration: { sameFamilyReviewerFallback: "true", empiricalRouting: "yes" },
     });
     expect(problems.some((p) => p.includes("orchestration.sameFamilyReviewerFallback"))).toBe(true);
+    expect(problems.some((p) => p.includes("orchestration.empiricalRouting"))).toBe(true);
   });
 
   it("validates boardWorker schedule and timezone fields", () => {

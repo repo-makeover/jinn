@@ -1,6 +1,6 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 and M1–M9 are **complete** (Codex, 2026-06-24).
+> **Status:** Phase 1 and M1–M10 are **complete** (Codex, 2026-06-24).
 > This is the **full-capability roadmap** from inert scaffold to real,
 > daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
@@ -488,8 +488,8 @@ the source brief.
   archive/discard, blocked dual-lane continuation persistence, and runtime
   reaper protection for pending/selected dual-lane worktrees.
 - **Remaining boundary:** M8 does **not** apply the winning patch to the base
-  repo, run an AI comparison reviewer turn, or emit durable telemetry JSONL;
-  those remain later/operator workflow concerns.
+  repo or run an AI comparison reviewer turn; those remain later/operator
+  workflow concerns. Durable selection telemetry is now owned by M10.
 - **Team:** implementer; **review:** department integration review recommended.
 
 ### M9 — Org→Worker bridge + board-worker reconciliation (brief Phase 3) (complete, 2026-06-24)
@@ -513,23 +513,33 @@ the source brief.
   and release ownership around manual dispatch, board-write failure cleanup/idempotency,
   exact-worker busy skip leaving the ticket `todo`, fail-visible no-runtime behavior, API
   `409` mapping, and unchanged legacy direct path when orchestration is disabled.
-- **Remaining boundary:** M9 does not add a new config key, CLI command, dashboard
-  control, durable telemetry JSONL, or automatic patch integration.
+- **Remaining boundary:** M9 does not add a new dashboard control or automatic
+  patch integration. Durable board-dispatch telemetry is now owned by M10.
 - **Team:** implementer; **review:** department — collision + regression focus.
 
-### M10 — Durable telemetry & empirical routing (brief Phase 9)
+### M10 — Durable telemetry & empirical routing (brief Phase 9) (complete, 2026-06-24)
 
 - **Goal:** every orchestration run emits a telemetry record; routing can prefer
   historically successful workers; failures degrade a capability score.
-- **Deliverables:** append-only `~/.jinn/logs/orchestration-telemetry.jsonl`
-  (git-ignored; aligns with `logs/` convention) with the brief's fields (task_id,
-  worker_id, provider, model, role, cost, latency, tokens, files_changed, tests_added,
-  tests_passed, review_blockers, human_edits, regressions, disposition); a summarizer
-  (`jinn scheduler stats`); optional allocation entries to the hash-chained
-  `audit.jsonl`.
-- **Exit gate (brief AC):** every run emits telemetry; summarizable by
-  provider/family/role; router can prefer historically successful workers behind a flag;
-  failures degrade score; no secrets in telemetry.
+- **Delivered:** `orchestration/telemetry.ts` appends
+  `~/.jinn/logs/orchestration-telemetry.jsonl` with the brief's fields plus nullable
+  source/session/lease/context fields, validates/sanitizes records, skips corrupt JSONL
+  lines with a visible count, summarizes by provider/family/role/worker/disposition,
+  and computes deterministic worker scores. `run-mode.ts`, `dual-lane.ts`, and
+  `ticket-dispatch.ts` emit records for scheduler-owned live turns, dual-lane
+  selected/discarded outcomes, and M9 manual/board dispatch. `jinn scheduler stats
+  [--path <file>] [--json]` exposes summaries. `orchestration.empiricalRouting: true`
+  reads telemetry at runtime boot and uses scores only as a tie-break after hard
+  constraints and explicit tier/cost preferences.
+- **Exit gate:** passed for append-only private JSONL, corrupt-line-tolerant reads,
+  provider/family/role/worker summaries, success/failure scoring, no prompt/raw-diff/path
+  leakage, single-worker/review/worktree/dual-lane/board emission, empirical routing
+  disabled-by-default behavior, score tie-breaks without overriding hard constraints or
+  cost preference, corrupt telemetry startup tolerance, stats CLI JSON/text output, and
+  focused typecheck.
+- **Remaining boundary:** M10 deliberately skips optional hash-chained `audit.jsonl`
+  integration; JSONL is the durable telemetry surface for this milestone. Dashboard
+  controls remain M11.
 - **Team:** implementer; can use a **local-heavy (Pi/Ollama) worker** for log triage.
 
 ### M11 — Dashboard / control surface (brief Phase 10)
@@ -870,9 +880,9 @@ before the scheduler goes live (M5) or telemetry durably grows (M10):
   full delete-all + reinsert-all of every table after *every* mutation. Fine while inert;
   O(total-state) per heartbeat once live. → incremental writes (M5 precondition).
 - **Telemetry coupled to the snapshot.** `this.telemetry` accumulates forever and is
-  re-serialized into the DB on every mutation. → move durable telemetry to the
-  append-only jsonl (M10) and keep the snapshot to operational state only
-  (leases/allocations/queue/`nextSeq`).
+  re-serialized into the DB on every mutation. M10 moved durable *run* telemetry to
+  append-only JSONL; pruning or separating the scheduler's internal event list remains
+  future persistence hygiene.
 - **Unbounded `allocations` map.** Released/expired allocations are never pruned (and
   `listAllocations()` returns all). → add allocation state transitions + a retention/prune
   policy (mirror `board-service` auto-ticket pruning).

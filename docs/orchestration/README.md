@@ -10,8 +10,9 @@ cross-family reviewer policy is implemented with fail-closed same-family
 fallback and structured explanations. Dual-lane competition is implemented for
 explicit OpenAI/Anthropic lane runs with deterministic comparison reports and a
 human selection gate. Board-originated ticket dispatch is scheduler-aware when
-`orchestration.enabled: true`; dashboard controls and durable telemetry
-aggregation remain later milestones.
+`orchestration.enabled: true`. Durable JSONL telemetry, `jinn scheduler stats`,
+and optional empirical-routing tie-breaks are implemented. Dashboard controls
+remain a later milestone.
 
 ## Intent
 
@@ -82,6 +83,8 @@ jinn scheduler allocate docs/orchestration/examples/task-standard.yaml \
 jinn scheduler simulate docs/orchestration/examples/scenario-blocked-resource.yaml \
   --config-dir docs/orchestration/examples \
   --json
+jinn scheduler stats --json
+jinn scheduler stats --path /tmp/orchestration-telemetry.jsonl
 
 jinn leases list --config-dir docs/orchestration/examples --db-path /tmp/orchestration.db --json
 jinn queue list --config-dir docs/orchestration/examples --db-path /tmp/orchestration.db --json
@@ -137,6 +140,11 @@ scheduler-owned and resume on resource events.
 `jinn worktree create|diff|cleanup` uses the live `config.yaml`
 `orchestration.worktreeRoot` and `orchestration.maxWorktrees` settings. The
 helpers operate only on directories with Jinn's managed worktree marker.
+
+`jinn scheduler stats` reads append-only orchestration telemetry from
+`~/.jinn/logs/orchestration-telemetry.jsonl` by default, or from `--path <file>`.
+`--json` returns `{ totals, byProvider, byFamily, byRole, byWorker,
+skippedLines }`. Malformed JSONL lines are skipped and counted.
 
 ## API
 
@@ -211,6 +219,11 @@ owns release: setup failures release immediately, and launched runs release in a
   `orchestration.sameFamilyReviewerFallback: true` lets live review allocation
   use a same-family reviewer only after no qualified opposite-family reviewer is
   available. Opposite-family candidates still win when present.
+- Setting `orchestration.empiricalRouting: true` makes the runtime read durable
+  telemetry at boot and compute per-worker scores. Scores are deterministic
+  tie-breakers only: they run after hard constraints and explicit tier/cost
+  preferences, and cannot bypass capability, quota, family, lease, or cost
+  ordering rules.
 - Reviewer selection and blocked-reviewer allocation return structured
   explanations with candidate ids, implementer families, the selected worker
   when any, and the policy decision.
@@ -227,10 +240,11 @@ The live daemon runtime reads these optional `config.yaml` keys:
 orchestration:
   enabled: true
   sameFamilyReviewerFallback: false
+  empiricalRouting: false
 ```
 
-`sameFamilyReviewerFallback` defaults to `false`. It is a boolean only; invalid
-types are rejected by config validation.
+`sameFamilyReviewerFallback` and `empiricalRouting` default to `false`. Both are
+boolean only; invalid types are rejected by config validation.
 
 ## Durable State
 
@@ -249,6 +263,27 @@ reload, the gateway swaps to a freshly constructed orchestration runtime when
 settings stay enabled; if orchestration is disabled while work is active, the
 existing runtime stays bound only long enough to drain leases and queued
 continuations.
+
+## Durable Telemetry
+
+Orchestration live turns append one JSON line per scheduler-owned run to
+`~/.jinn/logs/orchestration-telemetry.jsonl` with file mode `0600` when the file
+is created. Records cover `single_worker`, review turns, resumed queued runs,
+dual-lane lane turns, explicit dual-lane selection outcomes, and M9
+scheduler-owned manual/board ticket dispatch.
+
+Telemetry fields are intentionally narrow: task/coordinator/session/lease/worker
+ids, provider, family, model, role, mode, source, cost, latency, tokens, changed
+file count, added test count, nullable QA/review counters, disposition, and
+timestamp. Jinn does not log prompts, model output, raw diffs, cwd/worktree
+paths, credentials, headers, or environment values. Worktree metrics are counts
+derived from diffs, not file paths.
+
+Worker scores are derived from historical dispositions when
+`orchestration.empiricalRouting: true`: completed and selected work improves the
+score; failed, blocked, discarded, blocker-heavy, or regression-heavy records
+degrade it. Corrupt telemetry lines do not block runtime startup; they are
+skipped and counted. Hash-chained `audit.jsonl` integration remains deferred.
 
 ## Worktrees
 
@@ -339,12 +374,11 @@ simulation remain deterministic.
 - Observe-only API routes reject mutating HTTP methods and return existing
   workers/leases/queue/allocations only.
 - Durable scheduler state, adapter contracts, opt-in live adapters, headroom
-  predicates, daemon runtime ownership, first live run modes, and git worktree
-  isolation are implemented. Live cross-family reviewer policy and dual-lane
-  competition with explicit selection are implemented. Persistent telemetry
-  aggregation, board-worker integration, and dashboard controls are not
-  implemented yet.
+  predicates, daemon runtime ownership, first live run modes, git worktree
+  isolation, live cross-family reviewer policy, dual-lane competition,
+  board-worker integration, and durable telemetry aggregation are implemented.
+  Dashboard controls are not implemented yet.
 
 ## Later Milestones
 
-- Durable telemetry and dashboard control surfaces.
+- Dashboard control surfaces.
