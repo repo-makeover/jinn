@@ -4,6 +4,7 @@ import type { JinnConfig } from "../shared/types.js";
 import { loadOrchestrationConfig } from "./config.js";
 import { buildCoordinatorTaskBrief, type CoordinatorMode } from "./coordinator.js";
 import { resolveCrossFamilyReviewPolicy, type CrossFamilyReviewPolicy } from "./cross-family.js";
+import { listProtectedDualLaneTaskIds } from "./dual-lane-state.js";
 import type { LiveRunContinuationRecord } from "./live-run.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
 import { OrchestrationStore } from "./store.js";
@@ -232,6 +233,7 @@ export class OrchestrationRuntime {
         .filter((lease) => lease.state === "running")
         .map((lease) => lease.taskId),
     );
+    for (const taskId of listProtectedDualLaneTaskIds()) activeTaskIds.add(taskId);
     return reapOrphanedWorktrees(this.worktrees.root, activeTaskIds);
   }
 
@@ -331,6 +333,16 @@ export function resolveLiveLeaseDurationMs(config: JinnConfig): number {
 }
 
 function buildContinuationRequest(record: LiveRunContinuationRecord, config: OrchestrationConfig): AllocationRequest {
+  if (record.mode === "dual_lane") {
+    return {
+      taskId: record.task.taskId,
+      coordinatorId: record.task.coordinatorId,
+      requiredRoles: [record.task.openaiRole ?? "openaiImplementer", record.task.anthropicRole ?? "anthropicImplementer"],
+      optionalRoles: [],
+      priority: record.task.priority,
+      leaseDurationMs: record.task.leaseDurationMs,
+    };
+  }
   const brief = buildCoordinatorTaskBrief({
     taskId: record.task.taskId,
     coordinatorId: record.task.coordinatorId,

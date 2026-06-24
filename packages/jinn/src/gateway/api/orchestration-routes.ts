@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { selectDualLaneWinner } from "../../orchestration/dual-lane.js";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import { loadDefaultOrchestrationConfig, loadOrchestrationConfig } from "../../orchestration/config.js";
 import { liveRunModeSchema, runOrchestrationTask } from "../../orchestration/run-mode.js";
@@ -17,6 +18,7 @@ const ROUTES = new Set([
   "/api/orchestration/allocations",
   "/api/orchestration/continuations",
   "/api/orchestration/continuations/retry",
+  "/api/orchestration/dual-lane/select",
   "/api/orchestration/run",
 ]);
 
@@ -28,6 +30,34 @@ export async function handleOrchestrationRoutes(
   req?: HttpRequest,
 ): Promise<boolean> {
   if (!ROUTES.has(pathname)) return false;
+  if (pathname === "/api/orchestration/dual-lane/select") {
+    if (method !== "POST") {
+      json(res, { error: "Method not allowed" }, 405);
+      return true;
+    }
+    if (context.getConfig().orchestration?.enabled !== true) {
+      json(res, { error: "orchestration is disabled" }, 409);
+      return true;
+    }
+    if (!req) {
+      json(res, { error: "dual-lane selection requires an HTTP request body" }, 400);
+      return true;
+    }
+    const parsed = await readJsonBody(req, res);
+    if (!parsed.ok) return true;
+    const body = parsed.body as { taskId?: unknown; winnerLane?: unknown } | null;
+    if (typeof body?.taskId !== "string" || typeof body?.winnerLane !== "string") {
+      json(res, { error: "taskId and winnerLane are required" }, 400);
+      return true;
+    }
+    const result = selectDualLaneWinner({ taskId: body.taskId, winnerLane: body.winnerLane });
+    if (!result.ok) {
+      json(res, { error: result.message }, result.reason === "not_found" ? 404 : 409);
+      return true;
+    }
+    json(res, result, 200);
+    return true;
+  }
   if (pathname === "/api/orchestration/continuations/retry") {
     if (method !== "POST") {
       json(res, { error: "Method not allowed" }, 405);

@@ -167,6 +167,21 @@ describe("GET /api/orchestration/*", () => {
       allocation: { allocationId: "alloc-retry" },
     });
   });
+
+  it("routes explicit dual-lane selection requests", async () => {
+    const cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/dual-lane/select",
+      cap.res,
+      makeCtx(config()),
+      makeJsonReq({ taskId: "missing-dual", winnerLane: "openai" }, "/api/orchestration/dual-lane/select"),
+    );
+
+    expect(cap.status).toBe(404);
+    expect(cap.body).toEqual({ error: "no dual-lane run found for task missing-dual" });
+  });
 });
 
 async function get(pathname: string, ctx: ApiContext) {

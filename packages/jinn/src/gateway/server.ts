@@ -30,7 +30,8 @@ import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js"
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR, ORG_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
-import { createOrchestrationRuntimeFromConfig } from "../orchestration/runtime.js";
+import { createOrchestrationRuntimeFromConfig, type OrchestrationRuntime } from "../orchestration/runtime.js";
+import { runAllocatedDualLaneTask } from "../orchestration/dual-lane.js";
 import { runAllocatedOrchestrationTask } from "../orchestration/run-mode.js";
 import { startStatusReconciler } from "./status-reconciler.js";
 import { syncExternalTurn } from "./external-turns.js";
@@ -181,6 +182,30 @@ function serveStatic(
   res.writeHead(200, headers);
   fs.createReadStream(resolved).pipe(res);
   return true;
+}
+
+function bindOrchestrationResumeHandler(runtime: OrchestrationRuntime | undefined, apiContext: ApiContext): void {
+  runtime?.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
+    const result = continuation.mode === "dual_lane"
+      ? await runAllocatedDualLaneTask({
+        context: apiContext,
+        task: continuation.task,
+        allocation,
+        reviewPolicy,
+      })
+      : await runAllocatedOrchestrationTask({
+        context: apiContext,
+        mode: continuation.mode,
+        task: continuation.task,
+        allocation,
+        reviewPolicy,
+      });
+    if (!result.ok) {
+      throw new Error(result.state === "failed"
+        ? result.errorSummary
+        : `unexpected orchestration state while resuming ${continuation.taskId}/${continuation.coordinatorId}: ${result.state}`);
+    }
+  });
 }
 
 export type GatewayCleanup = () => Promise<void>;
@@ -871,20 +896,7 @@ export async function startGateway(
   };
   let orchestrationRuntime = createOrchestrationRuntimeFromConfig(currentConfig);
   if (orchestrationRuntime) {
-    orchestrationRuntime.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
-      const result = await runAllocatedOrchestrationTask({
-        context: apiContext,
-        mode: continuation.mode,
-        task: continuation.task,
-        allocation,
-        reviewPolicy,
-      });
-      if (!result.ok) {
-        throw new Error(result.state === "failed"
-          ? result.errorSummary
-          : `unexpected orchestration state while resuming ${continuation.taskId}/${continuation.coordinatorId}: ${result.state}`);
-      }
-    });
+    bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
     apiContext.orchestration = { runtime: orchestrationRuntime };
   }
 
@@ -900,20 +912,7 @@ export async function startGateway(
       refreshDynamicModels(currentConfig); // re-discover dynamic models (engine bins/auth may have changed)
       reloadScheduler(loadJobs(), currentConfig, connectorMap);
       orchestrationRuntime = swapOrchestrationRuntime(apiContext, currentConfig, orchestrationRuntime);
-      orchestrationRuntime?.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
-        const result = await runAllocatedOrchestrationTask({
-          context: apiContext,
-          mode: continuation.mode,
-          task: continuation.task,
-          allocation,
-          reviewPolicy,
-        });
-        if (!result.ok) {
-          throw new Error(result.state === "failed"
-            ? result.errorSummary
-            : `unexpected orchestration state while resuming ${continuation.taskId}/${continuation.coordinatorId}: ${result.state}`);
-        }
-      });
+      bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
       logger.info("Config reloaded successfully");
       logBoardSummary(ORG_DIR, (msg) => logger.info(msg));
       emit("config:reloaded", {});
@@ -992,7 +991,7 @@ export async function startGateway(
         unauthorized(res);
         return;
       }
-      if (pathname === "/api/orchestration/run") {
+      if (pathname.startsWith("/api/orchestration/")) {
         const handled = await handleOrchestrationRoutes(req.method || "GET", pathname, res, apiContext, req);
         if (handled) return;
       }

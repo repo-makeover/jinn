@@ -67,13 +67,29 @@ program
 program
   .command("run")
   .description("Run an opt-in matrix orchestration task through the live gateway")
-  .requiredOption("--mode <mode>", "Run mode: single_worker or single_worker_with_review")
+  .requiredOption("--mode <mode>", "Run mode: single_worker, single_worker_with_review, or dual_lane")
   .requiredOption("--task <file>", "YAML task file containing prompt and allocation fields")
   .option("--json", "Print raw JSON")
   .action(async (opts: { mode: string; task: string; json?: boolean }) => {
     const { runOrchestrationRun } = await import("../src/cli/orchestration.js");
     await runOrchestrationRun(opts);
   });
+
+{
+  const dualLaneCmd = program
+    .command("dual-lane")
+    .description("Select the winning matrix-orchestration dual lane");
+
+  dualLaneCmd
+    .command("select")
+    .requiredOption("--task-id <id>", "Dual-lane task id")
+    .requiredOption("--winner <lane>", "Winning lane: openai or anthropic")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { taskId: string; winner: string; json?: boolean }) => {
+      const { runDualLaneSelect } = await import("../src/cli/orchestration.js");
+      await runDualLaneSelect(opts);
+    });
+}
 
 {
   const startupCmd = program

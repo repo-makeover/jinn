@@ -43,6 +43,12 @@ export interface OrchestrationContinuationRetryOptions {
   json?: boolean;
 }
 
+export interface DualLaneSelectOptions {
+  taskId: string;
+  winner: string;
+  json?: boolean;
+}
+
 export interface WorktreeCliOptions {
   lane?: string;
   json?: boolean;
@@ -180,6 +186,24 @@ function formatRunResult(result: any): string {
     lines.push(...formatReviewPolicy(result?.reviewPolicy));
     return lines.join("\n");
   }
+  if (result?.ok === true && result?.state === "selection_required") {
+    const lines = [
+      "Dual-lane run requires selection",
+      `Task: ${result?.taskId ?? "(unknown)"}`,
+      `Coordinator: ${result?.coordinatorId ?? "(unknown)"}`,
+      "Selection default: human",
+    ];
+    const lanes = Array.isArray(result?.lanes) ? result.lanes : [];
+    for (const lane of lanes) {
+      lines.push(`- ${lane.id}: ${lane.workerId ?? "(unallocated)"} ${lane.state}${lane.worktreePath ? ` (${lane.worktreePath})` : ""}`);
+    }
+    const differences = Array.isArray(result?.comparisonReport?.majorDifferences)
+      ? result.comparisonReport.majorDifferences
+      : [];
+    for (const difference of differences) lines.push(`Difference: ${difference}`);
+    lines.push("Select explicitly with: jinn dual-lane select --task-id <id> --winner openai|anthropic");
+    return lines.join("\n");
+  }
   const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
   const lines = [
     `Orchestration run ${result?.state ?? "completed"}`,
@@ -210,6 +234,16 @@ function formatContinuationRetryResult(result: any): string {
   ];
   lines.push(...formatReviewPolicy(result?.reviewPolicy));
   return lines.join("\n");
+}
+
+function formatDualLaneSelectionResult(result: any): string {
+  if (result?.ok !== true) return String(result?.error ?? "dual-lane selection failed");
+  return [
+    `Dual-lane task ${result.taskId ?? "(unknown)"} selected ${result.selectedLane ?? "(unknown)"}`,
+    `Archived loser: ${result.archivedLane ?? "(unknown)"}`,
+    `Winner worktree: ${result.winnerWorktreePath ?? "(unknown)"}`,
+    `Archived diff: ${result.archive?.diffPath ?? "(unknown)"}`,
+  ].join("\n");
 }
 
 function formatReviewPolicy(reviewPolicy: any): string[] {
@@ -354,6 +388,19 @@ export async function runContinuationRetry(opts: OrchestrationContinuationRetryO
     throw new Error(`continuation retry failed (${res.status})${detail}`);
   }
   print(opts.json ? body : formatContinuationRetryResult(body), opts.json);
+}
+
+export async function runDualLaneSelect(opts: DualLaneSelectOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/dual-lane/select", {
+    method: "POST",
+    body: JSON.stringify({ taskId: opts.taskId, winnerLane: opts.winner }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = body && typeof body === "object" && "error" in body ? `: ${(body as { error?: unknown }).error}` : "";
+    throw new Error(`dual-lane selection failed (${res.status})${detail}`);
+  }
+  print(opts.json ? body : formatDualLaneSelectionResult(body), opts.json);
 }
 
 export async function runWorktreeCreate(taskFile: string, opts: WorktreeCliOptions): Promise<void> {

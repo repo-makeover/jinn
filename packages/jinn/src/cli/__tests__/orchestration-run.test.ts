@@ -117,6 +117,35 @@ describe("jinn run orchestration client", () => {
     expect(String(logSpy.mock.calls[0][0])).toContain("independentReviewer failed");
   });
 
+  it("prints dual-lane selection-required output", async () => {
+    const taskFile = path.join(tmpHome, "task.yaml");
+    fs.writeFileSync(taskFile, [
+      "taskId: cli-dual",
+      "coordinatorId: cli-dual-coord",
+      "mode: dual_lane",
+      "prompt: Implement the same task in both lanes",
+    ].join("\n"));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      state: "selection_required",
+      mode: "dual_lane",
+      taskId: "cli-dual",
+      coordinatorId: "cli-dual-coord",
+      lanes: [
+        { id: "openai", workerId: "mockOpenAI", state: "completed", worktreePath: "/tmp/openai" },
+        { id: "anthropic", workerId: "mockAnthropic", state: "completed", worktreePath: "/tmp/anthropic" },
+      ],
+      comparisonReport: { majorDifferences: ["OpenAI-only files: openai.txt"] },
+      selection: { required: true, default: "human", options: ["openai", "anthropic"] },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    const { runOrchestrationRun } = await import("../orchestration.js");
+    await runOrchestrationRun({ mode: "dual_lane", task: taskFile });
+
+    expect(String(logSpy.mock.calls[0][0])).toContain("Dual-lane run requires selection");
+    expect(String(logSpy.mock.calls[0][0])).toContain("Difference: OpenAI-only files");
+  });
+
   it("lists durable continuations through the gateway", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       continuations: [{
@@ -161,6 +190,28 @@ describe("jinn run orchestration client", () => {
       coordinatorId: "cli-coord-retry",
     });
     expect(String(logSpy.mock.calls[0][0])).toContain("Continuation cli-task-retry/cli-coord-retry dispatched");
+  });
+
+  it("selects a dual-lane winner through the gateway", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      state: "selected",
+      taskId: "cli-dual-select",
+      selectedLane: "openai",
+      archivedLane: "anthropic",
+      winnerWorktreePath: "/tmp/winner",
+      archive: { diffPath: "/tmp/archive/anthropic.patch.diff" },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { runDualLaneSelect } = await import("../orchestration.js");
+    await runDualLaneSelect({ taskId: "cli-dual-select", winner: "openai" });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:7799/api/orchestration/dual-lane/select");
+    expect(JSON.parse(String(init.body))).toEqual({ taskId: "cli-dual-select", winnerLane: "openai" });
+    expect(String(logSpy.mock.calls[0][0])).toContain("selected openai");
   });
 });
 

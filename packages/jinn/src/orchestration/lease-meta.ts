@@ -1,4 +1,5 @@
 import type { JsonObject, JsonValue } from "../shared/types.js";
+import type { LiveRunMode } from "./live-run.js";
 
 export const ORCHESTRATION_LEASE_META_KEY = "orchestrationLease";
 
@@ -8,7 +9,7 @@ export interface OrchestrationLeaseMeta {
   coordinatorId: string;
   workerId: string;
   role: string;
-  mode: "single_worker" | "single_worker_with_review";
+  mode: LiveRunMode;
 }
 
 export function toLeaseTransportMeta(meta: OrchestrationLeaseMeta): JsonObject {
@@ -29,7 +30,7 @@ export function parseLeaseTransportMeta(value: unknown): OrchestrationLeaseMeta 
   const raw = record ? asRecord(record[ORCHESTRATION_LEASE_META_KEY]) : null;
   if (!raw) return null;
   const mode = raw.mode;
-  if (mode !== "single_worker" && mode !== "single_worker_with_review") return null;
+  if (mode !== "single_worker" && mode !== "single_worker_with_review" && mode !== "dual_lane") return null;
   const leaseId = stringValue(raw.leaseId);
   const taskId = stringValue(raw.taskId);
   const coordinatorId = stringValue(raw.coordinatorId);

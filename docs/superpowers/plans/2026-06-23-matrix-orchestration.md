@@ -1,6 +1,6 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 and M1–M7 are **complete** (Codex, 2026-06-23).
+> **Status:** Phase 1 and M1–M8 are **complete** (Codex, 2026-06-24).
 > This is the **full-capability roadmap** from inert scaffold to real,
 > daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
@@ -453,8 +453,8 @@ the source brief.
 - **Validation:** focused tests cover create/diff/cleanup, non-git downgrade, max
   worktree enforcement, runtime reaping, reviewer diff-bundle routing, and CLI
   worktree helpers.
-- **Remaining boundary:** integration worktrees, dual-lane selection, durable patch
-  artifacts, dashboard controls, and board-worker routing remain later milestones.
+- **Remaining boundary:** integration worktrees, durable patch artifacts,
+  dashboard controls, and board-worker routing remain later milestones.
 
 ### M7 — Cross-family review policy in live runs (complete, 2026-06-23)
 
@@ -471,17 +471,26 @@ the source brief.
   silent downgrade in CLI/API JSON/text output.
 - **Team:** implementer; **review:** department policy critique.
 
-### M8 — Dual-lane competition (brief Phase 8) ✦ high-value, last
+### M8 — Dual-lane competition (brief Phase 8) (complete, 2026-06-24)
 
 - **Goal:** OpenAI lane and Anthropic lane produce competing patches in **isolated**
   worktrees from an identical brief; a comparison reviewer reports differences; a human
   or authorized coordinator selects the integration; the loser is archived.
-- **Deliverables:** `orchestration/dual-lane.ts`; comparison report generator;
-  integration-selection gate (defaults to **human** selection).
-- **Exit gate (brief AC):** identical brief to both lanes; isolated worktrees;
-  comparison report identifies major differences; explicit selection; unselected lane
-  archived/discarded. **Only attempt after M1–M7 are stable.**
-- **Team:** **dual-lane / architecture-manager mode**; department integration review.
+- **Delivered:** `orchestration/dual-lane.ts` plus `dual-lane-state.ts`; atomic
+  two-lane allocation using `openaiRole`/`anthropicRole` task fields (defaults
+  `openaiImplementer`/`anthropicImplementer`); identical prompt dispatch into
+  separate managed git worktrees; deterministic comparison report; persisted
+  selection manifest; explicit `POST /api/orchestration/dual-lane/select` and
+  `jinn dual-lane select --task-id <id> --winner openai|anthropic`; loser diff
+  archived and loser worktree removed on selection.
+- **Exit gate:** passed for identical prompt to both lanes, isolated worktrees,
+  comparison report identifying lane-unique files, explicit selection, loser
+  archive/discard, blocked dual-lane continuation persistence, and runtime
+  reaper protection for pending/selected dual-lane worktrees.
+- **Remaining boundary:** M8 does **not** apply the winning patch to the base
+  repo, run an AI comparison reviewer turn, or emit durable telemetry JSONL;
+  those remain later/operator workflow concerns.
+- **Team:** implementer; **review:** department integration review recommended.
 
 ### M9 — Org→Worker bridge + board-worker reconciliation (brief Phase 3, deferred)
 

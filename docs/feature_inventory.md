@@ -33,7 +33,8 @@
 - `jinn scheduler plan <task-file> --config-dir <dir> [--db-path <path>] [--json]` expands a coordinator template into an observe-only allocation plan.
 - `jinn leases list --config-dir <dir> [--db-path <path>] [--json]` lists durable orchestration leases when a DB exists.
 - `jinn queue list --config-dir <dir> [--db-path <path>] [--json]` lists durable blocked-resource queue items when a DB exists.
-- `jinn run --mode single_worker|single_worker_with_review --task <file> [--json]` posts a live task brief to the running gateway; the daemon must have `orchestration.enabled: true`.
+- `jinn run --mode single_worker|single_worker_with_review|dual_lane --task <file> [--json]` posts a live task brief to the running gateway; the daemon must have `orchestration.enabled: true`.
+- `jinn dual-lane select --task-id <id> --winner openai|anthropic [--json]` explicitly selects a completed dual-lane winner, archives the loser diff/metadata, and removes the loser worktree.
 - `jinn continuations list [--json]` lists durable blocked/failed continuation records through the running gateway.
 - `jinn continuations retry --task-id <id> --coordinator-id <id> [--json]` re-attempts a previously failed live continuation through the running gateway.
 - `jinn worktree create <task-file> [--lane <name>] [--json]` creates a managed git worktree for a task/lane when the task cwd is inside a git repo.
@@ -47,8 +48,9 @@
   - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, `mock`, and opt-in live adapters for existing Jinn engine ids via an injected engine map. The default registry used by dry-runs remains inert-only.
   - Usage-aware headroom helpers can filter unavailable, exhausted, or below-threshold live engines when future live orchestration opts in; simulation mode does not call this filter.
   - Worktree execution is task/lane-scoped: implementation lanes can run in isolated git worktrees, reviewers inspect generated diff bundles instead of the implementation tree, and the runtime reaper removes abandoned managed worktrees.
+  - Dual-lane mode allocates OpenAI and Anthropic implementer roles atomically, sends both lanes an identical prompt in isolated worktrees, returns a deterministic comparison report, and requires explicit human selection. It does not apply the selected patch to the base repo.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
-  - Dashboard controls, board-worker routing, dual-lane integration, and persistent telemetry aggregation are later milestones.
+  - Dashboard controls, board-worker routing, automatic patch integration, and persistent telemetry aggregation are later milestones.
 
 ## API
 
@@ -60,7 +62,8 @@
 - `GET /api/orchestration/allocations` returns existing durable allocations.
 - `GET /api/orchestration/continuations` returns durable blocked/failed continuation records.
 - `POST /api/orchestration/continuations/retry` re-attempts a failed continuation through the live runtime.
-- `POST /api/orchestration/run` executes `single_worker` and `single_worker_with_review` tasks through the daemon runtime.
+- `POST /api/orchestration/run` executes `single_worker`, `single_worker_with_review`, and `dual_lane` tasks through the daemon runtime.
+- `POST /api/orchestration/dual-lane/select` selects a completed dual-lane winner and archives/discards the loser lane.
 - Run responses include `reviewPolicy.explanations` for reviewer selection, explicit same-family fallback, and blocked reviewer allocation.
 - Blocked live runs persist a durable continuation keyed by task/coordinator and auto-resume on later resource availability.
 - These routes inherit the existing `/api/*` gateway token gate; unsupported methods on each path return `405`.
@@ -68,7 +71,7 @@
   - GET routes observe state only; `POST /api/orchestration/run` is the only M5 mutating route.
   - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, passes isolated worktree cwd values to eligible implementation sessions, hands reviewers diff bundles, and releases leases on terminal paths.
   - If no orchestration runtime exists, state routes retain the no-daemon/test fallback; the run route fails instead of opening its own live scheduler.
-  - No dashboard controls, cancel API, board-worker routing, or dual-lane integration selection are wired yet.
+  - No dashboard controls, cancel API, board-worker routing, or automatic dual-lane patch application are wired yet.
 
 ### Kiro headless engine and estimated credit gauge
 - `kiro` is a registered headless engine. Work turns spawn:

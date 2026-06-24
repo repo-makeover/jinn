@@ -5,10 +5,11 @@ scheduler-state, provider-adapter contract modules, opt-in live-adapter
 plumbing, coordinator planning, observe surfaces, and the first opt-in live run
 modes. The live modes are daemon-gated by `orchestration.enabled` and route
 through the existing Jinn session path. Git worktree execution is implemented
-for isolated implementation lanes plus read-only review access. Live
+for isolated implementation lanes plus diff-only review bundles. Live
 cross-family reviewer policy is implemented with fail-closed same-family
-fallback and structured explanations. Dashboard
-controls, board-worker dispatch, dual lanes, and org-worker mapping remain
+fallback and structured explanations. Dual-lane competition is implemented for
+explicit OpenAI/Anthropic lane runs with deterministic comparison reports and a
+human selection gate. Dashboard controls, board-worker dispatch, and org-worker mapping remain
 later milestones.
 
 ## Intent
@@ -89,6 +90,8 @@ jinn scheduler plan docs/orchestration/examples/task-standard.yaml \
 
 jinn run --mode single_worker --task docs/orchestration/examples/task-live.yaml
 jinn run --mode single_worker_with_review --task docs/orchestration/examples/task-live.yaml --json
+jinn run --mode dual_lane --task docs/orchestration/examples/task-live.yaml
+jinn dual-lane select --task-id task-live --winner openai
 jinn continuations list
 jinn continuations retry --task-id task-live --coordinator-id task-live-review
 
@@ -116,6 +119,14 @@ For `single_worker_with_review`, JSON output includes `reviewPolicy.explanations
 Text output prints the reviewer policy decision so same-family fallback or a
 blocked reviewer is not silent. If any leased role session errors, the live run
 returns `ok: false, state: "failed"` with the session evidence preserved.
+`dual_lane` runs allocate OpenAI and Anthropic implementation roles atomically
+using `openaiRole` and `anthropicRole` task fields, defaulting to
+`openaiImplementer` and `anthropicImplementer`. Both lanes receive the identical
+prompt in separate managed git worktrees. Successful runs return
+`state: "selection_required"` with a deterministic comparison report; they do
+not apply a patch to the base repo. Use `jinn dual-lane select --task-id <id>
+--winner openai|anthropic` to explicitly choose the retained lane and archive
+then remove the loser lane.
 `jinn continuations list` inspects durable blocked/failed continuation records
 through the live gateway. `jinn continuations retry` re-attempts a continuation
 only when it is already in `failed` state; queued continuations remain
@@ -137,18 +148,21 @@ gateway token gate.
 - `GET /api/orchestration/continuations`
 - `POST /api/orchestration/continuations/retry`
 - `POST /api/orchestration/run`
+- `POST /api/orchestration/dual-lane/select`
 
 The GET routes return the configured workers and scheduler state. When the
 daemon runtime exists, they read that shared instance; otherwise they use the
 old no-daemon/test fallback that opens a scheduler for read-only inspection.
 
-`POST /api/orchestration/run` executes only `single_worker` and
-`single_worker_with_review` tasks through the existing session runner. It does
-not create dashboard controls. When an implementation worker has
+`POST /api/orchestration/run` executes `single_worker`,
+`single_worker_with_review`, and `dual_lane` tasks through the existing session
+runner. It does not create dashboard controls. When an implementation worker has
 `workspacePolicy: isolated_worktree` and the resolved task `cwd` is inside a git
 repo, the run path creates a task/lane-scoped worktree and passes that path as
 the session `cwd`. Reviewer turns do not run in that worktree; they receive a
 generated diff bundle directory containing `patch.diff` and `metadata.json`.
+`POST /api/orchestration/dual-lane/select` explicitly selects the winning lane,
+archives the loser diff/metadata, and removes the loser worktree.
 Non-supported methods return `405`.
 Run responses include structured `reviewPolicy.explanations` when reviewer
 family policy selects, falls back, or blocks a reviewer. Blocked live runs
@@ -226,6 +240,14 @@ session `cwd`. The implementation worktree is cleaned up at task end. If
 cleanup is missed, the runtime's existing boot/timer reaper removes managed
 worktrees whose task no longer has a running lease.
 
+For `dual_lane`, OpenAI and Anthropic lanes always require managed git
+worktrees; non-git cwd downgrade is rejected instead of silently sharing a
+workspace. The runtime reaper protects dual-lane worktrees while a selection is
+pending or after a winner is selected. Explicit selection archives the loser
+lane's diff and metadata under `~/.jinn/tmp/orchestration-dual-lane/<task>/`
+and removes the loser worktree. The selected winner worktree remains for manual
+inspection/integration.
+
 ## Provider Adapters
 
 `packages/jinn/src/orchestration/adapter/` defines the provider-neutral adapter
@@ -292,11 +314,11 @@ simulation remain deterministic.
   workers/leases/queue/allocations only.
 - Durable scheduler state, adapter contracts, opt-in live adapters, headroom
   predicates, daemon runtime ownership, first live run modes, and git worktree
-  isolation are implemented. Live cross-family reviewer policy is implemented.
-  Persistent telemetry aggregation, dual-lane routing, board-worker integration,
-  and dashboard controls are not implemented yet.
+  isolation are implemented. Live cross-family reviewer policy and dual-lane
+  competition with explicit selection are implemented. Persistent telemetry
+  aggregation, board-worker integration, and dashboard controls are not
+  implemented yet.
 
 ## Later Milestones
 
-- Dual provider lanes and integration selection.
 - Durable telemetry and dashboard control surfaces.

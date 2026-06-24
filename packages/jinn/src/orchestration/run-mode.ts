@@ -4,7 +4,7 @@ import { logger } from "../shared/logger.js";
 import type { Engine, JsonObject } from "../shared/types.js";
 import type { ApiContext } from "../gateway/api.js";
 import { dispatchWebSessionRun } from "../gateway/api/session-dispatch.js";
-import { buildCoordinatorTaskBrief, coordinatorModeSchema, type CoordinatorMode } from "./coordinator.js";
+import { buildCoordinatorTaskBrief, type CoordinatorMode } from "./coordinator.js";
 import { isReviewerRole } from "./cross-family.js";
 import { toLeaseTransportMeta } from "./lease-meta.js";
 import { LIVE_RUN_MODES, type LiveRunContinuationRecord, type LiveRunMode, type LiveRunTaskPayload } from "./live-run.js";
@@ -32,12 +32,14 @@ const liveRunTaskSchema = z.object({
   optionalRoles: z.array(z.string().min(1)).optional(),
   priority: z.enum(["low", "normal", "high"]).default("normal"),
   leaseDurationMs: z.number().int().positive().optional(),
-  mode: coordinatorModeSchema.default("single_worker"),
+  mode: liveRunModeSchema.default("single_worker"),
   prompt: z.string().min(1),
   cwd: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   effortLevel: z.string().min(1).optional(),
+  openaiRole: z.string().min(1).optional(),
+  anthropicRole: z.string().min(1).optional(),
 }).strict();
 
 export interface RunOrchestrationTaskOptions {
@@ -57,7 +59,8 @@ export interface RunAllocatedOrchestrationTaskOptions {
 export type OrchestrationRunTaskResult =
   | { ok: false; state: "blocked_resource"; mode: LiveRunMode; queueItem: QueueItem; reviewPolicy: ReviewPolicySummary }
   | { ok: false; state: "failed"; mode: LiveRunMode; allocation: Allocation; sessions: OrchestrationRunSession[]; reviewPolicy: ReviewPolicySummary; errorSummary: string }
-  | { ok: true; state: "completed"; mode: LiveRunMode; allocation: Allocation; sessions: OrchestrationRunSession[]; reviewPolicy: ReviewPolicySummary };
+  | { ok: true; state: "completed"; mode: LiveRunMode; allocation: Allocation; sessions: OrchestrationRunSession[]; reviewPolicy: ReviewPolicySummary }
+  | import("./dual-lane.js").DualLaneRunResult;
 
 export interface OrchestrationRunSession {
   sessionId: string;
@@ -67,17 +70,17 @@ export interface OrchestrationRunSession {
   status: string;
   error: string | null;
   cwd: string;
-  workspaceMode: LeaseWorkspace["mode"];
+  workspaceMode: OrchestrationLeaseWorkspace["mode"];
   worktreePath?: string;
   reviewBundlePath?: string;
   reviewPolicy?: ReviewPolicyExplanation;
 }
 
-type ImplementationWorkspace =
+export type ImplementationWorkspace =
   | { mode: "shared"; cwd: string; downgradeReason?: string }
   | { mode: "implementation_worktree"; cwd: string; handle: WorktreeHandle };
 
-type LeaseWorkspace =
+export type OrchestrationLeaseWorkspace =
   | ImplementationWorkspace
   | { mode: "review_bundle"; cwd: string; bundle: ReviewBundleHandle; worktreePath?: string };
 
@@ -91,6 +94,10 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
   const parsed = liveRunTaskSchema.parse(opts.task);
   const mode = opts.mode ?? liveRunModeSchema.parse(parsed.mode);
   const task = normalizeTaskPayload(parsed, opts.context);
+  if (mode === "dual_lane") {
+    const { runDualLaneTask } = await import("./dual-lane.js");
+    return runDualLaneTask({ context: opts.context, task });
+  }
   const brief = buildCoordinatorTaskBrief({
     taskId: task.taskId,
     coordinatorId: task.coordinatorId,
@@ -149,7 +156,7 @@ export async function runAllocatedOrchestrationTask(opts: RunAllocatedOrchestrat
           implementationWorkspace = workspace;
         }
         turnStarted = true;
-        const session = await runLeaseTurn({
+        const session = await runOrchestrationLeaseTurn({
           context: opts.context,
           mode: opts.mode,
           lease,
@@ -162,7 +169,7 @@ export async function runAllocatedOrchestrationTask(opts: RunAllocatedOrchestrat
           effortLevel: opts.task.effortLevel,
         });
         sessions.push(session);
-        if (sessionFailed(session)) {
+        if (orchestrationSessionFailed(session)) {
           return {
             ok: false,
             state: "failed",
@@ -205,12 +212,12 @@ export async function runAllocatedOrchestrationTask(opts: RunAllocatedOrchestrat
   };
 }
 
-async function runLeaseTurn(opts: {
+export async function runOrchestrationLeaseTurn(opts: {
   context: ApiContext;
   mode: LiveRunMode;
   lease: Lease;
   worker: Worker;
-  workspace: LeaseWorkspace;
+  workspace: OrchestrationLeaseWorkspace;
   reviewPolicy?: ReviewPolicyExplanation;
   prompt: string;
   title?: string;
@@ -301,7 +308,7 @@ function prepareLeaseWorkspace(opts: {
   reviewBundles: ReviewBundleHandle[];
   runtime: { getWorktreeOptions(): WorktreeOptions };
   implementationWorkspace?: ImplementationWorkspace;
-}): LeaseWorkspace {
+}): OrchestrationLeaseWorkspace {
   if (isReviewerRole(opts.lease.role, opts.role)) {
     const source = opts.implementationWorkspace ?? { mode: "shared" as const, cwd: opts.baseCwd };
     const bundle = createReviewBundle({
@@ -378,10 +385,12 @@ function normalizeTaskPayload(
     title: parsed.title,
     model: parsed.model,
     effortLevel: parsed.effortLevel,
+    openaiRole: parsed.openaiRole,
+    anthropicRole: parsed.anthropicRole,
   };
 }
 
-function sessionFailed(session: OrchestrationRunSession): boolean {
+export function orchestrationSessionFailed(session: OrchestrationRunSession): boolean {
   return session.status === "error" || Boolean(session.error);
 }
 
