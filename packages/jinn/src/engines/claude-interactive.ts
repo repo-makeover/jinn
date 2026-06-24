@@ -645,6 +645,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       assumeStarted: !!warm, // warm PTY = SessionStart already fired (turn 1 or idle spawn)
       shouldDeferStopFailure: () => this.hasActiveUpstream(jinnSessionId),
       native: nativeCommand,
+      shouldDeferStopFailure: () => this.hasActiveUpstream(jinnSessionId),
     });
     const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: IPty; activeTools: number } = {
       resolver,
