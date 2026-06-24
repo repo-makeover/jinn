@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 
 // Regression: the mid-chat model/effort switch cold-respawn used to write the
 // per-turn --settings file BEFORE calling releaseSession() — but releaseSession()
@@ -70,6 +71,8 @@ import { CLAUDE_SETTINGS_DIR } from "../../shared/paths.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 15));
 const SID = "test-settings-file-regression";
+
+withTempJinnHome("jinn-claude-settings-");
 
 describe("InteractiveClaudeEngine — settings file survives model-switch cold respawn", () => {
   let lifecycle: PtyLifecycleManager;

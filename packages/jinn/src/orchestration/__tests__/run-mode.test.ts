@@ -5,22 +5,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiContext } from "../../gateway/api.js";
 import type { Engine, EngineRunOpts, EngineResult, JinnConfig } from "../../shared/types.js";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 import type { OrchestrationConfig, Worker } from "../types.js";
 
 let tmpHome: string;
-let prevHome: string | undefined;
+const testHome = withTempJinnHome("jinn-orch-run-mode-");
 
 beforeEach(() => {
-  prevHome = process.env.JINN_HOME;
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orch-run-mode-"));
-  process.env.JINN_HOME = tmpHome;
+  tmpHome = testHome.home();
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  fs.rmSync(tmpHome, { recursive: true, force: true });
   vi.resetModules();
 });
 

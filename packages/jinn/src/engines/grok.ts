@@ -5,6 +5,7 @@ import os from "node:os";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.js";
 
 export const GROK_DEFAULT_MODEL = "grok-build";
@@ -715,15 +716,13 @@ export class GrokEngine implements InterruptibleEngine {
   }
 
   private buildCleanEnv(): Record<string, string> {
-    const cleanEnv: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      if (k === "CODEX" || k.startsWith("CODEX_")) continue;
-      if (v !== undefined) cleanEnv[k] = v;
-    }
-    cleanEnv.GROK_CLAUDE_MCPS_ENABLED = "false";
-    cleanEnv.GROK_CURSOR_MCPS_ENABLED = "false";
-    return cleanEnv;
+    return buildEngineEnv(
+      {
+        GROK_CLAUDE_MCPS_ENABLED: "false",
+        GROK_CURSOR_MCPS_ENABLED: "false",
+      },
+      { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_", "CODEX"] },
+    );
   }
 
   private signalProcess(proc: ChildProcess, signal: NodeJS.Signals): void {

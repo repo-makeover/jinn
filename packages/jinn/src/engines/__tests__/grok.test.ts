@@ -111,6 +111,10 @@ beforeEach(() => {
   spawnCalls.length = 0;
 });
 
+function envFrom(call: SpawnCall): Record<string, string> {
+  return (call.opts as { env: Record<string, string> }).env;
+}
+
 describe("GrokEngine args", () => {
   it("builds headless streaming-json args", () => {
     const args = buildGrokHeadlessArgs({
@@ -153,6 +157,35 @@ describe("GrokEngine args", () => {
     expect(args[args.indexOf("--resume") + 1]).toBe("sess-1");
     expect(args).not.toContain("--session-id");
     expect(args.slice(-2)).toEqual(["-p", "continue work"]);
+  });
+});
+
+describe("GrokEngine child process environment", () => {
+  it("strips host secrets and engine loop variables while preserving Grok MCP disables", async () => {
+    const prevAws = process.env.AWS_SECRET_ACCESS_KEY;
+    const prevClaude = process.env.CLAUDE_CODE_SESSION;
+    const prevCodex = process.env.CODEX_HOME;
+    try {
+      process.env.AWS_SECRET_ACCESS_KEY = "host-secret";
+      process.env.CLAUDE_CODE_SESSION = "hook";
+      process.env.CODEX_HOME = "/tmp/codex-loop";
+
+      const { call } = await runWith([JSON.stringify({ type: "message", role: "assistant", content: [{ type: "text", text: "ok" }] })]);
+      const env = envFrom(call);
+
+      expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(env.CLAUDE_CODE_SESSION).toBeUndefined();
+      expect(env.CODEX_HOME).toBeUndefined();
+      expect(env.GROK_CLAUDE_MCPS_ENABLED).toBe("false");
+      expect(env.GROK_CURSOR_MCPS_ENABLED).toBe("false");
+    } finally {
+      if (prevAws === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
+      else process.env.AWS_SECRET_ACCESS_KEY = prevAws;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CODE_SESSION;
+      else process.env.CLAUDE_CODE_SESSION = prevClaude;
+      if (prevCodex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodex;
+    }
   });
 });
 

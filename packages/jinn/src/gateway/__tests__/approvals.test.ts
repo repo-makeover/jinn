@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import type { ServerResponse } from "node:http";
 import os from "node:os";
 import fs from "node:fs";
@@ -6,8 +7,7 @@ import path from "node:path";
 
 // Isolate the DB + approvals store before importing modules that resolve paths
 // from JINN_HOME at load time.
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-appr-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-appr-");
 
 type Api = typeof import("../api.js");
 type Approvals = typeof import("../approvals.js");

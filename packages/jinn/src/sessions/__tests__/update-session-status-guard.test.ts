@@ -2,10 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 
 // Isolate the DB: JINN_HOME must be set before importing registry.
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-status-guard-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-status-guard-");
 const reg = await import("../registry.js");
 
 describe("updateSession status precondition guard (ST-001)", () => {

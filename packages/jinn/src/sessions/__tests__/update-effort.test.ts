@@ -2,11 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 
 // Isolate the DB: JINN_HOME must be set before importing registry (SESSIONS_DB
 // is resolved at module load).
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-effort-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-effort-");
 const reg = await import("../registry.js");
 
 describe("updateSession persists model + effort_level (mid-chat switch backing store)", () => {

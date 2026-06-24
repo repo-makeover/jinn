@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
 // Point JINN_HOME at a temp dir BEFORE importing the module under test so
 // readPathCandidates resolves the relative-path ordering against it.
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-read-home-"));
-process.env.JINN_HOME = tmpHome;
+const { home: tmpHome } = withStaticTempJinnHome("jinn-read-home-");
 
 type Files = typeof import("../files.js");
 let files: Files;

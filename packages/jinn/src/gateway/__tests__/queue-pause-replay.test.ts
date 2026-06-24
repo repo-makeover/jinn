@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,20 +17,15 @@ async function setup() {
   return { dispatch, reg, SessionQueue };
 }
 
-let prevHome: string | undefined;
 let tmpHome: string;
+const testHome = withTempJinnHome("jinn-queue-pause-replay-");
 
 beforeEach(() => {
-  prevHome = process.env.JINN_HOME;
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-queue-pause-replay-"));
-  process.env.JINN_HOME = tmpHome;
+  tmpHome = testHome.home();
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  fs.rmSync(tmpHome, { recursive: true, force: true });
   vi.clearAllMocks();
 });
 

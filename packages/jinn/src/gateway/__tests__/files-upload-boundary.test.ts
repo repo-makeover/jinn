@@ -1,11 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-files-upload-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-files-upload-");
 
 const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
 

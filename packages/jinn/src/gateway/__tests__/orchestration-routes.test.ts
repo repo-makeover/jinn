@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 import { Readable } from "node:stream";
@@ -10,26 +9,21 @@ import { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import type { OrchestrationConfig } from "../../orchestration/types.js";
 import { createSession, getSession, updateSession } from "../../sessions/registry.js";
-import { setJinnHomeForTest, refreshJinnPaths } from "../../shared/paths.js";
 import { appendOrchestrationTelemetry } from "../../orchestration/telemetry.js";
 import { WORKTREE_MARKER, type WorktreeHandle } from "../../orchestration/worktree.js";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 
 let tmpDir: string;
 let dbPath: string;
-let prevHome: string | undefined;
+const testHome = withTempJinnHome("jinn-orch-api-");
 
 beforeEach(() => {
-  prevHome = process.env.JINN_HOME;
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orch-api-"));
-  setJinnHomeForTest(tmpDir);
+  tmpDir = testHome.home();
   dbPath = path.join(tmpDir, "orchestration.db");
 });
 
 afterEach(() => {
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  refreshJinnPaths();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  vi.clearAllMocks();
 });
 
 describe("GET /api/orchestration/*", () => {

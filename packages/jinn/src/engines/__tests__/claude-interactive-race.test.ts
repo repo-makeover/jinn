@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 
 // Controllable fake PTYs. Each pty.spawn() pushes one here so the test can drive
 // its onExit precisely (reproducing the kill->respawn race timing).
@@ -57,6 +58,8 @@ import { InteractiveClaudeEngine } from "../claude-interactive.js";
 import { PtyLifecycleManager } from "../pty-lifecycle.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 15));
+
+withTempJinnHome("jinn-claude-race-");
 
 describe("InteractiveClaudeEngine — kill->respawn race (Item C)", () => {
   let lifecycle: PtyLifecycleManager;

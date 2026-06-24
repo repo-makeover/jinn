@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 
@@ -40,21 +40,16 @@ function makeReq(method: string, urlPath: string) {
   } as any;
 }
 
-let prevHome: string | undefined;
 let tmpHome: string;
+const testHome = withTempJinnHome("jinn-ticket-dispatch-route-");
 
 beforeEach(() => {
-  prevHome = process.env.JINN_HOME;
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-ticket-dispatch-route-"));
-  process.env.JINN_HOME = tmpHome;
+  tmpHome = testHome.home();
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.doUnmock("../ticket-dispatch.js");
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  fs.rmSync(tmpHome, { recursive: true, force: true });
   vi.clearAllMocks();
 });
 

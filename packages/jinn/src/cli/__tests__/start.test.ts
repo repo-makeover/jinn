@@ -1,10 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-start-test-"));
-process.env.JINN_HOME = tmpHome;
+const { home: tmpHome } = withStaticTempJinnHome("jinn-start-test-");
 
 const lifecycle = vi.hoisted(() => ({
   getStatus: vi.fn(() => ({ running: true, pid: 123 })),

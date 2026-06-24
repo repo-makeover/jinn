@@ -1,17 +1,14 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 
 let tmpHome: string;
-let prevHome: string | undefined;
+const testHome = withTempJinnHome("jinn-orch-run-cli-");
 let logSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  prevHome = process.env.JINN_HOME;
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orch-run-cli-"));
-  process.env.JINN_HOME = tmpHome;
-  vi.resetModules();
+  tmpHome = testHome.home();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   writeGatewayFiles(tmpHome);
 });
@@ -19,10 +16,6 @@ beforeEach(() => {
 afterEach(() => {
   logSpy.mockRestore();
   vi.unstubAllGlobals();
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  fs.rmSync(tmpHome, { recursive: true, force: true });
-  vi.resetModules();
 });
 
 describe("jinn run orchestration client", () => {

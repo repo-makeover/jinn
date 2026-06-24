@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-cron-command-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-cron-command-");
 
 const triggerCronJob = vi.hoisted(() => vi.fn());
 

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import type { ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-archives-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-archives-");
 
 type Api = typeof import("../../gateway/api.js");
 type Reg = typeof import("../registry.js");

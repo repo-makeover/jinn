@@ -2,10 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 
 // SKILLS_DIR resolves from JINN_HOME at module load — set it before importing.
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-skills-traversal-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-skills-traversal-");
 const { copySkillToInstance } = await import("../skills.js");
 const { SKILLS_DIR } = await import("../../shared/paths.js");
 

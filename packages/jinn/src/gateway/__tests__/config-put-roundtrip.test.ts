@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,8 +8,7 @@ import { Readable } from "node:stream";
 import yaml from "js-yaml";
 import type { ApiContext } from "../api.js";
 
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-config-api-"));
-process.env.JINN_HOME = tmpHome;
+const { home: tmpHome } = withStaticTempJinnHome("jinn-config-api-");
 
 vi.mock("../../shared/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

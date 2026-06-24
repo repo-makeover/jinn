@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { codexMcpConfigFlagsFromFile } from "../mcp/resolver.js";
 
 const CODEX_SESSIONS_DIR = path.join(os.homedir(), ".codex", "sessions");
@@ -572,13 +573,7 @@ export class CodexEngine implements InterruptibleEngine {
   }
 
   private buildCleanEnv(): Record<string, string> {
-    const cleanEnv: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      if (k === "CODEX" || k.startsWith("CODEX_")) continue;
-      if (v !== undefined) cleanEnv[k] = v;
-    }
-    return cleanEnv;
+    return buildEngineEnv({}, { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_", "CODEX"] });
   }
 
   private signalProcess(proc: ChildProcess, signal: NodeJS.Signals): void {

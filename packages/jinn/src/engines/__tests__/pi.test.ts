@@ -103,7 +103,39 @@ beforeEach(() => {
   __resetPiThrottleForTests();
 });
 
+function envFrom(call: SpawnCall): Record<string, string> {
+  return (call.opts as { env: Record<string, string> }).env;
+}
+
 describe("PiEngine lifecycle", () => {
+  it("strips host secrets and engine loop variables from spawned env", async () => {
+    const prevOpenAi = process.env.OPENAI_API_KEY;
+    const prevClaude = process.env.CLAUDE_CODE_SESSION;
+    const prevCodex = process.env.CODEX_SESSION;
+    try {
+      process.env.OPENAI_API_KEY = "host-secret";
+      process.env.CLAUDE_CODE_SESSION = "hook";
+      process.env.CODEX_SESSION = "loop";
+
+      const { promise, call } = await startRun();
+      call.proc.emitStdout(agentEnd("ok") + "\n");
+      call.proc.close(0);
+      await promise;
+
+      const env = envFrom(call);
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.CLAUDE_CODE_SESSION).toBeUndefined();
+      expect(env.CODEX_SESSION).toBeUndefined();
+    } finally {
+      if (prevOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevOpenAi;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CODE_SESSION;
+      else process.env.CLAUDE_CODE_SESSION = prevClaude;
+      if (prevCodex === undefined) delete process.env.CODEX_SESSION;
+      else process.env.CODEX_SESSION = prevCodex;
+    }
+  });
+
   it("passes Jinn context as Pi's system prompt instead of prepending it to the user prompt", async () => {
     const { promise, call } = await startRun({ systemPrompt: "SYSTEM RULES" });
     const systemPromptIndex = call.args.indexOf("--system-prompt");

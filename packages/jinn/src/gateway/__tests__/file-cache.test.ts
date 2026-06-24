@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
+import { Writable } from "node:stream";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-cache-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-cache-");
 
 type Files = typeof import("../files.js");
 type Reg = typeof import("../../sessions/registry.js");
@@ -48,16 +49,31 @@ function fakeReq(headers: Record<string, string>) {
   return { headers } as unknown as import("node:http").IncomingMessage;
 }
 function fakeRes() {
-  const out: { status?: number; headers?: Record<string, unknown>; ended?: boolean; body?: unknown } = {};
-  const res = {
-    writeHead(status: number, headers?: Record<string, unknown>) { out.status = status; out.headers = headers; return res; },
-    end(body?: unknown) { out.ended = true; out.body = body; return res; },
-    // download path pipes a read stream into res; support that minimally.
-    on() { return res; },
-    once() { return res; },
-    emit() { return false; },
-    write() { return true; },
-  } as unknown as import("node:http").ServerResponse;
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+  const out: { status?: number; headers?: Record<string, unknown>; ended?: boolean; body?: unknown; done: Promise<void> } = { done };
+  const writable = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const endWritable = writable.end.bind(writable) as (...args: unknown[]) => void;
+  const res = Object.assign(writable, {
+    writeHead(status: number, headers?: Record<string, unknown>) {
+      out.status = status;
+      out.headers = headers;
+      return res;
+    },
+    end(body?: unknown, ...args: unknown[]) {
+      out.ended = true;
+      out.body = body;
+      endWritable(body, ...args);
+      resolveDone();
+      return res;
+    },
+  }) as unknown as import("node:http").ServerResponse;
   return { res, out };
 }
 const ctx = { emit: () => {} } as unknown as import("../api.js").ApiContext;
@@ -79,6 +95,7 @@ describe("GET /api/files/:id caching", () => {
   it("first GET returns 200 with immutable Cache-Control, ETag, Last-Modified + download header", async () => {
     const { res, out } = fakeRes();
     await files.handleFilesRequest(fakeReq({}), res, `/api/files/${id}`, "GET", ctx);
+    await out.done;
     expect(out.status).toBe(200);
     expect(out.headers!["Cache-Control"]).toBe("public, max-age=31536000, immutable");
     expect(out.headers!["ETag"]).toBe(etag);

@@ -121,6 +121,54 @@ describe("KiroEngine", () => {
     nextKiroCreditResetAtMock.mockClear();
   });
 
+  function envFrom(call: SpawnCall): Record<string, string> {
+    return (call.opts as { env: Record<string, string> }).env;
+  }
+
+  it("strips host secrets and engine loop variables while preserving explicit Kiro auth", async () => {
+    const prevGithub = process.env.GITHUB_TOKEN;
+    const prevClaude = process.env.CLAUDE_CODE_SESSION;
+    const prevCodex = process.env.CODEX_HOME;
+    const prevKiro = process.env.KIRO_API_KEY;
+    try {
+      process.env.GITHUB_TOKEN = "host-secret";
+      process.env.CLAUDE_CODE_SESSION = "hook";
+      process.env.CODEX_HOME = "/tmp/codex-loop";
+      process.env.KIRO_API_KEY = "kiro-token";
+      const engine = new KiroEngine({
+        authProbe: () => Promise.resolve({ ok: true }),
+        listSessions: () => Promise.resolve("kiro-env-session"),
+      });
+
+      const promise = engine.run({
+        prompt: "hello",
+        cwd: "/tmp/project",
+        sessionId: "track-env",
+      } as any);
+
+      await flush();
+      const call = spawnCalls[0];
+      call.proc.emitStdout("Answer\nCredits: 0.10 - Time: 1s\n");
+      call.proc.close(0);
+      await promise;
+
+      const env = envFrom(call);
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.CLAUDE_CODE_SESSION).toBeUndefined();
+      expect(env.CODEX_HOME).toBeUndefined();
+      expect(env.KIRO_API_KEY).toBe("kiro-token");
+    } finally {
+      if (prevGithub === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prevGithub;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CODE_SESSION;
+      else process.env.CLAUDE_CODE_SESSION = prevClaude;
+      if (prevCodex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodex;
+      if (prevKiro === undefined) delete process.env.KIRO_API_KEY;
+      else process.env.KIRO_API_KEY = prevKiro;
+    }
+  });
+
   it("spawns the documented headless command and recovers the session id", async () => {
     execFileMock.mockImplementation((_bin, _args, _opts, cb) => {
       cb(null, JSON.stringify([{ cwd: "/tmp/project", sessions: [{ sessionId: "kiro-s1", updatedAt: "2026-06-22T12:00:00.000Z" }] }]), "");

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { BoardTicket } from "../board-service.js";
 import type { OrchestrationRuntime } from "../../orchestration/runtime.js";
 
-let prevHome: string | undefined;
 let tmpHome: string;
+const testHome = withTempJinnHome("jinn-ticket-dispatch-orch-");
 const runtimes: OrchestrationRuntime[] = [];
 
 function orgDir() {
@@ -27,9 +27,7 @@ function readBoard(): BoardTicket[] {
 }
 
 beforeEach(() => {
-  prevHome = process.env.JINN_HOME;
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-ticket-dispatch-orch-"));
-  process.env.JINN_HOME = tmpHome;
+  tmpHome = testHome.home();
   vi.resetModules();
 });
 
@@ -39,9 +37,6 @@ afterEach(() => {
   vi.doUnmock("../board-service.js");
   vi.restoreAllMocks();
   vi.resetModules();
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  fs.rmSync(tmpHome, { recursive: true, force: true });
 });
 
 describe("ticket dispatch orchestration bridge", () => {

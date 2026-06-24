@@ -149,6 +149,37 @@ beforeEach(() => {
   spawnCalls.length = 0;
 });
 
+function envFrom(call: SpawnCall): Record<string, string> {
+  return (call.opts as { env: Record<string, string> }).env;
+}
+
+describe("CodexEngine — child process environment", () => {
+  it("strips host secrets and engine loop variables from spawned env", async () => {
+    const prevGithub = process.env.GITHUB_TOKEN;
+    const prevClaude = process.env.CLAUDE_CODE_SESSION;
+    const prevCodex = process.env.CODEX_HOME;
+    try {
+      process.env.GITHUB_TOKEN = "host-secret";
+      process.env.CLAUDE_CODE_SESSION = "hook";
+      process.env.CODEX_HOME = "/tmp/codex-loop";
+
+      const { call } = await runWith({}, [threadStarted("t1"), agentMessage("ok")]);
+      const env = envFrom(call);
+
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.CLAUDE_CODE_SESSION).toBeUndefined();
+      expect(env.CODEX_HOME).toBeUndefined();
+    } finally {
+      if (prevGithub === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prevGithub;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CODE_SESSION;
+      else process.env.CLAUDE_CODE_SESSION = prevClaude;
+      if (prevCodex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodex;
+    }
+  });
+});
+
 describe("CodexEngine — JSONL stream parsing into deltas", () => {
   it("maps an agent_message item to a text delta via onStream", async () => {
     const { deltas } = await runWith({}, [threadStarted("t1"), agentMessage("Hello world")]);

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
 // Throwaway DB before importing the registry (SESSIONS_DB resolves from JINN_HOME).
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-partial-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-partial-");
 
 type Reg = typeof import("../registry.js");
 let reg: Reg;

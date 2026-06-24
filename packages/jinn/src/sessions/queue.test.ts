@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
+import { withTempJinnHome } from "../test-utils/jinn-home.js";
 import { SessionQueue } from "./queue.js";
+
+withTempJinnHome();
 
 test("SessionQueue tracks queued work behind the active task", async () => {
   const queue = new SessionQueue();

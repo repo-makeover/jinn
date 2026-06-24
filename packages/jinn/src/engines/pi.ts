@@ -6,6 +6,7 @@ import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared
 import { logger } from "../shared/logger.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { JINN_HOME } from "../shared/paths.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { acquirePiMessageSlot, DEFAULT_PI_MESSAGES_PER_MINUTE } from "../shared/pi-throttle.js";
 
 interface LiveProcess {
@@ -406,13 +407,7 @@ export class PiEngine implements InterruptibleEngine {
   }
 
   private buildCleanEnv(): Record<string, string> {
-    const cleanEnv: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      if (k === "CODEX" || k.startsWith("CODEX_")) continue;
-      if (v !== undefined) cleanEnv[k] = v;
-    }
-    return cleanEnv;
+    return buildEngineEnv({}, { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_", "CODEX"] });
   }
 
   private signalProcess(proc: ChildProcess, signal: NodeJS.Signals): void {

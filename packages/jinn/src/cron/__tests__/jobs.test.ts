@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { CronJob } from "../../shared/types.js";
-import { refreshJinnPaths, setJinnHomeForTest } from "../../shared/paths.js";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 import { appendRunLog, loadJobs, saveJobs } from "../jobs.js";
 
 // Stub logger so tests don't touch the real log files
@@ -17,19 +16,14 @@ vi.mock("../../shared/logger.js", () => ({
 }));
 
 let tmpHome: string;
-const prevHome = process.env.JINN_HOME;
+const testHome = withTempJinnHome("jinn-cron-jobs-");
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-cron-jobs-"));
-  process.env.JINN_HOME = tmpHome;
-  setJinnHomeForTest(tmpHome);
+  tmpHome = testHome.home();
 });
 
 afterEach(() => {
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  refreshJinnPaths();
-  try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  vi.clearAllMocks();
 });
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {

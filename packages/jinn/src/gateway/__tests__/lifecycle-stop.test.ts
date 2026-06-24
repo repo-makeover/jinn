@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -7,8 +8,7 @@ import path from "node:path";
 
 // Point JINN_HOME at a temp dir BEFORE importing the module under test so
 // PID_FILE resolves inside it.
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-lifecycle-stop-"));
-process.env.JINN_HOME = tmpHome;
+const { home: tmpHome } = withStaticTempJinnHome("jinn-lifecycle-stop-");
 
 const { stop, stopAndWait } = await import("../lifecycle.js");
 const { PID_FILE } = await import("../../shared/paths.js");

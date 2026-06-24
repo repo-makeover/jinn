@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
 // Point the DB at a throwaway dir BEFORE importing the registry (SESSIONS_DB is
 // resolved from JINN_HOME at module load).
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-delq-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-delq-");
 
 type Reg = typeof import("../registry.js");
 let reg: Reg;

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 import type { ServerResponse } from "node:http";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 const scheduleOnLoadTailSync = vi.fn();
@@ -77,10 +77,11 @@ function makeCtx(api: Awaited<ReturnType<typeof setup>>["api"]) {
   } as unknown as import("../api.js").ApiContext;
 }
 
+let tmpHome: string;
+const testHome = withTempJinnHome("jinn-session-query-");
+
 beforeEach(() => {
-  prevHome = process.env.JINN_HOME;
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-session-query-"));
-  process.env.JINN_HOME = tmpHome;
+  tmpHome = testHome.home();
   scheduleOnLoadTailSync.mockReset();
   scheduleTranscriptBackfill.mockReset();
   loadRawTranscript.mockReset();
@@ -88,14 +89,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (prevHome === undefined) delete process.env.JINN_HOME;
-  else process.env.JINN_HOME = prevHome;
-  fs.rmSync(tmpHome, { recursive: true, force: true });
   vi.clearAllMocks();
 });
-
-let prevHome: string | undefined;
-let tmpHome: string;
 
 describe("session query routes", () => {
   it("returns the default grouped session payload shape for GET /api/sessions", async () => {

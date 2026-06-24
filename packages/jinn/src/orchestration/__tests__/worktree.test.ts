@@ -14,10 +14,13 @@ import {
 } from "../worktree.js";
 import { OrchestrationRuntime } from "../runtime.js";
 import type { OrchestrationConfig } from "../types.js";
+import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 
 let tmpDir: string;
 let repoDir: string;
 let worktreeRoot: string;
+
+withTempJinnHome("jinn-worktree-home-");
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-worktree-"));

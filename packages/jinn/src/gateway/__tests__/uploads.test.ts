@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
 // Resolve paths under a throwaway home BEFORE importing the modules under test.
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-up-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-up-");
 
 type Files = typeof import("../files.js");
 type Paths = typeof import("../../shared/paths.js");

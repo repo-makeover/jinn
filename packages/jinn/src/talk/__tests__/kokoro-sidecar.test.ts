@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 const SIDECAR = path.resolve(__dirname, "../kokoro_sidecar.py");
-const children: ChildProcessWithoutNullStreams[] = [];
+const children: ChildProcess[] = [];
 
 afterEach(() => {
   for (const child of children.splice(0)) {
@@ -60,11 +60,11 @@ function freePort(): Promise<number> {
   });
 }
 
-function waitForStdout(child: ChildProcessWithoutNullStreams, text: string): Promise<void> {
+function waitForStdout(child: ChildProcess, text: string): Promise<void> {
   return new Promise((resolve, reject) => {
     let stdout = "";
     const timer = setTimeout(() => reject(new Error(`timed out waiting for ${text}; saw ${stdout}`)), 5_000);
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
       if (stdout.includes(text)) {
         clearTimeout(timer);
@@ -78,10 +78,10 @@ function waitForStdout(child: ChildProcessWithoutNullStreams, text: string): Pro
   });
 }
 
-function collectStdoutUntilExit(child: ChildProcessWithoutNullStreams): Promise<string> {
+function collectStdoutUntilExit(child: ChildProcess): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
     child.on("error", reject);

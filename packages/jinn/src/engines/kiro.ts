@@ -3,6 +3,7 @@ import type { EngineRunOpts, EngineResult, InterruptibleEngine, JinnConfig } fro
 import { logger } from "../shared/logger.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { nextKiroCreditResetAt, recordKiroCreditUsage } from "../shared/usage-status.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 
 const TURN_TIMEOUT_MS = 14 * 24 * 60 * 60 * 1000;
 const OUTPUT_MAX = 2 * 1024 * 1024;
@@ -318,14 +319,10 @@ export class KiroEngine implements InterruptibleEngine {
   }
 
   private buildCleanEnv(): Record<string, string> {
-    const cleanEnv: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      if (k === "CODEX" || k.startsWith("CODEX_")) continue;
-      if (v !== undefined) cleanEnv[k] = v;
-    }
-    if (process.env.KIRO_API_KEY) cleanEnv.KIRO_API_KEY = process.env.KIRO_API_KEY;
-    return cleanEnv;
+    return buildEngineEnv(
+      process.env.KIRO_API_KEY ? { KIRO_API_KEY: process.env.KIRO_API_KEY } : {},
+      { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_", "CODEX"] },
+    );
   }
 
   private signalProcess(proc: ChildProcess, signal: NodeJS.Signals): void {

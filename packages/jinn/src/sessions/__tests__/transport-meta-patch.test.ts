@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-transport-meta-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-transport-meta-");
 const reg = await import("../registry.js");
 
 describe("patchSessionTransportMeta", () => {

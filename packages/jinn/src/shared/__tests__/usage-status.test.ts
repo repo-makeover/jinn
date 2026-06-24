@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
 // Point JINN_HOME at a throwaway dir before importing (paths are resolved at load).
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-usage-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-usage-");
 
 type Mod = typeof import("../usage-status.js");
 let M: Mod;

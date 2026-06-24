@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { withStaticTempJinnHome } from "../../test-utils/jinn-home.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-att-"));
-process.env.JINN_HOME = tmp;
+const { home: tmp } = withStaticTempJinnHome("jinn-att-");
 
 type Files = typeof import("../files.js");
 type Reg = typeof import("../../sessions/registry.js");
