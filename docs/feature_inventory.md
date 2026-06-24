@@ -36,10 +36,11 @@
 - `/orchestration` shows real orchestration status, workers, running leases,
   blocked queue items, durable continuations, dual-lane selection manifests,
   managed worktrees, and telemetry/cost summaries.
-- Dashboard actions are deliberately limited to existing safe backend actions:
-  retry a continuation only when it is `failed`, and select a winner only for a
-  dual-lane manifest in `selection_required`.
-- Disabled action controls explain the state boundary. Pause queue, cancel lease,
+- Dashboard actions are deliberately limited to safe backend actions: retry a
+  continuation only when it is `failed`, select a winner only for a dual-lane
+  manifest in `selection_required`, pause/resume the global orchestration queue,
+  and stop a running lease through its mapped Jinn session interruption path.
+- Disabled action controls explain the state boundary. Per-task queue pause,
   automatic patch integration, raw diff viewing, and raw prompt/model-output
   viewing are not exposed.
 
@@ -77,14 +78,14 @@
   - `orchestration.empiricalRouting: true` lets runtime startup use historical telemetry scores as a deterministic worker tie-break after hard constraints and explicit tier/cost preferences.
   - Runtime reload/shutdown paths preserve active orchestration work, replay deferred org/config refresh after drain, recover stale `dispatching` continuations, and release owned leases before closing persistent state.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
-  - The `/orchestration` dashboard is observe-first and exposes only failed-continuation retry plus explicit dual-lane selection. Pause queue, cancel lease, raw diff viewing, and automatic patch integration remain deferred.
+  - The `/orchestration` dashboard exposes failed-continuation retry, explicit dual-lane selection, global queue pause/resume, and strict running-lease stop. Per-task queue pause, raw diff viewing, and automatic patch integration remain deferred.
 
 ## API
 
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
 - `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded
-  reason, and active counts.
+  reason, queue pause state, and active counts.
 - `GET /api/orchestration/workers` returns configured workers.
 - `GET /api/orchestration/leases` returns existing durable orchestration leases.
 - `GET /api/orchestration/queue` returns blocked-resource queue items, including missing roles and resume triggers.
@@ -97,16 +98,20 @@
 - `GET /api/orchestration/dual-lane` returns sanitized dual-lane manifest
   summaries without prompt hashes or raw diffs.
 - `POST /api/orchestration/continuations/retry` re-attempts a failed continuation through the live runtime.
+- `POST /api/orchestration/queue/pause` persists a global queue pause with an optional reason.
+- `POST /api/orchestration/queue/resume` clears the global queue pause and retries queued work through live headroom.
+- `POST /api/orchestration/leases/stop` interrupts the Jinn session mapped to a running lease, or releases immediately when the mapped session is terminal.
 - `POST /api/orchestration/run` executes `single_worker`, `single_worker_with_review`, and `dual_lane` tasks through the daemon runtime.
 - `POST /api/orchestration/dual-lane/select` selects a completed dual-lane winner and archives/discards the loser lane.
 - Run responses include `reviewPolicy.explanations` for reviewer selection, explicit same-family fallback, and blocked reviewer allocation.
 - Blocked live runs persist a durable continuation keyed by task/coordinator and auto-resume on later resource availability.
 - These routes inherit the existing `/api/*` gateway token gate; unsupported methods on each path return `405`.
 - Fidelity gaps:
-  - GET routes observe state only; `POST /api/orchestration/run` is the only M5 mutating route.
+  - GET routes observe state only; POST controls require an enabled live runtime.
   - The run route allocates leases, creates sessions, heartbeats leases on the existing 5s runner interval, passes isolated worktree cwd values to eligible implementation sessions, hands reviewers diff bundles, and releases leases on terminal paths.
   - If no orchestration runtime exists, state routes retain the no-daemon/test fallback; the run route fails instead of opening its own live scheduler.
-  - Dashboard controls are limited to retrying failed continuations and selecting dual-lane winners. No pause queue, cancel API, raw diff view, or automatic dual-lane patch application is wired yet.
+  - Lease stop does not release a running lease directly; the mapped run/session `finally` path remains release owner after interruption.
+  - No per-task queue pause, raw diff view, raw prompt/model-output view, or automatic dual-lane patch application is wired yet.
 
 ### Kanban ticket dispatch scheduler bridge
 - `packages/jinn/src/gateway/org-worker-bridge.ts`

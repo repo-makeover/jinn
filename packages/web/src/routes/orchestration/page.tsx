@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
-import { AlertTriangle, CheckCircle2, GitBranch, Network, RefreshCw, RotateCcw } from "lucide-react"
+import { AlertTriangle, CheckCircle2, GitBranch, Network, Pause, Play, RefreshCw, RotateCcw, Square } from "lucide-react"
 import { PageLayout, ToolbarActions } from "@/components/page-layout"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useBreadcrumbs } from "@/context/breadcrumb-context"
 import {
   loadOrchestrationDashboard,
+  pauseOrchestrationQueue,
   retryContinuation,
+  resumeOrchestrationQueue,
   selectDualLaneWinner,
+  stopOrchestrationLease,
   type ContinuationSummary,
   type DualLaneSummary,
   type OrchestrationDashboardData,
@@ -50,6 +53,8 @@ export default function OrchestrationPage() {
     () => data?.dualLane.filter((entry) => entry.state === "selection_required") ?? [],
     [data],
   )
+  const canControlQueue = Boolean(data?.status.enabled && data.status.runtimeBound)
+  const queueActionKey = data?.status.queuePaused ? "queue:resume" : "queue:pause"
 
   async function runAction(key: string, action: () => Promise<unknown>) {
     setActionKey(key)
@@ -84,6 +89,16 @@ export default function OrchestrationPage() {
                     Updated {lastRefresh.toLocaleTimeString()}
                   </span>
                 )}
+                {data && (
+                  <QueueControlButton
+                    data={data}
+                    disabled={!canControlQueue || actionKey === queueActionKey}
+                    onClick={() => runAction(
+                      queueActionKey,
+                      () => data.status.queuePaused ? resumeOrchestrationQueue() : pauseOrchestrationQueue("Paused from dashboard"),
+                    )}
+                  />
+                )}
                 <button
                   onClick={() => void refresh()}
                   className="focus-ring w-8 h-8 flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--separator)] bg-[var(--material-thin)] text-[var(--text-secondary)]"
@@ -100,6 +115,19 @@ export default function OrchestrationPage() {
           {(error || actionError) && (
             <Banner tone="error" text={error ?? actionError ?? ""} />
           )}
+          {data && (
+            <div className="mb-[var(--space-3)] lg:hidden">
+              <QueueControlButton
+                data={data}
+                disabled={!canControlQueue || actionKey === queueActionKey}
+                fullWidth
+                onClick={() => runAction(
+                  queueActionKey,
+                  () => data.status.queuePaused ? resumeOrchestrationQueue() : pauseOrchestrationQueue("Paused from dashboard"),
+                )}
+              />
+            </div>
+          )}
           {loading ? (
             <EmptyState text="Loading orchestration state..." />
           ) : !data ? (
@@ -115,7 +143,13 @@ export default function OrchestrationPage() {
               </TabsList>
 
               <TabsContent value="Overview">
-                <Overview data={data} failedContinuations={failedContinuations.length} selectableRuns={selectableRuns.length} />
+                <Overview
+                  data={data}
+                  failedContinuations={failedContinuations.length}
+                  selectableRuns={selectableRuns.length}
+                  actionKey={actionKey}
+                  onStopLease={(leaseId) => runAction(`stop:${leaseId}`, () => stopOrchestrationLease(leaseId, "Stopped from dashboard"))}
+                />
               </TabsContent>
               <TabsContent value="Workers">
                 <Section title="Workers" count={data.workers.length}>
@@ -198,16 +232,22 @@ export default function OrchestrationPage() {
   )
 }
 
-function Overview({ data, failedContinuations, selectableRuns }: {
+function Overview({ data, failedContinuations, selectableRuns, actionKey, onStopLease }: {
   data: OrchestrationDashboardData
   failedContinuations: number
   selectableRuns: number
+  actionKey: string | null
+  onStopLease: (leaseId: string) => void
 }) {
   const totalCost = data.telemetry.summary.totals.totalCost
+  const runningLeases = data.leases.filter((lease) => lease.state === "running")
   return (
     <div className="grid gap-[var(--space-4)]">
       {data.status.degradedReason && <Banner tone="warn" text={data.status.degradedReason} />}
       {data.status.disabledReason && <Banner tone="warn" text={data.status.disabledReason} />}
+      {data.status.queuePaused && (
+        <Banner tone="warn" text={`Queue paused${data.status.pauseReason ? `: ${data.status.pauseReason}` : ""}`} />
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-[var(--space-3)]">
         <Metric label="Workers" value={data.workers.length} icon={<Network size={16} />} />
         <Metric label="Running leases" value={data.status.counts.runningLeases} icon={<CheckCircle2 size={16} />} />
@@ -218,16 +258,63 @@ function Overview({ data, failedContinuations, selectableRuns }: {
         <Metric label="Telemetry runs" value={data.telemetry.summary.totals.count} />
         <Metric label="Recorded cost" value={`$${totalCost.toFixed(3)}`} />
       </div>
-      <Section title="Running leases" count={data.leases.filter((lease) => lease.state === "running").length}>
-        <Table
-          columns={["Lease", "Task", "Worker", "Role", "Expires"]}
-          rows={data.leases
-            .filter((lease) => lease.state === "running")
-            .map((lease) => [lease.leaseId, lease.taskId, lease.workerId, lease.role, formatDate(lease.leaseExpiresAt)])}
-          empty="No running leases."
-        />
+      <Section title="Running leases" count={runningLeases.length}>
+        <RunningLeaseList leases={runningLeases} actionKey={actionKey} onStopLease={onStopLease} />
       </Section>
     </div>
+  )
+}
+
+function RunningLeaseList({ leases, actionKey, onStopLease }: {
+  leases: OrchestrationDashboardData["leases"]
+  actionKey: string | null
+  onStopLease: (leaseId: string) => void
+}) {
+  if (leases.length === 0) return <EmptyState text="No running leases." />
+  return (
+    <div className="grid gap-[var(--space-2)]">
+      {leases.map((lease) => {
+        const key = `stop:${lease.leaseId}`
+        return (
+          <Row key={lease.leaseId}>
+            <div className="min-w-0">
+              <div className="font-[var(--weight-semibold)] text-[var(--text-primary)] truncate">{lease.taskId}</div>
+              <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] truncate">
+                {lease.leaseId} - {lease.workerId} - {lease.role} - expires {formatDate(lease.leaseExpiresAt)}
+              </div>
+            </div>
+            <button
+              disabled={actionKey === key}
+              title="Stop the mapped running session for this lease"
+              onClick={() => onStopLease(lease.leaseId)}
+              className="focus-ring h-8 px-3 flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)] shrink-0"
+            >
+              <Square size={13} />
+              Stop lease
+            </button>
+          </Row>
+        )
+      })}
+    </div>
+  )
+}
+
+function QueueControlButton({ data, disabled, fullWidth, onClick }: {
+  data: OrchestrationDashboardData
+  disabled: boolean
+  fullWidth?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      disabled={disabled}
+      title={queueControlTitle(data)}
+      onClick={onClick}
+      className={`focus-ring h-8 px-3 flex items-center justify-center gap-2 rounded-[var(--radius-sm)] border border-[var(--separator)] bg-[var(--material-thin)] text-[length:var(--text-footnote)] text-[var(--text-secondary)] disabled:opacity-45 ${fullWidth ? "w-full" : ""}`}
+    >
+      {data.status.queuePaused ? <Play size={14} /> : <Pause size={14} />}
+      {data.status.queuePaused ? "Resume queue" : "Pause queue"}
+    </button>
   )
 }
 
@@ -416,7 +503,14 @@ function statusText(data: OrchestrationDashboardData | null): string {
   if (!data) return "Loading runtime state"
   if (!data.status.enabled) return "Disabled by gateway configuration"
   if (!data.status.runtimeBound) return "Enabled, runtime not bound"
+  if (data.status.queuePaused) return `Queue paused, ${data.status.counts.runningLeases} running lease(s)`
   return `${data.status.counts.runningLeases} running lease(s), ${data.status.counts.queueItems} queued item(s)`
+}
+
+function queueControlTitle(data: OrchestrationDashboardData): string {
+  if (!data.status.enabled) return data.status.disabledReason ?? "Orchestration is disabled"
+  if (!data.status.runtimeBound) return data.status.degradedReason ?? "Orchestration runtime is not bound"
+  return data.status.queuePaused ? "Resume queued orchestration continuations" : "Pause queued orchestration continuations"
 }
 
 function formatDate(value: string | undefined): string {

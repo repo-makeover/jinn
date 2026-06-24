@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import OrchestrationPage from "./page"
 import {
   loadOrchestrationDashboard,
+  pauseOrchestrationQueue,
   retryContinuation,
+  resumeOrchestrationQueue,
   selectDualLaneWinner,
+  stopOrchestrationLease,
   type OrchestrationDashboardData,
 } from "@/lib/orchestration-api"
 
@@ -16,13 +19,19 @@ vi.mock("@/components/page-layout", () => ({
 
 vi.mock("@/lib/orchestration-api", () => ({
   loadOrchestrationDashboard: vi.fn(),
+  pauseOrchestrationQueue: vi.fn(async () => ({ ok: true })),
   retryContinuation: vi.fn(async () => ({ ok: true })),
+  resumeOrchestrationQueue: vi.fn(async () => ({ ok: true })),
   selectDualLaneWinner: vi.fn(async () => ({ ok: true })),
+  stopOrchestrationLease: vi.fn(async () => ({ ok: true })),
 }))
 
 const loadMock = vi.mocked(loadOrchestrationDashboard)
+const pauseQueueMock = vi.mocked(pauseOrchestrationQueue)
 const retryMock = vi.mocked(retryContinuation)
+const resumeQueueMock = vi.mocked(resumeOrchestrationQueue)
 const selectMock = vi.mocked(selectDualLaneWinner)
+const stopLeaseMock = vi.mocked(stopOrchestrationLease)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -35,6 +44,9 @@ describe("OrchestrationPage", () => {
         enabled: false,
         runtimeBound: false,
         degraded: false,
+        queuePaused: false,
+        pausedAt: null,
+        pauseReason: null,
         disabledReason: "orchestration is disabled",
         degradedReason: null,
         counts: { workers: 0, runningLeases: 0, queueItems: 0, allocations: 0, continuations: 0, activeWork: false },
@@ -46,8 +58,64 @@ describe("OrchestrationPage", () => {
 
     expect(await screen.findByText("Disabled by gateway configuration")).toBeTruthy()
     expect(screen.getByText("orchestration is disabled")).toBeTruthy()
+    expect((screen.getAllByRole("button", { name: "Pause queue" })[0] as HTMLButtonElement).disabled).toBe(true)
     activateTab("Workers")
     expect(await screen.findByText("No rows.")).toBeTruthy()
+  })
+
+  it("renders paused state and resumes the global queue", async () => {
+    loadMock.mockResolvedValue(sampleData({
+      status: {
+        enabled: true,
+        runtimeBound: true,
+        degraded: false,
+        queuePaused: true,
+        pausedAt: "2026-06-24T10:00:00.000Z",
+        pauseReason: "operator hold",
+        disabledReason: null,
+        degradedReason: null,
+        counts: { workers: 1, runningLeases: 0, queueItems: 1, allocations: 0, continuations: 1, activeWork: true },
+      },
+      queue: [{ taskId: "queued-task", coordinatorId: "coord", state: "blocked_resource" }],
+    }))
+
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText("Queue paused, 0 running lease(s)")).toBeTruthy()
+    expect(screen.getByText("Queue paused: operator hold")).toBeTruthy()
+    fireEvent.click(screen.getAllByRole("button", { name: "Resume queue" })[0])
+
+    await waitFor(() => expect(resumeQueueMock).toHaveBeenCalled())
+  })
+
+  it("shows stop only for running leases and surfaces stop failures", async () => {
+    stopLeaseMock.mockRejectedValueOnce(new Error("mapped session engine is not interruptible"))
+    loadMock.mockResolvedValue(sampleData({
+      status: {
+        enabled: true,
+        runtimeBound: true,
+        degraded: false,
+        queuePaused: false,
+        pausedAt: null,
+        pauseReason: null,
+        disabledReason: null,
+        degradedReason: null,
+        counts: { workers: 1, runningLeases: 1, queueItems: 0, allocations: 1, continuations: 0, activeWork: true },
+      },
+      leases: [
+        { leaseId: "lease-run", taskId: "task-run", coordinatorId: "coord", workerId: "worker-1", role: "seniorImplementer", state: "running", leaseExpiresAt: "2026-06-24T10:05:00.000Z" },
+        { leaseId: "lease-old", taskId: "task-old", coordinatorId: "coord", workerId: "worker-1", role: "seniorImplementer", state: "released" },
+      ],
+    }))
+
+    render(<OrchestrationPage />)
+
+    const stopButtons = await screen.findAllByRole("button", { name: "Stop lease" })
+    expect(stopButtons).toHaveLength(1)
+    fireEvent.click(stopButtons[0])
+
+    await waitFor(() => expect(stopLeaseMock).toHaveBeenCalledWith("lease-run", "Stopped from dashboard"))
+    expect(await screen.findByText("mapped session engine is not interruptible")).toBeTruthy()
   })
 
   it("shows retry only for failed continuations and runs the retry action", async () => {
@@ -99,6 +167,9 @@ function sampleData(overrides: Partial<OrchestrationDashboardData> = {}): Orches
       enabled: true,
       runtimeBound: true,
       degraded: false,
+      queuePaused: false,
+      pausedAt: null,
+      pauseReason: null,
       disabledReason: null,
       degradedReason: null,
       counts: { workers: 1, runningLeases: 0, queueItems: 0, allocations: 0, continuations: 0, activeWork: false },

@@ -8,7 +8,7 @@ import { listProtectedDualLaneTaskIds } from "./dual-lane-state.js";
 import type { LiveRunContinuationRecord } from "./live-run.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
 import { filterWorkersWithHeadroom, type HeadroomFilterResult } from "./routing-headroom.js";
-import { OrchestrationStore } from "./store.js";
+import { OrchestrationStore, type QueuePauseState } from "./store.js";
 import { computeWorkerScores, readOrchestrationTelemetry } from "./telemetry.js";
 import {
   DEFAULT_LEASE_DURATION_MS,
@@ -55,6 +55,7 @@ export interface ResumeQueuedRun {
 
 export type RetryLiveContinuationResult =
   | { ok: false; reason: "not_found" | "invalid_state"; message: string }
+  | { ok: true; state: "paused"; continuation: LiveRunContinuationRecord; controlState: QueuePauseState }
   | {
     ok: true;
     state: "blocked_resource";
@@ -116,7 +117,7 @@ export class OrchestrationRuntime {
 
   setResumeQueuedRunHandler(handler: ResumeQueuedRunHandler | undefined): void {
     this.resumeQueuedRunHandler = handler;
-    if (handler && !this.closing) void this.retryQueuedWithLiveHeadroom();
+    if (handler && !this.closing && !this.getControlState().queuePaused) void this.retryQueuedWithLiveHeadroom();
   }
 
   requestAllocation(request: AllocationRequest): AllocationResult {
@@ -145,17 +146,18 @@ export class OrchestrationRuntime {
 
   releaseLease(leaseId: string, coordinatorId?: string): Lease {
     const lease = this.scheduler.releaseLease(leaseId, coordinatorId);
-    void this.retryQueuedWithLiveHeadroom();
+    if (!this.getControlState().queuePaused) void this.retryQueuedWithLiveHeadroom();
     return lease;
   }
 
   expireLeases(now?: Date): Lease[] {
     const expired = this.scheduler.expireLeases(now);
-    if (expired.length > 0) void this.retryQueuedWithLiveHeadroom();
+    if (expired.length > 0 && !this.getControlState().queuePaused) void this.retryQueuedWithLiveHeadroom();
     return expired;
   }
 
   retryQueued(): AllocationResult[] {
+    if (this.getControlState().queuePaused) return [];
     const results = this.scheduler.retryQueued();
     this.dispatchRetryResults(results);
     return results;
@@ -163,8 +165,10 @@ export class OrchestrationRuntime {
 
   async retryQueuedWithLiveHeadroom(): Promise<AllocationResult[]> {
     if (this.closing) return [];
+    if (this.getControlState().queuePaused) return [];
     const allowedWorkerIds = await this.resolveLiveHeadroomWorkerIds();
     if (this.closing) return [];
+    if (this.getControlState().queuePaused) return [];
     const results = this.scheduler.retryQueued({
       allowedWorkerIds,
     });
@@ -219,6 +223,27 @@ export class OrchestrationRuntime {
     return this.store.listLiveContinuations();
   }
 
+  getControlState(): QueuePauseState {
+    return this.store.getQueuePauseState();
+  }
+
+  pauseQueue(reason?: string): QueuePauseState {
+    const state = {
+      queuePaused: true,
+      pausedAt: new Date().toISOString(),
+      pauseReason: sanitizePauseReason(reason),
+    };
+    this.store.setQueuePauseState(state);
+    return state;
+  }
+
+  async resumeQueue(): Promise<{ controlState: QueuePauseState; retryResults: AllocationResult[] }> {
+    const controlState = { queuePaused: false, pausedAt: null, pauseReason: null };
+    this.store.setQueuePauseState(controlState);
+    const retryResults = await this.retryQueuedWithLiveHeadroom();
+    return { controlState, retryResults };
+  }
+
   async retryFailedLiveContinuation(taskId: string, coordinatorId: string): Promise<RetryLiveContinuationResult> {
     const current = this.store.getLiveContinuation(taskId, coordinatorId);
     if (!current) {
@@ -246,6 +271,9 @@ export class OrchestrationRuntime {
         reason: "not_found",
         message: `live continuation ${taskId}/${coordinatorId} disappeared before retry`,
       };
+    }
+    if (this.getControlState().queuePaused) {
+      return { ok: true, state: "paused", continuation: queued, controlState: this.getControlState() };
     }
 
     const result = this.scheduler.requestAllocation(buildContinuationRequest(queued, this.config), {
@@ -376,7 +404,7 @@ export class OrchestrationRuntime {
         logger.warn(`Orchestration invariant cleanup failed for lease ${lease.leaseId}: ${err instanceof Error ? err.message : err}`);
       }
     }
-    if (opts.retryQueued !== false && !this.closing) void this.retryQueuedWithLiveHeadroom();
+    if (opts.retryQueued !== false && !this.closing && !this.getControlState().queuePaused) void this.retryQueuedWithLiveHeadroom();
   }
 
   private recoverStaleDispatchingContinuations(): void {
@@ -504,4 +532,9 @@ function resolveEmpiricalWorkerScores(config: JinnConfig): Record<string, number
     logger.warn(`Orchestration empirical routing disabled for this boot: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
+}
+
+function sanitizePauseReason(reason: string | undefined): string | null {
+  const trimmed = typeof reason === "string" ? reason.trim() : "";
+  return trimmed ? trimmed.slice(0, 500) : null;
 }

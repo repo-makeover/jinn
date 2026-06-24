@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   loadOrchestrationDashboard,
+  pauseOrchestrationQueue,
   retryContinuation,
+  resumeOrchestrationQueue,
   selectDualLaneWinner,
+  stopOrchestrationLease,
 } from "../orchestration-api"
 
 afterEach(() => {
@@ -34,12 +37,15 @@ describe("orchestration-api", () => {
     await expect(loadOrchestrationDashboard()).rejects.toThrow("orchestration is disabled")
   })
 
-  it("posts retry and dual-lane selection actions", async () => {
+  it("posts retry, selection, queue, and lease-stop actions", async () => {
     const fetchMock = vi.fn(async () => ok({ ok: true }))
     vi.stubGlobal("fetch", fetchMock)
 
     await retryContinuation("task-1", "coord-1")
     await selectDualLaneWinner("task-2", "openai")
+    await pauseOrchestrationQueue("operator hold")
+    await resumeOrchestrationQueue()
+    await stopOrchestrationLease("lease-1", "operator stop")
 
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/continuations/retry"), expect.objectContaining({
       method: "POST",
@@ -48,6 +54,18 @@ describe("orchestration-api", () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/dual-lane/select"), expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ taskId: "task-2", winnerLane: "openai" }),
+    }))
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/queue/pause"), expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ reason: "operator hold" }),
+    }))
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/queue/resume"), expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({}),
+    }))
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/leases/stop"), expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ leaseId: "lease-1", reason: "operator stop" }),
     }))
   })
 })
@@ -66,6 +84,9 @@ function payloadFor(url: string) {
       enabled: true,
       runtimeBound: true,
       degraded: false,
+      queuePaused: false,
+      pausedAt: null,
+      pauseReason: null,
       disabledReason: null,
       degradedReason: null,
       counts: { workers: 1, runningLeases: 0, queueItems: 0, allocations: 0, continuations: 0, activeWork: false },

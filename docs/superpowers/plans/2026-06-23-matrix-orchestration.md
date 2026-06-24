@@ -1,7 +1,7 @@
 # Matrix Orchestration — End-to-End Capability Plan
 
-> **Status:** Phase 1 and M1–M10.5 are **complete** (Codex, 2026-06-24);
-> M11 dashboard/control work remains next.
+> **Status:** Phase 1 and M1–M12 are **complete** (Codex, 2026-06-24);
+> M12 adds the post-dashboard safe-controls slice.
 > This is the **full-capability roadmap** from inert scaffold to real,
 > daemon-integrated provider-neutral matrix scheduler; reading it changes no code.
 >
@@ -10,7 +10,7 @@
 > (Gates 0–7: orient → plan → skeleton → core → interface/IO/persistence → hardening
 > → docs → final QA/QC), with a per-gate audit, a defect ledger, and the 800-line
 > file limit enforced via `tools/line_count_check.sh`. The *roadmap* is the milestone
-> sequence M1–M10, M10.5, M11; the *gate loop* is how each milestone is implemented.
+> sequence M1–M10, M10.5, M11, M12; the *gate loop* is how each milestone is implemented.
 >
 > **Authority model (from the source brief):** one strong implementer per slice +
 > strict written brief + small patch slices + deterministic tests + manual review.
@@ -592,19 +592,45 @@ the source brief.
 - **Team:** architecture-mode single implementer; **review:** fail-safe/recovery
   reviewer plus department integration review focused on runtime lifecycle and shutdown.
 
-### M11 — Dashboard / control surface (brief Phase 10)
+### M11 — Dashboard / control surface (brief Phase 10) (complete, 2026-06-24)
 
 - **Goal:** expose workers/leases/queue/quotas/worktrees/review/QA/cost in the web UI
   with **concrete** labels (no "AI team / smart mode / auto magic").
-- **Blocking precondition:** M10.5 is complete and the M1–M10 audit has zero known open
+- **Blocking precondition:** M10.5 was complete and the M1–M10 audit had zero known open
   defects. Dashboard work must not add controls over a runtime whose lifecycle/recovery
   invariants are still defective.
-- **Deliverables:** `packages/web` views consuming the M4 `/api/orchestration/` routes;
-  read-first, then guarded controls (pause queue, cancel lease) reusing existing
-  approval patterns.
-- **Exit gate:** UI reflects real scheduler state; controls are auth-gated and reuse
-  existing approval flows; no control claims an action it cannot perform.
+- **Delivered:** `/orchestration` observe-first dashboard consuming real
+  `/api/orchestration/` routes for workers, leases, queue, allocations,
+  continuations, telemetry, worktrees, and dual-lane manifests. Mutating actions
+  were limited to failed-continuation retry and explicit dual-lane winner
+  selection. Backend preflight patched live-headroom filtering for failed
+  continuation retry and orchestration-backed ticket dispatch.
+- **Exit gate:** UI reflects real scheduler state; controls are auth-gated and
+  no control claims an action it cannot perform.
 - **Team:** department GUI specialist (this is where the department's UX strength fits).
+
+### M12 — Safe controls (complete, 2026-06-24)
+
+- **Goal:** add operator-safe global queue pause/resume and running-lease stop
+  controls after M11, without raw diff/prompt/output viewing, automatic patch
+  integration, or per-task queue pause.
+- **Delivered:** durable global queue pause metadata in the orchestration store;
+  runtime `pauseQueue`, `resumeQueue`, and `getControlState`; paused runtime
+  suppresses queued continuation dispatch on release/expiry/retry and resumes
+  through live-headroom-aware retry. Added `POST /api/orchestration/queue/pause`,
+  `POST /api/orchestration/queue/resume`, and `POST /api/orchestration/leases/stop`.
+  Lease stop resolves the mapped Jinn session via
+  `transportMeta.orchestrationLease.leaseId`, interrupts an interruptible running
+  session without directly releasing the lease, releases immediately only when
+  the mapped session is already terminal, and returns `409` without release for
+  missing mappings or non-interruptible engines. The `/orchestration` dashboard
+  exposes global queue pause/resume and Stop lease for running leases only.
+- **Exit gate:** queue pause persists across runtime reopen; paused queues do not
+  dispatch on release; resume uses live headroom; failed-continuation retry stays
+  queued while paused; lease stop follows strict mapped-session semantics; UI
+  renders paused/running/disabled/failure states with concrete labels.
+- **Remaining boundary:** per-task queue controls, raw diff viewing, raw prompt or
+  model-output viewing, and automatic patch integration remain deferred.
 
 ---
 

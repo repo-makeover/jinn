@@ -7,6 +7,9 @@ export interface OrchestrationStatus {
   enabled: boolean
   runtimeBound: boolean
   degraded: boolean
+  queuePaused: boolean
+  pausedAt: string | null
+  pauseReason: string | null
   disabledReason: string | null
   degradedReason: string | null
   counts: {
@@ -230,4 +233,16 @@ export async function retryContinuation(taskId: string, coordinatorId: string) {
 
 export async function selectDualLaneWinner(taskId: string, winnerLane: "openai" | "anthropic") {
   return post("/api/orchestration/dual-lane/select", { taskId, winnerLane })
+}
+
+export async function pauseOrchestrationQueue(reason?: string) {
+  return post("/api/orchestration/queue/pause", reason ? { reason } : {})
+}
+
+export async function resumeOrchestrationQueue() {
+  return post("/api/orchestration/queue/resume", {})
+}
+
+export async function stopOrchestrationLease(leaseId: string, reason?: string) {
+  return post("/api/orchestration/leases/stop", reason ? { leaseId, reason } : { leaseId })
 }

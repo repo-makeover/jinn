@@ -98,6 +98,73 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     runtime.close();
   });
 
+  it("persists global queue pause and suppresses queued dispatch after lease release", async () => {
+    const runtime1 = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const first = runtime1.requestAllocation(request("task-paused-1", "coord-paused-1"));
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const blocked = runtime1.requestAllocation(request("task-paused-2", "coord-paused-2"));
+    expect(blocked.ok).toBe(false);
+    runtime1.queueLiveContinuation(continuation("task-paused-2", "coord-paused-2"));
+    expect(runtime1.pauseQueue("operator hold")).toMatchObject({
+      queuePaused: true,
+      pauseReason: "operator hold",
+    });
+    runtime1.close();
+
+    const runtime2 = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    expect(runtime2.getControlState()).toMatchObject({ queuePaused: true, pauseReason: "operator hold" });
+    const resumed: Array<{ taskId: string; allocationId: string }> = [];
+    runtime2.setResumeQueuedRunHandler(async ({ continuation, allocation }) => {
+      resumed.push({ taskId: continuation.taskId, allocationId: allocation.allocationId });
+    });
+
+    runtime2.releaseLease(first.allocation.leases[0].leaseId, "coord-paused-1");
+    await sleep(50);
+
+    expect(resumed).toEqual([]);
+    expect(runtime2.listLiveContinuations()).toMatchObject([{ taskId: "task-paused-2", state: "queued" }]);
+    expect(runtime2.listQueue()).toMatchObject([{ taskId: "task-paused-2" }]);
+    runtime2.close();
+  });
+
+  it("queue resume retries with live headroom before leasing", async () => {
+    let headroomCalls = 0;
+    const runtime = new OrchestrationRuntime({
+      config: config(),
+      dbPath,
+      startReaper: false,
+      jinnConfig: jinnConfig(dbPath),
+      headroomFilter: async (workers) => {
+        headroomCalls++;
+        return {
+          allowed: [],
+          rejected: workers.map((worker) => ({
+            worker,
+            headroom: { ok: false, provider: worker.provider, reason: "usage_exhausted" },
+          })),
+        };
+      },
+    });
+    const first = runtime.requestAllocation(request("task-resume-1", "coord-resume-1"));
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const blocked = runtime.requestAllocation(request("task-resume-2", "coord-resume-2"));
+    expect(blocked.ok).toBe(false);
+    runtime.queueLiveContinuation(continuation("task-resume-2", "coord-resume-2"));
+    runtime.pauseQueue("wait for quota");
+    runtime.releaseLease(first.allocation.leases[0].leaseId, "coord-resume-1");
+
+    const result = await runtime.resumeQueue();
+
+    expect(result.controlState.queuePaused).toBe(false);
+    expect(result.retryResults).toEqual([]);
+    expect(headroomCalls).toBeGreaterThan(0);
+    expect(runtime.listQueue()).toMatchObject([{ taskId: "task-resume-2" }]);
+    expect(runtime.listLeases().filter((lease) => lease.state === "running")).toEqual([]);
+    runtime.close();
+  });
+
   it("releases resumed allocations that have no live continuation to dispatch", async () => {
     const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
     const first = runtime.requestAllocation(request("task-1", "coord-1"));
@@ -131,6 +198,27 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     expect(result).toMatchObject({ ok: true, state: "dispatching" });
     await waitFor(() => resumed.length === 1);
     expect(resumed[0]).toMatchObject({ taskId: "task-3" });
+    runtime.close();
+  });
+
+  it("does not dispatch manual failed-continuation retry while globally paused", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    runtime.queueLiveContinuation(continuation("task-paused-retry", "coord-paused-retry", {
+      state: "failed",
+      lastError: "forced engine failure",
+    }));
+    runtime.pauseQueue("operator hold");
+    const resumed: Array<{ taskId: string; allocationId: string }> = [];
+    runtime.setResumeQueuedRunHandler(async ({ continuation, allocation }) => {
+      resumed.push({ taskId: continuation.taskId, allocationId: allocation.allocationId });
+    });
+
+    const result = await runtime.retryFailedLiveContinuation("task-paused-retry", "coord-paused-retry");
+
+    expect(result).toMatchObject({ ok: true, state: "paused" });
+    expect(runtime.listLeases()).toEqual([]);
+    expect(runtime.listLiveContinuations()).toMatchObject([{ taskId: "task-paused-retry", state: "queued" }]);
+    expect(resumed).toEqual([]);
     runtime.close();
   });
 
@@ -382,4 +470,8 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (Date.now() - start > timeoutMs) throw new Error("timed out waiting for condition");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

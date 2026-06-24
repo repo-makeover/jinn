@@ -11,9 +11,10 @@ fallback and structured explanations. Dual-lane competition is implemented for
 explicit OpenAI/Anthropic lane runs with deterministic comparison reports and a
 human selection gate. Board-originated ticket dispatch is scheduler-aware when
 `orchestration.enabled: true`. Durable JSONL telemetry, `jinn scheduler stats`,
-and optional empirical-routing tie-breaks are implemented. Dashboard controls
-are implemented as an observe-first operations view with only existing safe
-actions: failed-continuation retry and explicit dual-lane winner selection.
+and optional empirical-routing tie-breaks are implemented. The operations
+dashboard exposes safe controls for failed-continuation retry, explicit
+dual-lane winner selection, global queue pause/resume, and strict running-lease
+stop.
 
 ## Intent
 
@@ -161,6 +162,9 @@ gateway token gate.
 - `GET /api/orchestration/telemetry/summary`
 - `GET /api/orchestration/worktrees`
 - `GET /api/orchestration/dual-lane`
+- `POST /api/orchestration/queue/pause`
+- `POST /api/orchestration/queue/resume`
+- `POST /api/orchestration/leases/stop`
 - `POST /api/orchestration/continuations/retry`
 - `POST /api/orchestration/run`
 - `POST /api/orchestration/dual-lane/select`
@@ -191,6 +195,17 @@ continuations, which continue to resume only on scheduler resource events.
 Manual failed-continuation retry applies live engine headroom before creating a
 new lease. Orchestration-backed ticket dispatch also applies live headroom before
 exact-worker allocation for both manual and board-worker dispatch.
+`POST /api/orchestration/queue/pause` persists a global queue pause reason in
+the orchestration DB. While paused, release/expiry/retry events leave queued
+continuations dormant. `POST /api/orchestration/queue/resume` clears that state
+and resumes through the normal live-headroom-aware retry path.
+`POST /api/orchestration/leases/stop` resolves a running lease to its mapped
+Jinn session via `transportMeta.orchestrationLease.leaseId`. If the session is
+running and its engine is interruptible, the route interrupts the engine,
+clears that session queue, marks the session `interrupted`, and leaves lease
+release to the run/session `finally` path. If the mapped session is already
+terminal, the route releases the lease immediately. Missing mappings or
+non-interruptible engines return `409` and leave the lease running.
 
 ## Web Dashboard
 
@@ -199,15 +214,16 @@ routes above and shows runtime status, workers, running leases, blocked queue
 items, durable continuations, dual-lane selection manifests, managed worktrees,
 and telemetry/cost summaries.
 
-The only mutating dashboard actions are:
+The mutating dashboard actions are:
 
 - retry a continuation whose state is exactly `failed`;
 - select `openai` or `anthropic` for a dual-lane manifest whose state is exactly
-  `selection_required`.
+  `selection_required`;
+- pause or resume the global orchestration queue;
+- stop a running lease through the mapped Jinn session interruption path.
 
-Pause-queue and cancel-lease controls are intentionally absent. Lease/session
-cancellation needs a separate safety slice because releasing a lease without
-interrupting the owned engine turn can leave ambiguous in-flight work.
+Per-task queue pause, raw diff viewing, raw prompt/model-output viewing, and
+automatic patch integration remain intentionally absent.
 
 ## Org Board Dispatch
 
@@ -417,8 +433,10 @@ simulation remain deterministic.
   predicates, daemon runtime ownership, first live run modes, git worktree
   isolation, live cross-family reviewer policy, dual-lane competition,
   board-worker integration, and durable telemetry aggregation are implemented.
-  Dashboard controls are not implemented yet.
+  Dashboard controls for failed-continuation retry, dual-lane selection,
+  global queue pause/resume, and strict lease stop are implemented.
 
 ## Later Milestones
 
-- Dashboard control surfaces.
+- Per-task queue controls, raw diff viewing, raw prompt/model-output viewing,
+  and automatic patch integration.

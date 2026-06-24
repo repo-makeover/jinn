@@ -7,7 +7,9 @@ import type { LiveRunContinuationRecord, LiveRunContinuationState } from "./live
 import { DEFAULT_LEASE_DURATION_MS, type Allocation, type Lease, type QueueItem, type SchedulerSnapshot, type TelemetryEvent } from "./types.js";
 
 const SCHEMA_VERSION = 2;
-const NEXT_SEQ_META_KEY = "scheduler_next_seq";
+const NEXT_SEQ_META_KEY = "scheduler_next_seq"; const QUEUE_PAUSE_META_KEY = "queue_pause";
+
+export interface QueuePauseState { queuePaused: boolean; pausedAt: string | null; pauseReason: string | null }
 
 const CREATE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -565,6 +567,22 @@ export class OrchestrationStore {
       return row ? rowToLiveRunContinuation(row) : undefined;
     });
     return update();
+  }
+
+  getQueuePauseState(): QueuePauseState {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(QUEUE_PAUSE_META_KEY) as { value: string } | undefined;
+    if (!row) return { queuePaused: false, pausedAt: null, pauseReason: null };
+    try {
+      const parsed = JSON.parse(row.value) as Partial<QueuePauseState>;
+      return { queuePaused: parsed.queuePaused === true, pausedAt: typeof parsed.pausedAt === "string" ? parsed.pausedAt : null, pauseReason: typeof parsed.pauseReason === "string" ? parsed.pauseReason : null };
+    } catch {
+      logger.warn("orchestration DB has corrupt queue pause metadata; treating queue as unpaused");
+      return { queuePaused: false, pausedAt: null, pauseReason: null };
+    }
+  }
+
+  setQueuePauseState(state: QueuePauseState): void {
+    if (!state.queuePaused) this.db.prepare("DELETE FROM meta WHERE key = ?").run(QUEUE_PAUSE_META_KEY); else this.setMeta(QUEUE_PAUSE_META_KEY, JSON.stringify(state));
   }
 
   private loadLeases(): Lease[] {

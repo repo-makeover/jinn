@@ -9,18 +9,26 @@ import { handleOrchestrationRoutes } from "../api/orchestration-routes.js";
 import { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import type { OrchestrationConfig } from "../../orchestration/types.js";
+import { createSession, getSession, updateSession } from "../../sessions/registry.js";
+import { setJinnHomeForTest, refreshJinnPaths } from "../../shared/paths.js";
 import { appendOrchestrationTelemetry } from "../../orchestration/telemetry.js";
 import { WORKTREE_MARKER, type WorktreeHandle } from "../../orchestration/worktree.js";
 
 let tmpDir: string;
 let dbPath: string;
+let prevHome: string | undefined;
 
 beforeEach(() => {
+  prevHome = process.env.JINN_HOME;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orch-api-"));
+  setJinnHomeForTest(tmpDir);
   dbPath = path.join(tmpDir, "orchestration.db");
 });
 
 afterEach(() => {
+  if (prevHome === undefined) delete process.env.JINN_HOME;
+  else process.env.JINN_HOME = prevHome;
+  refreshJinnPaths();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -48,7 +56,7 @@ describe("GET /api/orchestration/*", () => {
   });
 
   it("rejects mutating methods on observe-only routes", async () => {
-    const cap = makeRes();
+    let cap = makeRes();
     await handleApiRequest(makeReq("POST", "/api/orchestration/leases"), cap.res, makeCtx(config()));
 
     expect(cap.status).toBe(405);
@@ -93,12 +101,45 @@ describe("GET /api/orchestration/*", () => {
       enabled: true,
       runtimeBound: true,
       degraded: false,
+      queuePaused: false,
       counts: {
         workers: 1,
         runningLeases: 1,
         activeWork: true,
       },
     });
+    runtime.close();
+  });
+
+  it("pauses and resumes the global orchestration queue through control routes", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const ctx = makeCtx(config());
+    ctx.orchestration = { runtime };
+
+    const pause = makeRes();
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/queue/pause",
+      pause.res,
+      ctx,
+      makeJsonReq({ reason: "operator hold" }, "/api/orchestration/queue/pause"),
+    );
+    expect(pause.status).toBe(200);
+    expect(pause.body.controlState).toMatchObject({ queuePaused: true, pauseReason: "operator hold" });
+
+    const status = await get("/api/orchestration/status", ctx);
+    expect(status.body).toMatchObject({ queuePaused: true, pauseReason: "operator hold" });
+
+    const resume = makeRes();
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/queue/resume",
+      resume.res,
+      ctx,
+      makeJsonReq({}, "/api/orchestration/queue/resume"),
+    );
+    expect(resume.status).toBe(202);
+    expect(resume.body.controlState).toMatchObject({ queuePaused: false });
     runtime.close();
   });
 
@@ -201,7 +242,7 @@ describe("GET /api/orchestration/*", () => {
     });
     const ctx = makeCtx(sameFamilyReviewConfig());
     ctx.orchestration = { runtime };
-    const cap = makeRes();
+    let cap = makeRes();
 
     await handleOrchestrationRoutes(
       "POST",
@@ -285,6 +326,137 @@ describe("GET /api/orchestration/*", () => {
       state: "dispatching",
       allocation: { allocationId: "alloc-retry" },
     });
+  });
+
+  it("stops leases only through safe mapped-session semantics", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const allocation = runtime.requestAllocation(request("stop-task", "stop-coord"));
+    expect(allocation.ok).toBe(true);
+    if (!allocation.ok) return;
+    const lease = allocation.allocation.leases[0];
+    const session = createSession({
+      engine: "mock",
+      source: "web",
+      sourceRef: "web:stop",
+      transportMeta: {
+        orchestrationLease: {
+          leaseId: lease.leaseId,
+          taskId: lease.taskId,
+          coordinatorId: lease.coordinatorId,
+          workerId: lease.workerId,
+          role: lease.role,
+          mode: "single_worker",
+        },
+      },
+    });
+    updateSession(session.id, { status: "running" });
+    const kill = vi.fn();
+    const clearQueue = vi.fn();
+    const ctx = makeCtx(config());
+    ctx.orchestration = { runtime };
+    ctx.sessionManager = {
+      getEngine: () => ({ name: "mock", run: vi.fn(), kill, isAlive: () => true, killAll: vi.fn(), killIdle: vi.fn() }),
+      getQueue: () => ({ clearQueue, getTransportState: (_key: string, status: string) => status, getPendingCount: () => 0 }),
+    } as any;
+    let cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/leases/stop",
+      cap.res,
+      ctx,
+      makeJsonReq({ leaseId: lease.leaseId, reason: "operator stop" }, "/api/orchestration/leases/stop"),
+    );
+
+    expect(cap.status).toBe(202);
+    expect(cap.body).toMatchObject({ status: "stop_requested", released: false, sessionId: session.id });
+    expect(kill).toHaveBeenCalledWith(session.id, "operator stop");
+    expect(clearQueue).toHaveBeenCalledWith(session.sessionKey);
+    expect(getSession(session.id)).toMatchObject({ status: "interrupted", lastError: "operator stop" });
+    expect(runtime.listLeases()).toMatchObject([{ leaseId: lease.leaseId, state: "running" }]);
+    runtime.releaseLease(lease.leaseId, lease.coordinatorId);
+
+    const terminalAllocation = runtime.requestAllocation(request("terminal-stop-task", "terminal-stop-coord"));
+    expect(terminalAllocation.ok).toBe(true);
+    if (!terminalAllocation.ok) return;
+    const terminalLease = terminalAllocation.allocation.leases[0];
+    createSession({
+      engine: "mock",
+      source: "web",
+      sourceRef: "web:terminal-stop",
+      transportMeta: {
+        orchestrationLease: {
+          leaseId: terminalLease.leaseId,
+          taskId: terminalLease.taskId,
+          coordinatorId: terminalLease.coordinatorId,
+          workerId: terminalLease.workerId,
+          role: terminalLease.role,
+          mode: "single_worker",
+        },
+      },
+    });
+    cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/leases/stop",
+      cap.res,
+      ctx,
+      makeJsonReq({ leaseId: terminalLease.leaseId }, "/api/orchestration/leases/stop"),
+    );
+
+    expect(cap.status).toBe(200);
+    expect(cap.body).toMatchObject({ status: "released_terminal_session", sessionId: expect.any(String) });
+    expect(runtime.listLeases().find((candidate) => candidate.leaseId === terminalLease.leaseId)).toMatchObject({ state: "released" });
+
+    const missingAllocation = runtime.requestAllocation(request("missing-stop-task", "missing-stop-coord"));
+    expect(missingAllocation.ok).toBe(true);
+    if (!missingAllocation.ok) return;
+    const missingLease = missingAllocation.allocation.leases[0];
+    cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/leases/stop",
+      cap.res,
+      ctx,
+      makeJsonReq({ leaseId: missingLease.leaseId }, "/api/orchestration/leases/stop"),
+    );
+    expect(cap.status).toBe(409);
+    expect(runtime.listLeases().find((candidate) => candidate.leaseId === missingLease.leaseId)).toMatchObject({ state: "running" });
+
+    const nonInterruptibleSession = createSession({
+      engine: "mock",
+      source: "web",
+      sourceRef: "web:non-interruptible",
+      transportMeta: {
+        orchestrationLease: {
+          leaseId: missingLease.leaseId,
+          taskId: missingLease.taskId,
+          coordinatorId: missingLease.coordinatorId,
+          workerId: missingLease.workerId,
+          role: missingLease.role,
+          mode: "single_worker",
+        },
+      },
+    });
+    updateSession(nonInterruptibleSession.id, { status: "running" });
+    ctx.sessionManager = {
+      getEngine: () => ({ name: "mock", run: vi.fn() }),
+      getQueue: () => ({ clearQueue: vi.fn(), getTransportState: (_key: string, status: string) => status, getPendingCount: () => 0 }),
+    } as any;
+    cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/leases/stop",
+      cap.res,
+      ctx,
+      makeJsonReq({ leaseId: missingLease.leaseId }, "/api/orchestration/leases/stop"),
+    );
+    expect(cap.status).toBe(409);
+    expect(runtime.listLeases().find((candidate) => candidate.leaseId === missingLease.leaseId)).toMatchObject({ state: "running" });
+    runtime.close();
   });
 
   it("routes explicit dual-lane selection requests", async () => {
