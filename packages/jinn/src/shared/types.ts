@@ -665,6 +665,8 @@ export interface OrchestrationRuntimeConfig {
   dbPath?: string;
   leaseDurationMs?: number;
   reaperIntervalMs?: number;
+  worktreeRoot?: string;
+  maxWorktrees?: number;
 }
 
 export interface JinnConfig {

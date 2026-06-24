@@ -11,6 +11,7 @@ import type {
 const costClassSchema = z.enum(["near_zero", "low", "medium", "high"]);
 const prioritySchema = z.enum(["low", "normal", "high"]);
 const familyConstraintSchema = z.enum(["opposite_of_implementer", "same_as_implementer"]);
+const workspacePolicySchema = z.enum(["shared", "read_only", "isolated_worktree"]);
 
 const stringList = z.array(z.string().min(1)).default([]);
 
@@ -22,7 +23,7 @@ const workerBodySchema = z.object({
   tools: stringList,
   maxConcurrentTasks: z.number().int().positive().default(1),
   costClass: costClassSchema.default("medium"),
-  workspacePolicy: z.string().min(1).default("shared"),
+  workspacePolicy: workspacePolicySchema.default("shared"),
 }).strict();
 
 const roleBodySchema = z.object({
@@ -153,4 +154,3 @@ export function formatZodError(err: unknown): string {
   }
   return err instanceof Error ? err.message : String(err);
 }
-

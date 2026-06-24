@@ -6,6 +6,13 @@ import { loadCoordinatorTaskBrief, planCoordinatorAllocation } from "../orchestr
 import { liveRunModeSchema } from "../orchestration/run-mode.js";
 import { PersistentMatrixScheduler } from "../orchestration/persistent-scheduler.js";
 import { MatrixScheduler, runSimulation } from "../orchestration/scheduler.js";
+import {
+  cleanupWorktreeByTaskLane,
+  createImplementationWorktree,
+  diffWorktreeByTaskLane,
+  resolveTaskBaseCwd,
+  resolveWorktreeOptions,
+} from "../orchestration/worktree.js";
 import { GATEWAY_INFO_FILE, ORCH_DB } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
 import { readGatewayInfo } from "../gateway/gateway-info.js";
@@ -27,6 +34,11 @@ export interface OrchestrationStateOptions extends ConfigDirOptions {
 export interface OrchestrationRunOptions {
   mode: string;
   task: string;
+  json?: boolean;
+}
+
+export interface WorktreeCliOptions {
+  lane?: string;
   json?: boolean;
 }
 
@@ -147,6 +159,15 @@ function readTaskYaml(filePath: string): unknown {
   }
 }
 
+function readTaskIdentity(filePath: string): { taskId: string; cwd?: string } {
+  const raw = readTaskYaml(filePath);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`invalid worktree task file: ${filePath}`);
+  const task = raw as Record<string, unknown>;
+  if (typeof task.taskId !== "string" || !task.taskId.trim()) throw new Error("worktree task file must include taskId");
+  if (task.cwd !== undefined && typeof task.cwd !== "string") throw new Error("worktree task cwd must be a string when provided");
+  return { taskId: task.taskId, cwd: task.cwd };
+}
+
 function readSnapshotIfPresent(config: OrchestrationConfig, opts: OrchestrationStateOptions): SchedulerSnapshot | undefined {
   const dbPath = opts.dbPath ?? ORCH_DB;
   if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) return undefined;
@@ -238,4 +259,40 @@ export async function runOrchestrationRun(opts: OrchestrationRunOptions): Promis
     throw new Error(`orchestration run failed (${res.status})${detail}`);
   }
   print(opts.json ? body : formatRunResult(body), opts.json);
+}
+
+export async function runWorktreeCreate(taskFile: string, opts: WorktreeCliOptions): Promise<void> {
+  const task = readTaskIdentity(taskFile);
+  const config = loadConfig();
+  const worktrees = resolveWorktreeOptions(config);
+  const result = createImplementationWorktree({
+    taskId: task.taskId,
+    lane: opts.lane ?? "implementation",
+    baseCwd: resolveTaskBaseCwd(task.cwd, config),
+    worktrees,
+  });
+  print(opts.json ? result : formatWorktreeCreate(result), opts.json);
+}
+
+export async function runWorktreeDiff(taskFile: string, opts: WorktreeCliOptions): Promise<void> {
+  const task = readTaskIdentity(taskFile);
+  const config = loadConfig();
+  const diff = diffWorktreeByTaskLane(resolveWorktreeOptions(config).root, task.taskId, opts.lane ?? "implementation");
+  print(opts.json ? { taskId: task.taskId, lane: opts.lane ?? "implementation", diff } : (diff || "No worktree diff."), opts.json);
+}
+
+export async function runWorktreeCleanup(taskFile: string, opts: WorktreeCliOptions): Promise<void> {
+  const task = readTaskIdentity(taskFile);
+  const config = loadConfig();
+  const result = cleanupWorktreeByTaskLane(resolveWorktreeOptions(config).root, task.taskId, opts.lane ?? "implementation");
+  print(opts.json ? { taskId: task.taskId, lane: opts.lane ?? "implementation", ...result } : formatWorktreeCleanup(result), opts.json);
+}
+
+function formatWorktreeCreate(result: ReturnType<typeof createImplementationWorktree>): string {
+  if (result.mode === "shared") return `Worktree downgraded: ${result.downgradeReason}; cwd ${result.cwd}`;
+  return `Created worktree ${result.handle.path}`;
+}
+
+function formatWorktreeCleanup(result: { path: string; removed: boolean }): string {
+  return result.removed ? `Removed worktree ${result.path}` : `No worktree found at ${result.path}`;
 }

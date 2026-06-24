@@ -7,6 +7,7 @@ export type QueueState = "blocked_resource";
 export type AllocationState = "allocated" | "blocked_resource";
 export type TaskPriority = "low" | "normal" | "high";
 export type FamilyConstraint = "opposite_of_implementer" | "same_as_implementer";
+export type WorkspacePolicy = "shared" | "read_only" | "isolated_worktree";
 
 export const DEFAULT_LEASE_DURATION_MS = 60 * 60 * 1000;
 
@@ -19,7 +20,7 @@ export interface Worker {
   tools: string[];
   maxConcurrentTasks: number;
   costClass: CostClass;
-  workspacePolicy: string;
+  workspacePolicy: WorkspacePolicy;
 }
 
 export interface RoleDefinition {

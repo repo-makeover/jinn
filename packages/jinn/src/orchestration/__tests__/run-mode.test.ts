@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +85,46 @@ describe("runOrchestrationTask", () => {
     expect(runtime.listLeases().map((lease) => lease.state)).toEqual(["released", "released"]);
     runtime.close();
   });
+
+  it("routes reviewer to the implementation worktree before task-end cleanup", async () => {
+    const { runOrchestrationTask, OrchestrationRuntime } = await loadModules();
+    const repo = path.join(tmpHome, "repo");
+    initGitRepo(repo);
+    const engine = new RecordingEngine();
+    const runtime = new OrchestrationRuntime({
+      config: reviewWorktreeConfig(),
+      dbPath: ":memory:",
+      startReaper: false,
+      worktreeRoot: path.join(tmpHome, "worktrees"),
+      maxWorktrees: 2,
+    });
+    const ctx = makeContext(runtime, engine);
+
+    const result = await runOrchestrationTask({
+      context: ctx,
+      task: {
+        taskId: "task-review-worktree",
+        coordinatorId: "coord-review-worktree",
+        coordinatorTemplate: "withReview",
+        mode: "single_worker_with_review",
+        cwd: repo,
+        prompt: "Implement in an isolated worktree and review the patch",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.sessions.map((session) => session.workspaceMode)).toEqual([
+      "implementation_worktree",
+      "review_read_only_worktree",
+    ]);
+    expect(result.sessions[1].cwd).toBe(result.sessions[0].cwd);
+    expect(engine.reviewerSawImplementationFile).toBe(true);
+    expect(engine.reviewerWriteFailed).toBe(true);
+    expect(fs.existsSync(result.sessions[0].cwd)).toBe(false);
+    expect(runtime.listLeases().map((lease) => lease.state)).toEqual(["released", "released"]);
+    runtime.close();
+  });
 });
 
 async function loadModules() {
@@ -103,8 +144,22 @@ async function loadModules() {
 class RecordingEngine implements Engine {
   name = "mock";
   prompts: string[] = [];
+  cwds: string[] = [];
+  reviewerSawImplementationFile = false;
+  reviewerWriteFailed = false;
   run = vi.fn(async (opts: EngineRunOpts): Promise<EngineResult> => {
     this.prompts.push(opts.prompt);
+    this.cwds.push(opts.cwd);
+    if (opts.prompt.includes("Review-only pass")) {
+      this.reviewerSawImplementationFile = fs.existsSync(path.join(opts.cwd, "implemented.txt"));
+      try {
+        fs.writeFileSync(path.join(opts.cwd, "review-write.txt"), "review should not mutate\n");
+      } catch {
+        this.reviewerWriteFailed = true;
+      }
+    } else {
+      fs.writeFileSync(path.join(opts.cwd, "implemented.txt"), "implemented\n");
+    }
     opts.onStream?.({ type: "text", content: "mock complete" });
     return { sessionId: opts.sessionId ?? "mock-session", result: "mock complete" };
   });
@@ -171,6 +226,17 @@ function reviewConfig(): OrchestrationConfig {
   };
 }
 
+function reviewWorktreeConfig(): OrchestrationConfig {
+  const cfg = reviewConfig();
+  return {
+    ...cfg,
+    workers: cfg.workers.map((entry) =>
+      entry.id === "mockImplementer"
+        ? { ...entry, workspacePolicy: "isolated_worktree" }
+        : { ...entry, workspacePolicy: "read_only" }),
+  };
+}
+
 function jinnConfig(): JinnConfig {
   return {
     gateway: { port: 7777, host: "127.0.0.1" },
@@ -183,4 +249,18 @@ function jinnConfig(): JinnConfig {
     logging: { file: false, stdout: false, level: "error" },
     orchestration: { enabled: true },
   } as JinnConfig;
+}
+
+function initGitRepo(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true });
+  git(["init"], dir);
+  git(["config", "user.email", "test@example.com"], dir);
+  git(["config", "user.name", "Test User"], dir);
+  fs.writeFileSync(path.join(dir, "README.md"), "base\n");
+  git(["add", "README.md"], dir);
+  git(["commit", "-m", "initial"], dir);
+}
+
+function git(args: string[], cwd: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
 }

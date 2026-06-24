@@ -257,16 +257,19 @@ reading the existing `shared/usage-status.ts` / `engine-limits.ts` signals (the 
 `engineHasHeadroom(worker, config)` used during candidate filtering in live mode (off
 in pure simulation). **Mitigates R8 and avoids dispatching into a wall.**
 
-### D5 — Worktrees are lease-scoped, git-only, and reaped
+### D5 — Worktrees are task/lane-scoped, git-only, and reaped
 
-When a leased worker's `workspacePolicy === "isolated_worktree"` **and** the task `cwd`
-is inside a git repo: create `git worktree add <root>/jinn-<taskId>-<lane>` on a fresh
-branch; pass that path as the turn `cwd`. Reviewers get **read-only** diff access
-(`git -C <worktree> diff`), never a mutating turn there unless explicitly given a
-repair role. Integration happens in a separate integration worktree; QA runs there.
-Worktrees are removed on lease release/expiry; an orphan reaper detects abandoned
-worktrees (lease gone but worktree present) on boot and on a timer. Non-git `cwd`
-falls back to the current single-`cwd` behavior with a logged downgrade.
+When an implementation worker's `workspacePolicy === "isolated_worktree"` **and** the
+resolved task base `cwd` is inside a git repo: create
+`git worktree add <root>/jinn-<taskId>-<lane>` on a fresh branch; pass that path as the
+implementation turn `cwd`. Reviewer roles read the implementation lane's worktree in
+read-only mode (`git -C <worktree> diff` plus a non-mutating session contract), never a
+separate mutable reviewer worktree unless a later repair role explicitly grants it.
+Worker leases still release promptly, but the implementation worktree survives until
+the task/lane lifecycle is complete so the reviewer can inspect the actual patch. Task
+completion performs cleanup, and orphan cleanup plugs into the existing
+`OrchestrationRuntime` boot+timer reaper. Non-git `cwd` falls back to the current
+single-`cwd` behavior with a logged downgrade.
 **Mitigates R-worktree (disk/orphans) and preserves one-implementer-per-slice.**
 
 ### D6 — The matrix layer is the **single allocator**; org is bridged, not merged
@@ -427,18 +430,30 @@ the source brief.
   dual-lane competition, org-worker bridge, persistent telemetry JSONL, or broad live-provider
   smoke. `single_worker_with_review` runs sequential sessions and prompts the reviewer as
   review-only, but read-only worktree enforcement is M6.
+- **M5 carry-forward → resolved in M6:** `runOrchestrationTask` previously passed the same
+  optional task `cwd` to every lease turn and released each lease independently. M6 added
+  per-task lane→worktree state so the reviewer targets the implementation lane's
+  worktree read-only, and the implementation worktree is cleaned up at task/lane end
+  rather than on implementer lease release. It resolves the effective base `cwd` before
+  git detection because task `cwd` is optional, and narrows accepted `workspacePolicy`
+  values to `shared`, `read_only`, and `isolated_worktree`.
 
-### M6 — Worktree execution (brief Phase 5) ✦ new infrastructure
+### M6 — Worktree execution (complete, 2026-06-23)
 
-- **Goal:** isolated implementation/review/integration worktrees per D5.
-- **Deliverables:** `orchestration/worktree.ts` (create/diff/cleanup/reap, git-only,
-  non-git downgrade); CLI `jinn worktree create|diff|cleanup <task> [--lane <name>]`;
-  orphan reaper on boot + timer.
-- **Exit gate (brief AC):** implementation lane cannot overwrite another lane; review
-  lane cannot mutate an implementation lane; integration lane receives the selected
-  patch; abandoned worktrees are detectable and reaped; disk usage bounded (max
-  worktrees config).
-- **Team:** implementer + independent reviewer + QA.
+- **Goal:** isolated implementation worktrees plus read-only reviewer access per D5.
+- **Delivered:** `orchestration/worktree.ts` creates/diffs/cleans/reaps managed git
+  worktrees with a marker file, git-only downgrade, path safety, and `maxWorktrees`.
+  `run-mode.ts` resolves the effective base `cwd`, keeps per-task lane→worktree state,
+  sends reviewers to the implementation worktree in read-only mode, releases leases
+  promptly, and cleans task worktrees at task end. `OrchestrationRuntime` reuses its
+  existing boot+timer reaper to remove abandoned managed worktrees whose task no longer
+  has a running lease. `jinn worktree create|diff|cleanup <task> [--lane <name>]` exposes
+  focused operator helpers.
+- **Validation:** focused tests cover create/diff/cleanup, non-git downgrade, max
+  worktree enforcement, runtime reaping, reviewer cwd/read-only routing, and CLI
+  worktree helpers.
+- **Remaining boundary:** integration worktrees, dual-lane selection, durable patch
+  artifacts, dashboard controls, and board-worker routing remain later milestones.
 
 ### M7 — Cross-family review policy in live runs (brief Phase 7)
 
@@ -638,8 +653,11 @@ high-priority queued behind normal resumes first · atomic allocation prevents d
   is not re-leased); lease released on every terminal run-web-session path (error, stall,
   rate-limit fallback, late recovery, deleted session); observe routes read the single boot
   instance (no stale second-handle read).
-- **M6:** lane-isolation (lane A cannot write lane B); reviewer worktree read-only;
-  orphan reaper finds + removes abandoned worktrees; non-git cwd downgrade logged.
+- **M6:** implementer session receives the isolated worktree `cwd`; reviewer session
+  receives that same worktree `cwd` read-only; implementer lease release does not remove
+  the worktree before review; task-end cleanup removes completed worktrees; runtime
+  reaper finds + removes abandoned worktrees; non-git cwd downgrade logged; max-worktrees
+  bound enforced.
 - **M7:** reviewer-selection explainability; same-family fallback permit/forbid honored.
 - **M8:** identical brief to both lanes; isolated worktrees; comparison report;
   explicit selection; loser archived.
@@ -678,7 +696,7 @@ high-priority queued behind normal resumes first · atomic allocation prevents d
 | R8 | Local models over-trusted / routing into a rate-limited engine | local = triage only; `engineHasHeadroom` filter (D4) | M3 headroom test |
 | R9 | **Subscription/PTY billing path broken** (AGENTS.md) | Claude forced through interactive PTY; no headless bypass (D7) | M3 PTY-path contract test |
 | R10 | Orchestrator becomes DAWES-specific | Generic Cuttlefish-compatible primitives only; policy packs downstream | design review; no DAWES strings in core |
-| R11 | Worktree disk blowup / orphans | Lease-scoped, capped, reaped; git-only with downgrade (D5) | reaper + max-worktrees tests |
+| R11 | Worktree disk blowup / orphans | Task/lane-scoped, capped, reaped; git-only with downgrade (D5) | reaper + max-worktrees tests |
 | R12 | Naming collision (Employee/Manager vs Worker/Coordinator) | Vocabularies kept separate; bridge maps (D6, §4) | forbidden-term grep in orchestration/** |
 | R13 | Building too much before first simulation | No real execution until M2 sim/contract green; smoke opt-in (D8) | gate ordering; CI excludes smoke |
 | R14 | `pnpm test` flakiness (known jinn-cli timeouts) masks real failures | Rerun failing file in isolation; record both; never declare green on a flake | Gate 7 evidence discipline |
@@ -761,7 +779,7 @@ Preconditions (BLOCKING):
 
 Scope: exactly milestone <M#> Deliverables (plan §5). Honor the design rulings D1–D8
 (plan §3): scheduler-above-session, thin adapter over Engine, durable SQLite, usage-aware
-routing, lease-scoped git worktrees, single-allocator, **claude interactive-PTY billing
+routing, task/lane-scoped git worktrees, single-allocator, **claude interactive-PTY billing
 path is sacrosanct (D7)**, determinism preserved.
 
 Non-goals: no real provider calls outside the opt-in smoke script; no DAWES specifics;
@@ -789,8 +807,9 @@ Milestone-specific emphasis to append to the template:
   terminal path of run-web-session via `finally`. Allocate against the one live persistent
   scheduler, not the observe-only planner. Add `orchestration.enabled` (off by default);
   construct the single scheduler at boot and route the M4 observe endpoints through it."
-- **M6:** "git-only worktrees, lane isolation enforced, reviewer worktrees read-only,
-  orphan reaper on boot+timer, non-git cwd downgrades with a log line."
+- **M6:** "git-only implementation worktrees, lane isolation enforced, reviewer reads
+  the implementation worktree read-only, worktree survives implementer lease release,
+  orphan reaper uses the runtime boot+timer loop, non-git cwd downgrades with a log line."
 - **M8:** "Only start once M1–M7 are stable; identical brief to both lanes; human
   selection by default; archive the loser."
 - **M9:** "OrgWorkerAdapter is read-only over scanOrg; prove no double-dispatch with

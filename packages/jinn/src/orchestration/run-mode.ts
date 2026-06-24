@@ -8,6 +8,15 @@ import { buildCoordinatorTaskBrief, coordinatorModeSchema, type CoordinatorMode 
 import { toLeaseTransportMeta } from "./lease-meta.js";
 import { resolveLiveLeaseDurationMs } from "./runtime.js";
 import type { Allocation, Lease, QueueItem, Worker } from "./types.js";
+import {
+  cleanupWorktree,
+  createImplementationWorktree,
+  resolveTaskBaseCwd,
+  setWorktreeReadOnly,
+  type WorktreeHandle,
+  type WorktreePreparation,
+  type WorktreeOptions,
+} from "./worktree.js";
 
 export const liveRunModeSchema = z.enum(["single_worker", "single_worker_with_review"]);
 export type LiveRunMode = z.infer<typeof liveRunModeSchema>;
@@ -46,7 +55,15 @@ export interface OrchestrationRunSession {
   role: string;
   status: string;
   error: string | null;
+  cwd: string;
+  workspaceMode: LeaseWorkspace["mode"];
+  worktreePath?: string;
 }
+
+type LeaseWorkspace =
+  | { mode: "shared"; cwd: string; downgradeReason?: string }
+  | { mode: "implementation_worktree"; cwd: string; handle: WorktreeHandle }
+  | { mode: "review_read_only_worktree"; cwd: string; handle: WorktreeHandle };
 
 export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): Promise<OrchestrationRunTaskResult> {
   const runtime = opts.context.orchestration?.runtime;
@@ -71,17 +88,45 @@ export async function runOrchestrationTask(opts: RunOrchestrationTaskOptions): P
   if (!allocationResult.ok) return { ok: false, state: "blocked_resource", mode, queueItem: allocationResult.queueItem };
 
   const sessions: OrchestrationRunSession[] = [];
-  for (const lease of allocationResult.allocation.leases) {
-    sessions.push(await runLeaseTurn({
-      context: opts.context,
-      mode,
-      lease,
-      prompt: promptForRole(parsed.prompt, lease.role),
-      cwd: parsed.cwd,
-      title: parsed.title,
-      model: parsed.model,
-      effortLevel: parsed.effortLevel,
-    }));
+  const baseCwd = resolveTaskBaseCwd(parsed.cwd, opts.context.getConfig());
+  const laneWorktrees = new Map<string, WorktreeHandle>();
+  try {
+    for (const lease of allocationResult.allocation.leases) {
+      const worker = requireWorker(runtime.listWorkers(), lease.workerId);
+      let turnStarted = false;
+      try {
+        const workspace = prepareLeaseWorkspace({
+          baseCwd,
+          lease,
+          worker,
+          worktrees: laneWorktrees,
+          runtime,
+        });
+        turnStarted = true;
+        sessions.push(await runLeaseTurn({
+          context: opts.context,
+          mode,
+          lease,
+          worker,
+          workspace,
+          prompt: promptForRole(parsed.prompt, lease.role),
+          title: parsed.title,
+          model: parsed.model,
+          effortLevel: parsed.effortLevel,
+        }));
+      } catch (err) {
+        if (!turnStarted) releaseLeaseSafely(runtime, lease);
+        throw err;
+      }
+    }
+  } finally {
+    for (const handle of laneWorktrees.values()) {
+      try {
+        cleanupWorktree(handle);
+      } catch (err) {
+        logger.warn(`Orchestration worktree cleanup failed for ${handle.path}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
   }
 
   return { ok: true, state: "completed", mode, allocation: allocationResult.allocation, sessions };
@@ -91,40 +136,48 @@ async function runLeaseTurn(opts: {
   context: ApiContext;
   mode: LiveRunMode;
   lease: Lease;
+  worker: Worker;
+  workspace: LeaseWorkspace;
   prompt: string;
-  cwd?: string;
   title?: string;
   model?: string;
   effortLevel?: string;
 }): Promise<OrchestrationRunSession> {
   const runtime = opts.context.orchestration?.runtime;
   if (!runtime) throw new Error("orchestration runtime is not enabled");
-  const worker = requireWorker(runtime.listWorkers(), opts.lease.workerId);
-  const validation = runtime.validateLeaseForWorker(worker.id, opts.lease.leaseId, opts.lease.taskId, opts.lease.coordinatorId);
-  if (!validation.ok) throw new Error(`lease ${opts.lease.leaseId} is not valid for worker ${worker.id}: ${validation.reason ?? "unknown"}`);
+  const validation = runtime.validateLeaseForWorker(opts.worker.id, opts.lease.leaseId, opts.lease.taskId, opts.lease.coordinatorId);
+  if (!validation.ok) throw new Error(`lease ${opts.lease.leaseId} is not valid for worker ${opts.worker.id}: ${validation.reason ?? "unknown"}`);
 
-  const engine = resolveWorkerEngine(opts.context, worker);
-  if (!engine) throw new Error(`engine for worker provider ${worker.provider} is not available`);
+  const engine = resolveWorkerEngine(opts.context, opts.worker);
+  if (!engine) throw new Error(`engine for worker provider ${opts.worker.provider} is not available`);
 
   const sessionKey = `orchestration:${opts.lease.taskId}:${opts.lease.role}:${opts.lease.leaseId}`;
+  const transportMeta = toLeaseTransportMeta({
+    leaseId: opts.lease.leaseId,
+    taskId: opts.lease.taskId,
+    coordinatorId: opts.lease.coordinatorId,
+    workerId: opts.worker.id,
+    role: opts.lease.role,
+    mode: opts.mode,
+  });
+  transportMeta["orchestrationWorkspace"] = {
+    mode: opts.workspace.mode,
+    cwd: opts.workspace.cwd,
+    worktreePath: "handle" in opts.workspace ? opts.workspace.handle.path : null,
+    readOnly: opts.workspace.mode === "review_read_only_worktree",
+    downgradeReason: opts.workspace.mode === "shared" ? opts.workspace.downgradeReason ?? null : null,
+  };
   const session = createSession({
-    engine: worker.provider,
+    engine: opts.worker.provider,
     source: "web",
     sourceRef: sessionKey,
     connector: "web",
     sessionKey,
     replyContext: { source: "web" },
-    transportMeta: toLeaseTransportMeta({
-      leaseId: opts.lease.leaseId,
-      taskId: opts.lease.taskId,
-      coordinatorId: opts.lease.coordinatorId,
-      workerId: worker.id,
-      role: opts.lease.role,
-      mode: opts.mode,
-    }),
+    transportMeta,
     model: opts.model,
     effortLevel: opts.effortLevel,
-    cwd: opts.cwd,
+    cwd: opts.workspace.cwd,
     title: opts.title ?? `${opts.lease.taskId} ${opts.lease.role}`,
     prompt: opts.prompt,
   });
@@ -133,8 +186,16 @@ async function runLeaseTurn(opts: {
   updateSession(session.id, { status: "running", lastActivity: new Date().toISOString(), lastError: null });
 
   try {
+    if (opts.workspace.mode === "review_read_only_worktree") setWorktreeReadOnly(opts.workspace.handle, true);
     await dispatchWebSessionRun(session, opts.prompt, engine, opts.context.getConfig(), opts.context);
   } finally {
+    if (opts.workspace.mode === "review_read_only_worktree") {
+      try {
+        setWorktreeReadOnly(opts.workspace.handle, false);
+      } catch (err) {
+        logger.warn(`Orchestration worktree restore failed for ${opts.workspace.handle.path}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
     try {
       runtime.releaseLease(opts.lease.leaseId, opts.lease.coordinatorId);
     } catch (err) {
@@ -146,11 +207,62 @@ async function runLeaseTurn(opts: {
   return {
     sessionId: session.id,
     leaseId: opts.lease.leaseId,
-    workerId: worker.id,
+    workerId: opts.worker.id,
     role: opts.lease.role,
     status: completed?.status ?? "interrupted",
     error: completed?.lastError ?? null,
+    cwd: opts.workspace.cwd,
+    workspaceMode: opts.workspace.mode,
+    worktreePath: "handle" in opts.workspace ? opts.workspace.handle.path : undefined,
   };
+}
+
+function prepareLeaseWorkspace(opts: {
+  baseCwd: string;
+  lease: Lease;
+  worker: Worker;
+  worktrees: Map<string, WorktreeHandle>;
+  runtime: { getWorktreeOptions(): WorktreeOptions };
+}): LeaseWorkspace {
+  if (isReviewRole(opts.lease.role)) {
+    const implementation = firstWorktree(opts.worktrees);
+    if (implementation) return { mode: "review_read_only_worktree", cwd: implementation.path, handle: implementation };
+    return { mode: "shared", cwd: opts.baseCwd };
+  }
+  if (opts.worker.workspacePolicy !== "isolated_worktree") return { mode: "shared", cwd: opts.baseCwd };
+
+  const lane = opts.lease.role;
+  const existing = opts.worktrees.get(lane);
+  if (existing) return { mode: "implementation_worktree", cwd: existing.path, handle: existing };
+
+  const prepared: WorktreePreparation = createImplementationWorktree({
+    taskId: opts.lease.taskId,
+    lane,
+    baseCwd: opts.baseCwd,
+    worktrees: opts.runtime.getWorktreeOptions(),
+  });
+  if (prepared.mode === "shared") {
+    logger.warn(`Orchestration worktree downgraded for task ${opts.lease.taskId}: ${prepared.downgradeReason}`);
+    return { mode: "shared", cwd: prepared.cwd, downgradeReason: prepared.downgradeReason };
+  }
+  opts.worktrees.set(lane, prepared.handle);
+  return { mode: "implementation_worktree", cwd: prepared.cwd, handle: prepared.handle };
+}
+
+function firstWorktree(worktrees: Map<string, WorktreeHandle>): WorktreeHandle | undefined {
+  return worktrees.values().next().value;
+}
+
+function isReviewRole(role: string): boolean {
+  return role.toLowerCase().includes("review");
+}
+
+function releaseLeaseSafely(runtime: { releaseLease(leaseId: string, coordinatorId?: string): Lease }, lease: Lease): void {
+  try {
+    runtime.releaseLease(lease.leaseId, lease.coordinatorId);
+  } catch (err) {
+    logger.warn(`Orchestration release failed for lease ${lease.leaseId}: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 function resolveWorkerEngine(context: ApiContext, worker: Worker): Engine | undefined {

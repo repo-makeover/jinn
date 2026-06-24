@@ -1,0 +1,267 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { JINN_HOME, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
+import type { JinnConfig } from "../shared/types.js";
+
+export const WORKTREE_MARKER = ".jinn-worktree.json";
+export const DEFAULT_MAX_WORKTREES = 8;
+
+export type WorktreeMode = "implementation_worktree" | "shared";
+export type WorktreeDowngradeReason = "non_git_cwd";
+
+export interface WorktreeOptions {
+  root: string;
+  maxWorktrees: number;
+}
+
+export interface WorktreeHandle {
+  taskId: string;
+  lane: string;
+  path: string;
+  baseCwd: string;
+  gitRoot: string;
+  branch: string;
+  createdAt: string;
+}
+
+export type WorktreePreparation =
+  | { mode: "implementation_worktree"; cwd: string; handle: WorktreeHandle }
+  | { mode: "shared"; cwd: string; downgradeReason: WorktreeDowngradeReason };
+
+export interface WorktreeCleanupResult {
+  path: string;
+  removed: boolean;
+}
+
+export function resolveWorktreeOptions(config: JinnConfig): WorktreeOptions {
+  const configuredMax = config.orchestration?.maxWorktrees;
+  return {
+    root: path.resolve(config.orchestration?.worktreeRoot ?? ORCH_WORKTREE_ROOT),
+    maxWorktrees: typeof configuredMax === "number" && Number.isFinite(configuredMax) && configuredMax > 0
+      ? Math.floor(configuredMax)
+      : DEFAULT_MAX_WORKTREES,
+  };
+}
+
+export function resolveTaskBaseCwd(cwd: string | undefined, config: JinnConfig): string {
+  const candidate = cwd ?? config.workspaces?.defaultCwd ?? JINN_HOME;
+  const resolved = fs.realpathSync(candidate);
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) throw new Error(`orchestration cwd is not a directory: ${candidate}`);
+
+  const roots = config.workspaces?.roots ?? [];
+  if (roots.length > 0) {
+    const allowedRoots = roots.map((root) => fs.realpathSync(root));
+    if (!allowedRoots.some((root) => isSameOrInside(root, resolved))) {
+      throw new Error(`orchestration cwd is outside allowed workspace roots: ${candidate}`);
+    }
+  }
+  return resolved;
+}
+
+export function createImplementationWorktree(opts: {
+  taskId: string;
+  lane: string;
+  baseCwd: string;
+  worktrees: WorktreeOptions;
+  now?: () => Date;
+}): WorktreePreparation {
+  const gitRoot = findGitRoot(opts.baseCwd);
+  if (!gitRoot) return { mode: "shared", cwd: opts.baseCwd, downgradeReason: "non_git_cwd" };
+
+  const root = path.resolve(opts.worktrees.root);
+  fs.mkdirSync(root, { recursive: true });
+  const existing = listManagedWorktrees(root);
+  if (existing.length >= opts.worktrees.maxWorktrees) {
+    throw new Error(`orchestration worktree limit reached: ${existing.length}/${opts.worktrees.maxWorktrees}`);
+  }
+
+  const lane = safeSegment(opts.lane);
+  const taskId = safeSegment(opts.taskId);
+  const worktreePath = path.join(root, `jinn-${taskId}-${lane}`);
+  assertInsideRoot(root, worktreePath);
+  if (fs.existsSync(worktreePath)) throw new Error(`orchestration worktree already exists: ${worktreePath}`);
+
+  const createdAt = (opts.now?.() ?? new Date()).toISOString();
+  const branch = `jinn/${taskId}/${lane}/${Date.now()}`;
+  const handle: WorktreeHandle = {
+    taskId: opts.taskId,
+    lane: opts.lane,
+    path: worktreePath,
+    baseCwd: opts.baseCwd,
+    gitRoot,
+    branch,
+    createdAt,
+  };
+
+  try {
+    runGit(["worktree", "add", "-b", branch, worktreePath, "HEAD"], gitRoot);
+    fs.writeFileSync(path.join(worktreePath, WORKTREE_MARKER), JSON.stringify(handle, null, 2));
+    return { mode: "implementation_worktree", cwd: worktreePath, handle };
+  } catch (err) {
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+    throw new Error(`failed to create orchestration worktree: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export function diffWorktree(handle: WorktreeHandle): string {
+  const diff = runGit(["diff", "HEAD", "--"], handle.path);
+  const untracked = runGit(["ls-files", "--others", "--exclude-standard"], handle.path)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && line !== WORKTREE_MARKER);
+  if (untracked.length === 0) return diff;
+  return [
+    diff.trimEnd(),
+    "Untracked files:",
+    ...untracked.map((file) => `  ${file}`),
+    "",
+  ].filter((line, index) => index !== 0 || line.length > 0).join("\n");
+}
+
+export function diffWorktreeByTaskLane(root: string, taskId: string, lane: string): string {
+  return diffWorktree(requireManagedWorktree(root, taskId, lane));
+}
+
+export function cleanupWorktree(handle: WorktreeHandle): WorktreeCleanupResult {
+  if (!fs.existsSync(handle.path)) return { path: handle.path, removed: false };
+  makeWritable(handle.path);
+  try {
+    runGit(["worktree", "remove", "--force", handle.path], handle.gitRoot);
+  } catch {
+    fs.rmSync(handle.path, { recursive: true, force: true });
+  }
+  try {
+    runGit(["branch", "-D", handle.branch], handle.gitRoot);
+  } catch {
+    // The branch may already be gone or may not have been created if worktree add failed.
+  }
+  return { path: handle.path, removed: true };
+}
+
+export function cleanupWorktreeByTaskLane(root: string, taskId: string, lane: string): WorktreeCleanupResult {
+  const worktreePath = worktreePathForTaskLane(root, taskId, lane);
+  if (!fs.existsSync(worktreePath)) return { path: worktreePath, removed: false };
+  return cleanupWorktree(readManagedWorktree(worktreePath));
+}
+
+export function setWorktreeReadOnly(handle: WorktreeHandle, readOnly: boolean): void {
+  if (!fs.existsSync(handle.path)) return;
+  if (readOnly) makeReadOnly(handle.path);
+  else makeWritable(handle.path);
+}
+
+export function reapOrphanedWorktrees(root: string, activeTaskIds: Set<string>): WorktreeHandle[] {
+  const removed: WorktreeHandle[] = [];
+  for (const handle of listManagedWorktrees(root)) {
+    if (activeTaskIds.has(handle.taskId)) continue;
+    cleanupWorktree(handle);
+    removed.push(handle);
+  }
+  return removed;
+}
+
+export function listManagedWorktrees(root: string): WorktreeHandle[] {
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const worktreePath = path.join(root, entry.name);
+      const markerPath = path.join(worktreePath, WORKTREE_MARKER);
+      if (!fs.existsSync(markerPath)) return [];
+      try {
+        return [parseWorktreeMarker(fs.readFileSync(markerPath, "utf-8"), worktreePath)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+export function worktreePathForTaskLane(root: string, taskId: string, lane: string): string {
+  const resolvedRoot = path.resolve(root);
+  const worktreePath = path.join(resolvedRoot, `jinn-${safeSegment(taskId)}-${safeSegment(lane)}`);
+  assertInsideRoot(resolvedRoot, worktreePath);
+  return worktreePath;
+}
+
+function requireManagedWorktree(root: string, taskId: string, lane: string): WorktreeHandle {
+  const worktreePath = worktreePathForTaskLane(root, taskId, lane);
+  if (!fs.existsSync(worktreePath)) throw new Error(`orchestration worktree not found: ${worktreePath}`);
+  return readManagedWorktree(worktreePath);
+}
+
+function readManagedWorktree(worktreePath: string): WorktreeHandle {
+  const markerPath = path.join(worktreePath, WORKTREE_MARKER);
+  if (!fs.existsSync(markerPath)) throw new Error(`not a managed orchestration worktree: ${worktreePath}`);
+  return parseWorktreeMarker(fs.readFileSync(markerPath, "utf-8"), worktreePath);
+}
+
+function parseWorktreeMarker(raw: string, fallbackPath: string): WorktreeHandle {
+  const parsed = JSON.parse(raw) as Partial<WorktreeHandle>;
+  if (!parsed.taskId || !parsed.lane || !parsed.path || !parsed.baseCwd || !parsed.gitRoot || !parsed.branch || !parsed.createdAt) {
+    throw new Error(`invalid orchestration worktree marker: ${fallbackPath}`);
+  }
+  return {
+    taskId: parsed.taskId,
+    lane: parsed.lane,
+    path: parsed.path,
+    baseCwd: parsed.baseCwd,
+    gitRoot: parsed.gitRoot,
+    branch: parsed.branch,
+    createdAt: parsed.createdAt,
+  };
+}
+
+function findGitRoot(cwd: string): string | null {
+  try {
+    return runGit(["rev-parse", "--show-toplevel"], cwd).trim();
+  } catch {
+    return null;
+  }
+}
+
+function runGit(args: string[], cwd: string): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function safeSegment(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!safe) throw new Error(`invalid orchestration worktree path segment: ${value}`);
+  return safe.slice(0, 80);
+}
+
+function assertInsideRoot(root: string, candidate: string): void {
+  if (!isSameOrInside(root, candidate)) throw new Error(`orchestration worktree path escapes root: ${candidate}`);
+}
+
+function isSameOrInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function makeWritable(target: string): void {
+  if (!fs.existsSync(target)) return;
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink()) return;
+  fs.chmodSync(target, stat.mode | 0o700);
+  if (!stat.isDirectory()) return;
+  for (const entry of fs.readdirSync(target)) {
+    makeWritable(path.join(target, entry));
+  }
+}
+
+function makeReadOnly(target: string): void {
+  if (!fs.existsSync(target)) return;
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink()) return;
+  fs.chmodSync(target, stat.mode & ~0o222);
+  if (!stat.isDirectory()) return;
+  for (const entry of fs.readdirSync(target)) {
+    makeReadOnly(path.join(target, entry));
+  }
+}

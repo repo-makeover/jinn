@@ -9,4 +9,5 @@ export * from "./coordinator.js";
 export * from "./lease-meta.js";
 export * from "./runtime.js";
 export * from "./run-mode.js";
+export * from "./worktree.js";
 export * from "./adapter/index.js";

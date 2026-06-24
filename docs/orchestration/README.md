@@ -4,9 +4,10 @@ Status: implemented as a provider-neutral foundation with durable
 scheduler-state, provider-adapter contract modules, opt-in live-adapter
 plumbing, coordinator planning, observe surfaces, and the first opt-in live run
 modes. The live modes are daemon-gated by `orchestration.enabled` and route
-through the existing Jinn session path. Worktrees, dashboard controls,
-board-worker dispatch, dual lanes, and org-worker mapping remain later
-milestones.
+through the existing Jinn session path. Git worktree execution is implemented
+for isolated implementation lanes plus read-only review access. Dashboard
+controls, board-worker dispatch, dual lanes, and org-worker mapping remain
+later milestones.
 
 ## Intent
 
@@ -86,6 +87,10 @@ jinn scheduler plan docs/orchestration/examples/task-standard.yaml \
 
 jinn run --mode single_worker --task docs/orchestration/examples/task-live.yaml
 jinn run --mode single_worker_with_review --task docs/orchestration/examples/task-live.yaml --json
+
+jinn worktree create docs/orchestration/examples/task-live.yaml --lane seniorImplementer
+jinn worktree diff docs/orchestration/examples/task-live.yaml --lane seniorImplementer
+jinn worktree cleanup docs/orchestration/examples/task-live.yaml --lane seniorImplementer
 ```
 
 `scheduler allocate` intentionally requires `--dry-run`. Without it, the command
@@ -104,6 +109,10 @@ its single runtime scheduler, creates normal Jinn sessions with lease metadata i
 `transportMeta`, heartbeats the lease on the existing 5s session heartbeat, and
 releases leases in `finally` after each role turn settles.
 
+`jinn worktree create|diff|cleanup` uses the live `config.yaml`
+`orchestration.worktreeRoot` and `orchestration.maxWorktrees` settings. The
+helpers operate only on directories with Jinn's managed worktree marker.
+
 ## API
 
 Gateway routes under `/api/orchestration/` inherit the existing `/api/*`
@@ -121,7 +130,10 @@ old no-daemon/test fallback that opens a scheduler for read-only inspection.
 
 `POST /api/orchestration/run` executes only `single_worker` and
 `single_worker_with_review` tasks through the existing session runner. It does
-not create worktrees or dashboard controls. Non-supported methods return `405`.
+not create dashboard controls. When an implementation worker has
+`workspacePolicy: isolated_worktree` and the resolved task `cwd` is inside a git
+repo, the run path creates a task/lane-scoped worktree and passes that path as
+the session `cwd`. Non-supported methods return `405`.
 
 ## Scheduler Behavior
 
@@ -151,6 +163,20 @@ upserts/deletes, and expires stale leases deterministically on hydrate. The
 daemon constructs one runtime scheduler when `orchestration.enabled: true`,
 starts an expiry/retry timer, and closes the scheduler on shutdown. Plain CLI
 inspection still uses explicit temp paths or read-only fallbacks.
+
+## Worktrees
+
+Implementation workers with `workspacePolicy: isolated_worktree` run in a
+managed git worktree rooted at `orchestration.worktreeRoot` (default:
+`~/.jinn/worktrees`). `orchestration.maxWorktrees` bounds the number of managed
+worktrees that can exist at once. If the resolved task `cwd` is not inside a git
+repo, Jinn logs a downgrade and uses the current shared-cwd behavior.
+
+For `single_worker_with_review`, the reviewer receives the implementation
+worktree `cwd` in read-only mode after the implementer lease has been released,
+so the worker slot is free while the patch remains inspectable. The worktree is
+cleaned up at task end. If cleanup is missed, the runtime's existing boot/timer
+reaper removes managed worktrees whose task no longer has a running lease.
 
 ## Provider Adapters
 
@@ -214,14 +240,13 @@ simulation remain deterministic.
 - Observe-only API routes reject mutating HTTP methods and return existing
   workers/leases/queue/allocations only.
 - Durable scheduler state, adapter contracts, opt-in live adapters, headroom
-  predicates, daemon runtime ownership, and first live run modes are
-  implemented. Persistent telemetry aggregation, real worktrees, dual-lane
+  predicates, daemon runtime ownership, first live run modes, and git worktree
+  isolation are implemented. Persistent telemetry aggregation, dual-lane
   routing, board-worker integration, and dashboard controls are not implemented
   yet.
 
 ## Later Milestones
 
-- Isolated implementation/review/integration worktrees.
 - Cross-family review policy for live runs.
 - Dual provider lanes and integration selection.
 - Durable telemetry and dashboard control surfaces.

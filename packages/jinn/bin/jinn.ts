@@ -197,6 +197,39 @@ program
     });
 }
 
+{
+  const worktreeCmd = program
+    .command("worktree")
+    .description("Manage matrix-orchestration git worktrees");
+
+  worktreeCmd
+    .command("create <task-file>")
+    .option("--lane <name>", "Worktree lane name (default: implementation)")
+    .option("--json", "Print raw JSON")
+    .action(async (taskFile: string, opts: { lane?: string; json?: boolean }) => {
+      const { runWorktreeCreate } = await import("../src/cli/orchestration.js");
+      await runWorktreeCreate(taskFile, opts);
+    });
+
+  worktreeCmd
+    .command("diff <task-file>")
+    .option("--lane <name>", "Worktree lane name (default: implementation)")
+    .option("--json", "Print raw JSON")
+    .action(async (taskFile: string, opts: { lane?: string; json?: boolean }) => {
+      const { runWorktreeDiff } = await import("../src/cli/orchestration.js");
+      await runWorktreeDiff(taskFile, opts);
+    });
+
+  worktreeCmd
+    .command("cleanup <task-file>")
+    .option("--lane <name>", "Worktree lane name (default: implementation)")
+    .option("--json", "Print raw JSON")
+    .action(async (taskFile: string, opts: { lane?: string; json?: boolean }) => {
+      const { runWorktreeCleanup } = await import("../src/cli/orchestration.js");
+      await runWorktreeCleanup(taskFile, opts);
+    });
+}
+
 program
   .command("create <name>")
   .description("Create a new Jinn instance")

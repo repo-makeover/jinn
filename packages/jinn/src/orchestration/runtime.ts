@@ -1,8 +1,9 @@
-import { ORCH_CONFIG_DIR, ORCH_DB } from "../shared/paths.js";
+import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
 import type { JinnConfig } from "../shared/types.js";
 import { loadOrchestrationConfig } from "./config.js";
 import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
 import { DEFAULT_LEASE_DURATION_MS, type AllocationRequest, type AllocationResult, type Lease, type LeaseValidationResult, type OrchestrationConfig } from "./types.js";
+import { DEFAULT_MAX_WORKTREES, reapOrphanedWorktrees, type WorktreeHandle, type WorktreeOptions } from "./worktree.js";
 
 const DEFAULT_REAPER_INTERVAL_MS = 5_000;
 
@@ -13,6 +14,8 @@ export interface OrchestrationRuntimeOptions {
   now?: () => Date;
   reaperIntervalMs?: number;
   startReaper?: boolean;
+  worktreeRoot?: string;
+  maxWorktrees?: number;
 }
 
 export class OrchestrationRuntime {
@@ -20,6 +23,7 @@ export class OrchestrationRuntime {
   readonly dbPath: string;
   private readonly scheduler: PersistentMatrixScheduler;
   private readonly reaperIntervalMs: number;
+  private readonly worktrees: WorktreeOptions;
   private reaper: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: OrchestrationRuntimeOptions) {
@@ -30,6 +34,12 @@ export class OrchestrationRuntime {
       now: opts.now,
     });
     this.reaperIntervalMs = Math.max(1, Math.floor(opts.reaperIntervalMs ?? DEFAULT_REAPER_INTERVAL_MS));
+    this.worktrees = {
+      root: opts.worktreeRoot ?? ORCH_WORKTREE_ROOT,
+      maxWorktrees: typeof opts.maxWorktrees === "number" && Number.isFinite(opts.maxWorktrees) && opts.maxWorktrees > 0
+        ? Math.floor(opts.maxWorktrees)
+        : DEFAULT_MAX_WORKTREES,
+    };
     if (opts.startReaper !== false) this.startReaper();
   }
 
@@ -77,6 +87,19 @@ export class OrchestrationRuntime {
     return this.scheduler.listAllocations();
   }
 
+  getWorktreeOptions(): WorktreeOptions {
+    return { ...this.worktrees };
+  }
+
+  reapWorktrees(): WorktreeHandle[] {
+    const activeTaskIds = new Set(
+      this.scheduler.listLeases()
+        .filter((lease) => lease.state === "running")
+        .map((lease) => lease.taskId),
+    );
+    return reapOrphanedWorktrees(this.worktrees.root, activeTaskIds);
+  }
+
   close(): void {
     if (this.reaper) {
       clearInterval(this.reaper);
@@ -88,8 +111,10 @@ export class OrchestrationRuntime {
   private startReaper(): void {
     if (this.reaper) return;
     this.expireLeases();
+    this.reapWorktrees();
     this.reaper = setInterval(() => {
       this.expireLeases();
+      this.reapWorktrees();
     }, this.reaperIntervalMs);
     this.reaper.unref?.();
   }
@@ -104,6 +129,8 @@ export function createOrchestrationRuntimeFromConfig(
     configDir: config.orchestration.configDir,
     dbPath: config.orchestration.dbPath,
     reaperIntervalMs: config.orchestration.reaperIntervalMs,
+    worktreeRoot: config.orchestration.worktreeRoot,
+    maxWorktrees: config.orchestration.maxWorktrees,
     ...opts,
   });
 }
