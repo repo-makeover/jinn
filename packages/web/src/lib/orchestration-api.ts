@@ -12,6 +12,12 @@ export interface OrchestrationStatus {
   pauseReason: string | null
   disabledReason: string | null
   degradedReason: string | null
+  recoveryNotices?: Array<{
+    recoveredAt: string
+    manifestPath: string
+    corruptDbPath: string
+    message: string
+  }>
   counts: {
     workers: number
     runningLeases: number
@@ -51,6 +57,28 @@ export interface QueueSummary {
   priority?: string
   state?: string
   reason?: string
+}
+
+export interface TaskPauseSummary {
+  taskId: string
+  coordinatorId: string
+  pausedAt: string
+  pauseReason: string | null
+  managerName: string | null
+}
+
+export interface HoldSummary {
+  holdId: string
+  managerName: string
+  state: string
+  roles: string[]
+  workerIds: string[]
+  taskId: string | null
+  coordinatorId: string | null
+  reason: string | null
+  createdAt: string
+  updatedAt: string
+  expiresAt: string
 }
 
 export interface AllocationSummary {
@@ -156,6 +184,8 @@ export interface OrchestrationDashboardData {
   workers: WorkerSummary[]
   leases: LeaseSummary[]
   queue: QueueSummary[]
+  taskPauses: TaskPauseSummary[]
+  holds: HoldSummary[]
   allocations: AllocationSummary[]
   continuations: ContinuationSummary[]
   telemetry: TelemetrySummaryResponse
@@ -197,6 +227,7 @@ export async function loadOrchestrationDashboard(): Promise<OrchestrationDashboa
     workers,
     leases,
     queue,
+    holds,
     allocations,
     continuations,
     telemetry,
@@ -206,7 +237,8 @@ export async function loadOrchestrationDashboard(): Promise<OrchestrationDashboa
     get<OrchestrationStatus>("/api/orchestration/status"),
     get<{ workers: WorkerSummary[] }>("/api/orchestration/workers"),
     get<{ leases: LeaseSummary[] }>("/api/orchestration/leases"),
-    get<{ queue: QueueSummary[] }>("/api/orchestration/queue"),
+    get<{ queue: QueueSummary[]; pauses?: TaskPauseSummary[] }>("/api/orchestration/queue"),
+    get<{ holds: HoldSummary[] }>("/api/orchestration/holds"),
     get<{ allocations: AllocationSummary[] }>("/api/orchestration/allocations"),
     get<{ continuations: ContinuationSummary[] }>("/api/orchestration/continuations"),
     get<TelemetrySummaryResponse>("/api/orchestration/telemetry/summary"),
@@ -219,6 +251,8 @@ export async function loadOrchestrationDashboard(): Promise<OrchestrationDashboa
     workers: workers.workers,
     leases: leases.leases,
     queue: queue.queue,
+    taskPauses: queue.pauses ?? [],
+    holds: holds.holds,
     allocations: allocations.allocations,
     continuations: continuations.continuations,
     telemetry,
@@ -233,6 +267,40 @@ export async function retryContinuation(taskId: string, coordinatorId: string) {
 
 export async function selectDualLaneWinner(taskId: string, winnerLane: "openai" | "anthropic") {
   return post("/api/orchestration/dual-lane/select", { taskId, winnerLane })
+}
+
+export async function applyDualLaneWinner(taskId: string, winnerLane: "openai" | "anthropic") {
+  return post("/api/orchestration/dual-lane/apply", { taskId, winnerLane })
+}
+
+export async function pauseQueuedTask(taskId: string, coordinatorId: string) {
+  return post("/api/orchestration/queue/pause-task", { taskId, coordinatorId, reason: "Paused from dashboard" })
+}
+
+export async function resumeQueuedTask(taskId: string, coordinatorId: string) {
+  return post("/api/orchestration/queue/resume-task", { taskId, coordinatorId })
+}
+
+export async function createHold(input: { managerName: string; roles: string[]; workerIds: string[]; ttlMs: number; reason?: string }) {
+  return post("/api/orchestration/holds", input)
+}
+
+export async function extendHold(holdId: string, managerName: string, ttlMs: number) {
+  return post(`/api/orchestration/holds/${encodeURIComponent(holdId)}/extend`, { managerName, ttlMs })
+}
+
+export async function cancelHold(holdId: string, managerName: string) {
+  return post(`/api/orchestration/holds/${encodeURIComponent(holdId)}/cancel`, { managerName })
+}
+
+export async function viewArtifact(taskId: string, kind: "diff" | "prompt" | "output") {
+  return get<{ taskId: string; kind: string; artifacts: Array<{ record: { lane: string | null; path: string }; content: string }> }>(
+    `/api/orchestration/artifacts/${encodeURIComponent(taskId)}/${kind}`,
+  )
+}
+
+export async function requeueRecoveredTask(manifestPath: string, taskId: string, managerName: string) {
+  return post("/api/orchestration/recovery/requeue", { manifestPath, taskId, managerName })
 }
 
 export async function pauseOrchestrationQueue(reason?: string) {

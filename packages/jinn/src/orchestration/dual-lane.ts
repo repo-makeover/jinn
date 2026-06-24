@@ -33,6 +33,7 @@ import {
   resolveTaskBaseCwd,
   type WorktreeHandle,
 } from "./worktree.js";
+import { persistDualLaneArtifacts } from "./artifacts.js";
 
 const LANE_DEFS = [
   { id: "openai", family: "openai" },
@@ -200,6 +201,7 @@ export async function runAllocatedDualLaneTask(opts: {
     }
 
     const report = buildComparisonReport(opts.task.taskId, lanes);
+    const manifestLanes = lanes.map(toManifestLane);
     writeDualLaneManifest({
       taskId: opts.task.taskId,
       coordinatorId: opts.task.coordinatorId,
@@ -208,8 +210,14 @@ export async function runAllocatedDualLaneTask(opts: {
       updatedAt: new Date().toISOString(),
       baseCwd,
       promptHash: hashPrompt(opts.task.prompt),
-      lanes: lanes.map(toManifestLane),
+      lanes: manifestLanes,
       comparisonReport: report,
+    });
+    persistDualLaneArtifacts({
+      taskId: opts.task.taskId,
+      prompt: opts.task.prompt,
+      lanes: manifestLanes,
+      store: runtime.getStore(),
     });
 
     return {

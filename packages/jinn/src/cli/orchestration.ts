@@ -51,6 +51,42 @@ export interface DualLaneSelectOptions {
   json?: boolean;
 }
 
+export interface QueueTaskControlOptions extends OrchestrationContinuationRetryOptions {
+  reason?: string;
+  managerName?: string;
+}
+
+export interface HoldCreateOptions {
+  managerName: string;
+  role?: string[];
+  workerId?: string[];
+  taskId?: string;
+  coordinatorId?: string;
+  reason?: string;
+  ttlMs?: number;
+  json?: boolean;
+}
+
+export interface HoldChangeOptions {
+  holdId: string;
+  managerName: string;
+  ttlMs?: number;
+  json?: boolean;
+}
+
+export interface ArtifactViewOptions {
+  taskId: string;
+  kind: "diff" | "prompt" | "output";
+  json?: boolean;
+}
+
+export interface RecoveryRequeueOptions {
+  manifest: string;
+  taskId: string;
+  managerName: string;
+  json?: boolean;
+}
+
 export interface SchedulerStatsOptions {
   path?: string;
   json?: boolean;
@@ -263,6 +299,40 @@ function formatDualLaneSelectionResult(result: any): string {
   ].join("\n");
 }
 
+function formatDualLaneApplyResult(result: any): string {
+  if (result?.ok !== true) return String(result?.error ?? "dual-lane apply failed");
+  return [
+    `Dual-lane task ${result.taskId ?? "(unknown)"} applied ${result.selectedLane ?? "(unknown)"}`,
+    `Base cwd: ${result.baseCwd ?? "(unknown)"}`,
+    `Patch artifact: ${result.patchPath ?? "(unknown)"}`,
+  ].join("\n");
+}
+
+function formatHolds(holds: Array<Record<string, unknown>>): string {
+  if (holds.length === 0) return "No orchestration holds.";
+  const lines = ["Hold                                Manager            State      Expires                       Workers"];
+  for (const hold of holds) {
+    const workers = Array.isArray(hold.workerIds) ? hold.workerIds.join(",") : "";
+    lines.push([
+      String(hold.holdId ?? "").padEnd(35),
+      String(hold.managerName ?? "").padEnd(18),
+      String(hold.state ?? "").padEnd(10),
+      String(hold.expiresAt ?? "").padEnd(29),
+      workers,
+    ].join(" "));
+  }
+  return lines.join("\n");
+}
+
+function formatArtifacts(body: any): string {
+  const artifacts = Array.isArray(body?.artifacts) ? body.artifacts : [];
+  if (artifacts.length === 0) return "No orchestration artifacts.";
+  return artifacts.map((entry: any) => {
+    const header = `# ${entry?.record?.kind ?? body?.kind} ${entry?.record?.lane ?? "base"} ${entry?.record?.path ?? ""}`.trim();
+    return `${header}\n${entry?.content ?? ""}`;
+  }).join("\n\n");
+}
+
 function formatTelemetrySummary(summary: OrchestrationTelemetrySummary): string {
   if (summary.totals.count === 0) return `No orchestration telemetry records.${summary.skippedLines ? ` Skipped corrupt lines: ${summary.skippedLines}.` : ""}`;
   const lines = [
@@ -357,6 +427,32 @@ export async function runQueueList(opts: OrchestrationStateOptions): Promise<voi
   print(opts.json ? { queue } : formatQueue(queue), opts.json);
 }
 
+export async function runQueuePauseTask(opts: QueueTaskControlOptions): Promise<void> {
+  const body = {
+    taskId: opts.taskId,
+    coordinatorId: opts.coordinatorId,
+    reason: opts.reason,
+    managerName: opts.managerName,
+  };
+  const res = await fetchGatewayOrchestration("/api/orchestration/queue/pause-task", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  const response = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((response as { error?: unknown } | null)?.error ?? `queue pause-task failed (${res.status})`));
+  print(opts.json ? response : `Paused ${opts.taskId}/${opts.coordinatorId}`, opts.json);
+}
+
+export async function runQueueResumeTask(opts: QueueTaskControlOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/queue/resume-task", {
+    method: "POST",
+    body: JSON.stringify({ taskId: opts.taskId, coordinatorId: opts.coordinatorId }),
+  });
+  const response = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((response as { error?: unknown } | null)?.error ?? `queue resume-task failed (${res.status})`));
+  print(opts.json ? response : `Resumed ${opts.taskId}/${opts.coordinatorId}`, opts.json);
+}
+
 export async function runSchedulerAllocate(taskFile: string, opts: SchedulerAllocateOptions): Promise<void> {
   if (!opts.dryRun) throw new Error("scheduler allocate is inert in this slice; pass --dry-run");
   const config = loadConfigForCli(opts);
@@ -430,6 +526,16 @@ export async function runRecoveryNotices(opts: { json?: boolean }): Promise<void
   print(opts.json ? { recoveryNotices } : formatRecoveryNotices(recoveryNotices), opts.json);
 }
 
+export async function runRecoveryRequeue(opts: RecoveryRequeueOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/recovery/requeue", {
+    method: "POST",
+    body: JSON.stringify({ manifestPath: opts.manifest, taskId: opts.taskId, managerName: opts.managerName }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((body as { error?: unknown } | null)?.error ?? `recovery requeue failed (${res.status})`));
+  print(opts.json ? body : `Recovered ${opts.taskId}; queued paused until explicit resume`, opts.json);
+}
+
 export async function runContinuationRetry(opts: OrchestrationContinuationRetryOptions): Promise<void> {
   const res = await fetchGatewayOrchestration("/api/orchestration/continuations/retry", {
     method: "POST",
@@ -457,6 +563,76 @@ export async function runDualLaneSelect(opts: DualLaneSelectOptions): Promise<vo
     throw new Error(`dual-lane selection failed (${res.status})${detail}`);
   }
   print(opts.json ? body : formatDualLaneSelectionResult(body), opts.json);
+}
+
+export async function runDualLaneApply(opts: DualLaneSelectOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/dual-lane/apply", {
+    method: "POST",
+    body: JSON.stringify({ taskId: opts.taskId, winnerLane: opts.winner }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = body && typeof body === "object" && "error" in body ? `: ${(body as { error?: unknown }).error}` : "";
+    throw new Error(`dual-lane apply failed (${res.status})${detail}`);
+  }
+  print(opts.json ? body : formatDualLaneApplyResult(body), opts.json);
+}
+
+export async function runHoldsList(opts: { json?: boolean }): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/holds", { method: "GET" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((body as { error?: unknown } | null)?.error ?? `holds list failed (${res.status})`));
+  const holds = Array.isArray((body as { holds?: unknown })?.holds)
+    ? (body as { holds: Array<Record<string, unknown>> }).holds
+    : [];
+  print(opts.json ? body : formatHolds(holds), opts.json);
+}
+
+export async function runHoldsCreate(opts: HoldCreateOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration("/api/orchestration/holds", {
+    method: "POST",
+    body: JSON.stringify({
+      managerName: opts.managerName,
+      roles: opts.role ?? [],
+      workerIds: opts.workerId ?? [],
+      taskId: opts.taskId,
+      coordinatorId: opts.coordinatorId,
+      reason: opts.reason,
+      ttlMs: opts.ttlMs,
+    }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((body as { error?: unknown } | null)?.error ?? `hold create failed (${res.status})`));
+  print(opts.json ? body : `Created hold ${(body as any)?.hold?.holdId ?? "(unknown)"}`, opts.json);
+}
+
+export async function runHoldsExtend(opts: HoldChangeOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration(`/api/orchestration/holds/${encodeURIComponent(opts.holdId)}/extend`, {
+    method: "POST",
+    body: JSON.stringify({ managerName: opts.managerName, ttlMs: opts.ttlMs }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((body as { error?: unknown } | null)?.error ?? `hold extend failed (${res.status})`));
+  print(opts.json ? body : `Extended hold ${opts.holdId}`, opts.json);
+}
+
+export async function runHoldsCancel(opts: HoldChangeOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration(`/api/orchestration/holds/${encodeURIComponent(opts.holdId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ managerName: opts.managerName }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((body as { error?: unknown } | null)?.error ?? `hold cancel failed (${res.status})`));
+  print(opts.json ? body : `Cancelled hold ${opts.holdId}`, opts.json);
+}
+
+export async function runArtifactsView(opts: ArtifactViewOptions): Promise<void> {
+  const res = await fetchGatewayOrchestration(`/api/orchestration/artifacts/${encodeURIComponent(opts.taskId)}/${opts.kind}`, {
+    method: "GET",
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(String((body as { error?: unknown } | null)?.error ?? `artifact view failed (${res.status})`));
+  print(opts.json ? body : formatArtifacts(body), opts.json);
 }
 
 export async function runWorktreeCreate(taskFile: string, opts: WorktreeCliOptions): Promise<void> {

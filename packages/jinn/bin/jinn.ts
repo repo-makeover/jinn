@@ -89,6 +89,16 @@ program
       const { runDualLaneSelect } = await import("../src/cli/orchestration.js");
       await runDualLaneSelect(opts);
     });
+
+  dualLaneCmd
+    .command("apply")
+    .requiredOption("--task-id <id>", "Dual-lane task id")
+    .requiredOption("--winner <lane>", "Winning lane: openai or anthropic")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { taskId: string; winner: string; json?: boolean }) => {
+      const { runDualLaneApply } = await import("../src/cli/orchestration.js");
+      await runDualLaneApply(opts);
+    });
 }
 
 {
@@ -167,6 +177,17 @@ program
       const { runRecoveryNotices } = await import("../src/cli/orchestration.js");
       await runRecoveryNotices(opts);
     });
+
+  recoveryCmd
+    .command("requeue")
+    .requiredOption("--manifest <path>", "Recovery manifest path")
+    .requiredOption("--task-id <id>", "Recovered task id to import")
+    .requiredOption("--manager-name <name>", "Manager or executive authorizing the import")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { manifest: string; taskId: string; managerName: string; json?: boolean }) => {
+      const { runRecoveryRequeue } = await import("../src/cli/orchestration.js");
+      await runRecoveryRequeue(opts);
+    });
 }
 
 {
@@ -213,6 +234,94 @@ program
     .action(async (opts: { configDir: string; dbPath?: string; json?: boolean }) => {
       const { runQueueList } = await import("../src/cli/orchestration.js");
       await runQueueList(opts);
+    });
+
+  queueCmd
+    .command("pause-task")
+    .requiredOption("--task-id <id>", "Queued task id")
+    .requiredOption("--coordinator-id <id>", "Queued coordinator id")
+    .option("--reason <text>", "Pause reason")
+    .option("--manager-name <name>", "Manager name for audit metadata")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { taskId: string; coordinatorId: string; reason?: string; managerName?: string; json?: boolean }) => {
+      const { runQueuePauseTask } = await import("../src/cli/orchestration.js");
+      await runQueuePauseTask(opts);
+    });
+
+  queueCmd
+    .command("resume-task")
+    .requiredOption("--task-id <id>", "Queued task id")
+    .requiredOption("--coordinator-id <id>", "Queued coordinator id")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { taskId: string; coordinatorId: string; json?: boolean }) => {
+      const { runQueueResumeTask } = await import("../src/cli/orchestration.js");
+      await runQueueResumeTask(opts);
+    });
+}
+
+{
+  const holdsCmd = program
+    .command("holds")
+    .description("Manage TTL-bounded matrix-orchestration holds");
+
+  holdsCmd
+    .command("list")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const { runHoldsList } = await import("../src/cli/orchestration.js");
+      await runHoldsList(opts);
+    });
+
+  holdsCmd
+    .command("create")
+    .requiredOption("--manager-name <name>", "Manager or executive authorizing the hold")
+    .option("--role <role...>", "Role(s) requested by the hold")
+    .option("--worker-id <id...>", "Worker id(s) reserved by the hold")
+    .option("--task-id <id>", "Optional task id associated with the hold")
+    .option("--coordinator-id <id>", "Optional coordinator id associated with the hold")
+    .option("--reason <text>", "Hold reason")
+    .option("--ttl-ms <ms>", "Hold TTL in milliseconds", Number)
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { managerName: string; role?: string[]; workerId?: string[]; taskId?: string; coordinatorId?: string; reason?: string; ttlMs?: number; json?: boolean }) => {
+      const { runHoldsCreate } = await import("../src/cli/orchestration.js");
+      await runHoldsCreate(opts);
+    });
+
+  holdsCmd
+    .command("extend")
+    .requiredOption("--hold-id <id>", "Hold id")
+    .requiredOption("--manager-name <name>", "Manager or executive that owns the hold")
+    .option("--ttl-ms <ms>", "New hold TTL in milliseconds", Number)
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { holdId: string; managerName: string; ttlMs?: number; json?: boolean }) => {
+      const { runHoldsExtend } = await import("../src/cli/orchestration.js");
+      await runHoldsExtend(opts);
+    });
+
+  holdsCmd
+    .command("cancel")
+    .requiredOption("--hold-id <id>", "Hold id")
+    .requiredOption("--manager-name <name>", "Manager or executive that owns the hold")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { holdId: string; managerName: string; json?: boolean }) => {
+      const { runHoldsCancel } = await import("../src/cli/orchestration.js");
+      await runHoldsCancel(opts);
+    });
+}
+
+{
+  const artifactsCmd = program
+    .command("artifacts")
+    .description("View raw orchestration artifacts");
+
+  artifactsCmd
+    .command("view")
+    .requiredOption("--task-id <id>", "Task id")
+    .requiredOption("--kind <kind>", "Artifact kind: diff, prompt, or output")
+    .option("--json", "Print raw JSON")
+    .action(async (opts: { taskId: string; kind: "diff" | "prompt" | "output"; json?: boolean }) => {
+      const { runArtifactsView } = await import("../src/cli/orchestration.js");
+      await runArtifactsView(opts);
     });
 }
 

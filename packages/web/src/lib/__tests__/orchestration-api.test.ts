@@ -19,11 +19,12 @@ describe("orchestration-api", () => {
 
     const data = await loadOrchestrationDashboard()
 
-    expect(fetchMock).toHaveBeenCalledTimes(9)
+    expect(fetchMock).toHaveBeenCalledTimes(10)
     expect(data.status.enabled).toBe(true)
     expect(data.workers).toEqual([{ id: "worker-1" }])
     expect(data.leases).toEqual([{ leaseId: "lease-1" }])
     expect(data.queue).toEqual([])
+    expect(data.holds).toEqual([])
     expect(data.dualLane).toEqual([{ taskId: "dual-1" }])
   })
 
@@ -95,6 +96,7 @@ function payloadFor(url: string) {
   if (url.endsWith("/workers")) return { workers: [{ id: "worker-1" }] }
   if (url.endsWith("/leases")) return { leases: [{ leaseId: "lease-1" }] }
   if (url.endsWith("/queue")) return { queue: [] }
+  if (url.endsWith("/holds")) return { holds: [] }
   if (url.endsWith("/allocations")) return { allocations: [] }
   if (url.endsWith("/continuations")) return { continuations: [] }
   if (url.endsWith("/telemetry/summary")) {

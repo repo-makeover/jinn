@@ -187,6 +187,8 @@ function sampleData(overrides: Partial<OrchestrationDashboardData> = {}): Orches
     }],
     leases: [],
     queue: [],
+    taskPauses: [],
+    holds: [],
     allocations: [],
     continuations: [],
     telemetry: {

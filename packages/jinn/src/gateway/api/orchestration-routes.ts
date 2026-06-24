@@ -1,22 +1,27 @@
 import fs from "node:fs";
 import { selectDualLaneWinner } from "../../orchestration/dual-lane.js";
+import { applyDualLaneWinner, listArtifactContents } from "../../orchestration/artifacts.js";
 import { listDualLaneManifests } from "../../orchestration/dual-lane-state.js";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import { listSessions, updateSession } from "../../sessions/registry.js";
 import type { Session } from "../../shared/types.js";
+import { authorizeManagerScope, employeeNamesForOrgWorkerIds } from "../manager-auth.js";
 import { parseLeaseTransportMeta } from "../../orchestration/lease-meta.js";
 import { loadDefaultOrchestrationConfig, loadOrchestrationConfig } from "../../orchestration/config.js";
 import { liveRunModeSchema, runOrchestrationTask } from "../../orchestration/run-mode.js";
 import type { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { formatZodError } from "../../orchestration/schemas.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
-import { OrchestrationStore } from "../../orchestration/store.js";
+import { OrchestrationStore, type ArtifactKind } from "../../orchestration/store.js";
+import { requeueRecoveredContinuation } from "../../orchestration/recovery-requeue.js";
 import { listRecoveryNotices } from "../../orchestration/store-recovery.js";
 import { ORCH_DB, ORCH_RECOVERY_DIR } from "../../shared/paths.js";
 import { readOrchestrationTelemetry, summarizeOrchestrationTelemetry } from "../../orchestration/telemetry.js";
 import { listManagedWorktrees, resolveWorktreeOptions } from "../../orchestration/worktree.js";
+import { scanOrg } from "../org.js";
 import { readJsonBody } from "../http-helpers.js";
 import type { ApiContext } from "./context.js";
+import { matchRoute } from "./match-route.js";
 import { json } from "./responses.js";
 import { killSessionEngines } from "./session-dispatch.js";
 
@@ -35,9 +40,14 @@ const ROUTES = new Set([
   "/api/orchestration/dual-lane",
   "/api/orchestration/queue/pause",
   "/api/orchestration/queue/resume",
+  "/api/orchestration/queue/pause-task",
+  "/api/orchestration/queue/resume-task",
+  "/api/orchestration/holds",
   "/api/orchestration/leases/stop",
   "/api/orchestration/continuations/retry",
   "/api/orchestration/dual-lane/select",
+  "/api/orchestration/dual-lane/apply",
+  "/api/orchestration/recovery/requeue",
   "/api/orchestration/run",
 ]);
 
@@ -48,7 +58,10 @@ export async function handleOrchestrationRoutes(
   context: ApiContext,
   req?: HttpRequest,
 ): Promise<boolean> {
-  if (!ROUTES.has(pathname)) return false;
+  const holdExtendParams = matchRoute("/api/orchestration/holds/:id/extend", pathname);
+  const holdCancelParams = matchRoute("/api/orchestration/holds/:id/cancel", pathname);
+  const artifactParams = matchRoute("/api/orchestration/artifacts/:taskId/:kind", pathname);
+  if (!ROUTES.has(pathname) && !holdExtendParams && !holdCancelParams && !artifactParams) return false;
   if (pathname === "/api/orchestration/queue/pause") {
     const runtime = requireLiveRuntime(method, res, context);
     if (!runtime) return true;
@@ -63,6 +76,112 @@ export async function handleOrchestrationRoutes(
     if (!runtime) return true;
     const result = await runtime.resumeQueue();
     json(res, { controlState: result.controlState, retried: result.retryResults.filter((entry) => entry.ok).length }, 202);
+    return true;
+  }
+  if (pathname === "/api/orchestration/queue/pause-task") {
+    const runtime = requireLiveRuntime(method, res, context);
+    if (!runtime) return true;
+    const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
+    if (!parsed.ok) return true;
+    const body = parsed.body as { taskId?: unknown; coordinatorId?: unknown; reason?: unknown; managerName?: unknown } | null;
+    if (typeof body?.taskId !== "string" || typeof body?.coordinatorId !== "string") {
+      json(res, { error: "taskId and coordinatorId are required" }, 400);
+      return true;
+    }
+    json(res, {
+      pause: runtime.pauseTask(body.taskId, body.coordinatorId, {
+        reason: typeof body.reason === "string" ? body.reason : undefined,
+        managerName: typeof body.managerName === "string" ? body.managerName : undefined,
+      }),
+    }, 200);
+    return true;
+  }
+  if (pathname === "/api/orchestration/queue/resume-task") {
+    const runtime = requireLiveRuntime(method, res, context);
+    if (!runtime) return true;
+    const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
+    if (!parsed.ok) return true;
+    const body = parsed.body as { taskId?: unknown; coordinatorId?: unknown } | null;
+    if (typeof body?.taskId !== "string" || typeof body?.coordinatorId !== "string") {
+      json(res, { error: "taskId and coordinatorId are required" }, 400);
+      return true;
+    }
+    const result = await runtime.resumeTask(body.taskId, body.coordinatorId);
+    json(res, { resumed: result.paused, retried: result.retryResults.filter((entry) => entry.ok).length }, 202);
+    return true;
+  }
+  if (pathname === "/api/orchestration/holds" && method === "POST") {
+    const runtime = requireLiveRuntime(method, res, context);
+    if (!runtime) return true;
+    const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
+    if (!parsed.ok) return true;
+    const body = parsed.body as {
+      managerName?: unknown;
+      roles?: unknown;
+      workerIds?: unknown;
+      taskId?: unknown;
+      coordinatorId?: unknown;
+      reason?: unknown;
+      ttlMs?: unknown;
+    } | null;
+    const managerName = typeof body?.managerName === "string" ? body.managerName.trim() : "";
+    if (!managerName) {
+      json(res, { error: "managerName is required" }, 400);
+      return true;
+    }
+    const workerIds = parseStringArray(body?.workerIds);
+    const roles = parseStringArray(body?.roles);
+    const auth = authorizeHoldManager(managerName, workerIds);
+    if (!auth.ok) {
+      json(res, { error: auth.error }, 403);
+      return true;
+    }
+    if (workerIds.length === 0 && roles.length === 0) {
+      json(res, { error: "at least one role or workerId is required" }, 400);
+      return true;
+    }
+    const ttlMs = typeof body?.ttlMs === "number" && Number.isFinite(body.ttlMs) ? body.ttlMs : 60 * 60 * 1000;
+    const hold = runtime.createHold({
+      managerName,
+      roles,
+      workerIds,
+      taskId: typeof body?.taskId === "string" ? body.taskId : undefined,
+      coordinatorId: typeof body?.coordinatorId === "string" ? body.coordinatorId : undefined,
+      reason: typeof body?.reason === "string" ? body.reason : undefined,
+      ttlMs,
+    });
+    json(res, { hold }, 201);
+    return true;
+  }
+  if ((holdExtendParams || holdCancelParams) && method === "POST") {
+    const runtime = requireLiveRuntime(method, res, context);
+    if (!runtime) return true;
+    const parsed = req ? await readJsonBody(req, res, { allowEmpty: true }) : { ok: true as const, body: null };
+    if (!parsed.ok) return true;
+    const body = parsed.body as { managerName?: unknown; ttlMs?: unknown } | null;
+    const managerName = typeof body?.managerName === "string" ? body.managerName.trim() : "";
+    if (!managerName) {
+      json(res, { error: "managerName is required" }, 400);
+      return true;
+    }
+    const current = runtime.listHolds({ includeInactive: true }).find((hold) => hold.holdId === (holdExtendParams?.id ?? holdCancelParams?.id));
+    if (!current) {
+      json(res, { error: "hold not found" }, 404);
+      return true;
+    }
+    const auth = authorizeHoldManager(managerName, current.workerIds);
+    if (!auth.ok || current.managerName !== managerName) {
+      json(res, { error: auth.ok ? "hold can only be changed by its manager" : auth.error }, 403);
+      return true;
+    }
+    if (holdExtendParams) {
+      const ttlMs = typeof body?.ttlMs === "number" && Number.isFinite(body.ttlMs) ? body.ttlMs : 60 * 60 * 1000;
+      const hold = runtime.extendHold(holdExtendParams.id, ttlMs);
+      json(res, { hold }, hold?.state === "active" ? 200 : 409);
+      return true;
+    }
+    const hold = runtime.cancelHold(holdCancelParams!.id);
+    json(res, { hold }, hold ? 200 : 404);
     return true;
   }
   if (pathname === "/api/orchestration/leases/stop") {
@@ -110,6 +229,35 @@ export async function handleOrchestrationRoutes(
     json(res, result, 200);
     return true;
   }
+  if (pathname === "/api/orchestration/dual-lane/apply") {
+    if (method !== "POST") {
+      json(res, { error: "Method not allowed" }, 405);
+      return true;
+    }
+    if (context.getConfig().orchestration?.enabled !== true) {
+      json(res, { error: "orchestration is disabled" }, 409);
+      return true;
+    }
+    const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
+    if (!parsed.ok) return true;
+    const body = parsed.body as { taskId?: unknown; winnerLane?: unknown } | null;
+    if (typeof body?.taskId !== "string" || typeof body?.winnerLane !== "string") {
+      json(res, { error: "taskId and winnerLane are required" }, 400);
+      return true;
+    }
+    const store = context.orchestration?.runtime?.getStore() ?? openFallbackStore(context);
+    try {
+      const result = applyDualLaneWinner({ taskId: body.taskId, winnerLane: body.winnerLane, store });
+      if (!result.ok) {
+        json(res, { error: result.message, reason: result.reason }, result.reason === "not_found" ? 404 : 409);
+        return true;
+      }
+      json(res, result, 202);
+      return true;
+    } finally {
+      if (!context.orchestration?.runtime) store.close();
+    }
+  }
   if (pathname === "/api/orchestration/continuations/retry") {
     if (method !== "POST") {
       json(res, { error: "Method not allowed" }, 405);
@@ -141,6 +289,34 @@ export async function handleOrchestrationRoutes(
       return true;
     }
     json(res, result, result.state === "dispatching" ? 202 : 409);
+    return true;
+  }
+  if (pathname === "/api/orchestration/recovery/requeue") {
+    const runtime = requireLiveRuntime(method, res, context);
+    if (!runtime) return true;
+    const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
+    if (!parsed.ok) return true;
+    const body = parsed.body as { manifestPath?: unknown; taskId?: unknown; managerName?: unknown } | null;
+    if (typeof body?.manifestPath !== "string" || typeof body?.taskId !== "string" || typeof body?.managerName !== "string") {
+      json(res, { error: "manifestPath, taskId, and managerName are required" }, 400);
+      return true;
+    }
+    const auth = authorizeManagerScope(scanOrg(), body.managerName, []);
+    if (!auth.ok) {
+      json(res, { error: auth.error }, 403);
+      return true;
+    }
+    const result = requeueRecoveredContinuation({
+      manifestPath: body.manifestPath,
+      taskId: body.taskId,
+      managerName: body.managerName,
+      store: runtime.getStore(),
+    });
+    if (!result.ok) {
+      json(res, { error: result.message, reason: result.reason }, result.reason === "manifest_not_found" || result.reason === "continuation_not_found" ? 404 : 409);
+      return true;
+    }
+    json(res, result, 202);
     return true;
   }
   if (pathname === "/api/orchestration/run") {
@@ -218,11 +394,26 @@ export async function handleOrchestrationRoutes(
       });
       return true;
     }
+    if (artifactParams) {
+      const kind = parseArtifactKind(artifactParams.kind);
+      if (!kind) {
+        json(res, { error: "artifact kind must be diff, prompt, output, or patch_apply" }, 400);
+        return true;
+      }
+      const store = runtime?.getStore() ?? openFallbackStore(context);
+      try {
+        json(res, { taskId: artifactParams.taskId, kind, artifacts: listArtifactContents(store, artifactParams.taskId, kind) });
+      } finally {
+        if (!runtime) store.close();
+      }
+      return true;
+    }
     if (runtime) {
       if (pathname === "/api/orchestration/workers") json(res, { workers: runtime.listWorkers() });
       else if (pathname === "/api/orchestration/leases") json(res, { leases: runtime.listLeases() });
-      else if (pathname === "/api/orchestration/queue") json(res, { queue: runtime.listQueue() });
+      else if (pathname === "/api/orchestration/queue") json(res, { queue: runtime.listQueue(), pauses: runtime.listTaskPauses() });
       else if (pathname === "/api/orchestration/continuations") json(res, { continuations: runtime.listLiveContinuations() });
+      else if (pathname === "/api/orchestration/holds") json(res, { holds: runtime.listHolds({ includeInactive: true }) });
       else json(res, { allocations: runtime.listAllocations() });
       return true;
     }
@@ -240,8 +431,9 @@ export async function handleOrchestrationRoutes(
     const dbPath = context.orchestration?.dbPath ?? ORCH_DB;
     if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) {
       if (pathname === "/api/orchestration/leases") json(res, { leases: [] });
-      else if (pathname === "/api/orchestration/queue") json(res, { queue: [] });
+      else if (pathname === "/api/orchestration/queue") json(res, { queue: [], pauses: [] });
       else if (pathname === "/api/orchestration/continuations") json(res, { continuations: [] });
+      else if (pathname === "/api/orchestration/holds") json(res, { holds: [] });
       else json(res, { allocations: [] });
       return true;
     }
@@ -255,6 +447,16 @@ export async function handleOrchestrationRoutes(
       }
       return true;
     }
+    if (pathname === "/api/orchestration/holds") {
+      const store = OrchestrationStore.open(dbPath);
+      try {
+        store.expireHolds();
+        json(res, { holds: store.listHolds({ includeInactive: true }) });
+      } finally {
+        store.close();
+      }
+      return true;
+    }
 
     const scheduler = PersistentMatrixScheduler.open(config, {
       dbPath,
@@ -263,7 +465,7 @@ export async function handleOrchestrationRoutes(
     });
     try {
       if (pathname === "/api/orchestration/leases") json(res, { leases: scheduler.listLeases() });
-      else if (pathname === "/api/orchestration/queue") json(res, { queue: scheduler.listQueue() });
+      else if (pathname === "/api/orchestration/queue") json(res, { queue: scheduler.listQueue(), pauses: [] });
       else json(res, { allocations: scheduler.listAllocations() });
     } finally {
       scheduler.close();
@@ -369,6 +571,35 @@ function findSessionByLeaseId(leaseId: string): Session | undefined {
 function sanitizeStopReason(reason: string | undefined): string | null {
   const trimmed = typeof reason === "string" ? reason.trim() : "";
   return trimmed ? trimmed.slice(0, 500) : null;
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((entry) => typeof entry === "string" ? entry.trim() : "")
+    .filter(Boolean))];
+}
+
+function parseArtifactKind(value: string): ArtifactKind | null {
+  return value === "diff" || value === "prompt" || value === "output" || value === "patch_apply" ? value : null;
+}
+
+function authorizeHoldManager(managerName: string, workerIds: string[]): { ok: true } | { ok: false; error: string } {
+  const registry = scanOrg();
+  const mapped = employeeNamesForOrgWorkerIds(registry, workerIds);
+  const auth = authorizeManagerScope(registry, managerName, mapped.employeeNames);
+  if (!auth.ok) return auth;
+  if (mapped.unknownWorkerIds.length > 0 && auth.manager.rank !== "executive") {
+    return {
+      ok: false,
+      error: `non-org workers require executive authorization: ${mapped.unknownWorkerIds.join(", ")}`,
+    };
+  }
+  return { ok: true };
+}
+
+function openFallbackStore(context: ApiContext): OrchestrationStore {
+  return OrchestrationStore.open(context.orchestration?.dbPath ?? ORCH_DB, { recoverCorrupt: false });
 }
 
 type DualLaneManifestSummaryInput = ReturnType<typeof listDualLaneManifests>[number];

@@ -3,6 +3,7 @@ import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_WORKTREE_ROOT } from "../shared/paths.js
 import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import { loadOrchestrationConfig } from "./config.js";
+import { appendOrchestrationAudit } from "./audit.js";
 import { buildCoordinatorTaskBrief, type CoordinatorMode } from "./coordinator.js";
 import { resolveCrossFamilyReviewPolicy, type CrossFamilyReviewPolicy } from "./cross-family.js";
 import { listProtectedDualLaneTaskIds } from "./dual-lane-state.js";
@@ -253,12 +254,14 @@ export class OrchestrationRuntime {
       pauseReason: sanitizePauseReason(reason),
     };
     this.store.setQueuePauseState(state);
+    appendOrchestrationAudit("orchestration.queue.pause", state, this.dbPath);
     return state;
   }
 
   async resumeQueue(): Promise<{ controlState: QueuePauseState; retryResults: AllocationResult[] }> {
     const controlState = { queuePaused: false, pausedAt: null, pauseReason: null };
     this.store.setQueuePauseState(controlState);
+    appendOrchestrationAudit("orchestration.queue.resume", controlState, this.dbPath);
     const retryResults = await this.retryQueuedWithLiveHeadroom();
     return { controlState, retryResults };
   }
@@ -272,11 +275,13 @@ export class OrchestrationRuntime {
       managerName: sanitizeOptional(opts.managerName),
     };
     this.store.setTaskPause(record);
+    appendOrchestrationAudit("orchestration.queue.pause_task", record, this.dbPath);
     return record;
   }
 
   async resumeTask(taskId: string, coordinatorId: string): Promise<{ paused: boolean; retryResults: AllocationResult[] }> {
     const paused = this.store.deleteTaskPause(taskId, coordinatorId);
+    appendOrchestrationAudit("orchestration.queue.resume_task", { taskId, coordinatorId, paused }, this.dbPath);
     if (this.getControlState().queuePaused) return { paused, retryResults: [] };
     const allowedWorkerIds = await this.resolveLiveHeadroomWorkerIds();
     const results = this.scheduler.retryQueued({
@@ -310,6 +315,7 @@ export class OrchestrationRuntime {
       expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
     };
     this.store.upsertHold(record);
+    appendOrchestrationAudit("orchestration.hold.create", record, this.dbPath);
     return record;
   }
 
@@ -324,11 +330,14 @@ export class OrchestrationRuntime {
       expiresAt: new Date(now.getTime() + Math.max(1, Math.floor(ttlMs))).toISOString(),
     };
     this.store.upsertHold(updated);
+    appendOrchestrationAudit("orchestration.hold.extend", updated, this.dbPath);
     return updated;
   }
 
   cancelHold(holdId: string): HoldRecord | undefined {
-    return this.store.cancelHold(holdId);
+    const hold = this.store.cancelHold(holdId);
+    appendOrchestrationAudit("orchestration.hold.cancel", { holdId, state: hold?.state ?? "not_found" }, this.dbPath);
+    return hold;
   }
 
   async retryFailedLiveContinuation(taskId: string, coordinatorId: string): Promise<RetryLiveContinuationResult> {
@@ -396,6 +405,10 @@ export class OrchestrationRuntime {
 
   getWorktreeOptions(): WorktreeOptions {
     return { ...this.worktrees };
+  }
+
+  getStore(): OrchestrationStore {
+    return this.store;
   }
 
   reapWorktrees(): WorktreeHandle[] {

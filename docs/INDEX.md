@@ -8,6 +8,8 @@ artifacts unless explicitly published.
 
 - `README.md`: public overview and install/use workflow.
 - `docs/feature_inventory.md`: implemented CLI/API/UI surfaces and fidelity gaps.
+- `docs/known-diagnostics.md`: accepted non-actionable diagnostics that future
+  audits should not re-report unless explicitly scoped.
 - `docs/engines-hermes.md`: Hermes engine behavior and caveats.
 - `docs/orchestration/README.md`: provider-neutral matrix orchestration
   foundation, durable scheduler state, adapter contracts, CLI dry-run/observe

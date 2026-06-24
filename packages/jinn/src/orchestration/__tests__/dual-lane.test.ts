@@ -24,6 +24,7 @@ describe("dual-lane orchestration", () => {
   it("runs identical prompts in isolated worktrees and requires explicit selection", async () => {
     const {
       OrchestrationRuntime,
+      applyDualLaneWinner,
       runOrchestrationTask,
       selectDualLaneWinner,
       readDualLaneManifest,
@@ -82,6 +83,16 @@ describe("dual-lane orchestration", () => {
     expect(fs.readFileSync(selection.archive.diffPath, "utf-8")).toContain("anthropic.txt");
     expect(fs.existsSync(worktreePaths.find((worktreePath) => worktreePath.includes("-anthropic")) ?? "")).toBe(false);
     expect(readDualLaneManifest("task-dual")?.state).toBe("selected");
+    const apply = applyDualLaneWinner({ taskId: "task-dual", winnerLane: "openai", store: runtime.getStore() });
+    expect(apply.ok).toBe(true);
+    if (!apply.ok) return;
+    expect(fs.readFileSync(path.join(repo, "openai.txt"), "utf-8")).toContain("Implement the same capability");
+    expect(git(["status", "--porcelain"], repo)).toContain("?? openai.txt");
+    expect(runtime.getStore().listArtifactRecords("task-dual", "diff")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "diff", lane: "openai" }),
+      expect.objectContaining({ kind: "diff", lane: "anthropic" }),
+    ]));
+    expect(runtime.getStore().listPatchApplyAttempts("task-dual")).toMatchObject([{ state: "applied" }]);
     const telemetry = readOrchestrationTelemetry(ORCHESTRATION_TELEMETRY_LOG).records;
     expect(telemetry).toHaveLength(4);
     expect(telemetry.filter((record) => record.mode === "dual_lane" && record.disposition === "completed")).toHaveLength(2);
@@ -166,17 +177,19 @@ describe("dual-lane orchestration", () => {
 });
 
 async function loadModules() {
-  const [runtime, runMode, dualLane, state, registry, telemetry] = await Promise.all([
+  const [runtime, runMode, dualLane, state, registry, telemetry, artifacts] = await Promise.all([
     import("../runtime.js"),
     import("../run-mode.js"),
     import("../dual-lane.js"),
     import("../dual-lane-state.js"),
     import("../../sessions/registry.js"),
     import("../telemetry.js"),
+    import("../artifacts.js"),
   ]);
   registry.initDb();
   return {
     OrchestrationRuntime: runtime.OrchestrationRuntime,
+    applyDualLaneWinner: artifacts.applyDualLaneWinner,
     runOrchestrationTask: runMode.runOrchestrationTask,
     selectDualLaneWinner: dualLane.selectDualLaneWinner,
     readDualLaneManifest: state.readDualLaneManifest,

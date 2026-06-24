@@ -60,6 +60,7 @@ import { createPtyAccessToken } from "./auth.js";
 import { BoardConflictError, defaultBoardState, readBoardArray, readBoardState, writeMergedBoard } from "./board-service.js";
 import { dispatchTicket } from "./ticket-dispatch.js";
 import { findEmployee, scanOrg } from "./org.js";
+import { authorizeManagerScope } from "./manager-auth.js";
 import {
   resolveBestSessionForTicket,
   resolveTicketSessionFailureReason,
@@ -1072,10 +1073,17 @@ export async function handleApiRequest(
         return badRequest(res, "update body must be a JSON object");
       }
       const { scanOrg, updateEmployeeYaml, validateEmployeeUpdate } = await import("./org.js");
-      const current = scanOrg().get(params.name);
+      const registry = scanOrg();
+      const current = registry.get(params.name);
       if (!current) return notFound(res);
+      const managerName = typeof body.managerName === "string" ? body.managerName.trim() : "";
+      if (!managerName) return badRequest(res, "managerName is required");
+      const auth = authorizeManagerScope(registry, managerName, [params.name]);
+      if (!auth.ok) return json(res, { error: auth.error }, 403);
+      const employeeUpdate = { ...body };
+      delete employeeUpdate.managerName;
 
-      const result = validateEmployeeUpdate(context.getConfig(), current, body);
+      const result = validateEmployeeUpdate(context.getConfig(), current, employeeUpdate);
       if (!result.ok) return badRequest(res, result.error || "invalid update");
 
       const wrote = updateEmployeeYaml(params.name, result.updates!);

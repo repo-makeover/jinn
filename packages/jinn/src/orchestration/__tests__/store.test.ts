@@ -127,6 +127,58 @@ describe("OrchestrationStore", () => {
     });
     reopened.close();
   });
+
+  it("persists task pauses, holds, artifact metadata, and patch apply attempts", () => {
+    const store = OrchestrationStore.open(dbPath);
+    store.setTaskPause({
+      taskId: "task-paused",
+      coordinatorId: "coord-paused",
+      pausedAt: fixedNow.toISOString(),
+      pauseReason: "hold task",
+      managerName: "manager",
+    });
+    store.upsertHold({
+      holdId: "hold-1",
+      managerName: "manager",
+      state: "active",
+      roles: ["seniorImplementer"],
+      workerIds: ["worker-1"],
+      taskId: "task-paused",
+      coordinatorId: "coord-paused",
+      reason: "reserve worker",
+      createdAt: fixedNow.toISOString(),
+      updatedAt: fixedNow.toISOString(),
+      expiresAt: new Date(fixedNow.getTime() + 60_000).toISOString(),
+    });
+    store.addArtifactRecord({
+      artifactId: "artifact-1",
+      taskId: "task-paused",
+      kind: "diff",
+      lane: "openai",
+      path: path.join(tmpDir, "diff.patch"),
+      bytes: 12,
+      createdAt: fixedNow.toISOString(),
+      note: null,
+    });
+    store.addPatchApplyAttempt({
+      attemptId: "apply-1",
+      taskId: "task-paused",
+      winnerLane: "openai",
+      state: "failed",
+      baseCwd: tmpDir,
+      patchPath: null,
+      error: "dirty base",
+      createdAt: fixedNow.toISOString(),
+    });
+    store.close();
+
+    const reopened = OrchestrationStore.open(dbPath);
+    expect(reopened.listTaskPauses()).toMatchObject([{ taskId: "task-paused", managerName: "manager" }]);
+    expect(reopened.listHolds({ includeInactive: true })).toMatchObject([{ holdId: "hold-1", workerIds: ["worker-1"] }]);
+    expect(reopened.listArtifactRecords("task-paused", "diff")).toMatchObject([{ artifactId: "artifact-1", lane: "openai" }]);
+    expect(reopened.listPatchApplyAttempts("task-paused")).toMatchObject([{ attemptId: "apply-1", state: "failed" }]);
+    reopened.close();
+  });
 });
 
 function exampleSnapshot(): SchedulerSnapshot {

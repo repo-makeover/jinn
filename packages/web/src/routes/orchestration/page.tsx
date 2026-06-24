@@ -4,18 +4,26 @@ import { PageLayout, ToolbarActions } from "@/components/page-layout"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useBreadcrumbs } from "@/context/breadcrumb-context"
 import {
+  applyDualLaneWinner,
+  cancelHold,
+  createHold,
+  extendHold,
   loadOrchestrationDashboard,
   pauseOrchestrationQueue,
+  pauseQueuedTask,
+  requeueRecoveredTask,
   retryContinuation,
   resumeOrchestrationQueue,
+  resumeQueuedTask,
   selectDualLaneWinner,
   stopOrchestrationLease,
+  viewArtifact,
   type ContinuationSummary,
   type DualLaneSummary,
   type OrchestrationDashboardData,
 } from "@/lib/orchestration-api"
 
-const TABS = ["Overview", "Workers", "Queue", "Continuations", "Dual-lane", "Worktrees", "Telemetry"] as const
+const TABS = ["Overview", "Workers", "Queue", "Holds", "Continuations", "Dual-lane", "Recovery", "Worktrees", "Telemetry"] as const
 
 export default function OrchestrationPage() {
   useBreadcrumbs([{ label: "Orchestration" }])
@@ -25,6 +33,7 @@ export default function OrchestrationPage() {
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionKey, setActionKey] = useState<string | null>(null)
+  const [artifactText, setArtifactText] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
   const refresh = useCallback(async () => {
@@ -169,16 +178,23 @@ export default function OrchestrationPage() {
               </TabsContent>
               <TabsContent value="Queue">
                 <Section title="Queue" count={data.queue.length}>
-                  <Table
-                    columns={["Task", "Coordinator", "Priority", "Missing roles", "Reason"]}
-                    rows={data.queue.map((item) => [
-                      item.taskId,
-                      item.coordinatorId,
-                      item.priority ?? "-",
-                      item.missingRoles?.join(", ") || "-",
-                      item.reason ?? item.state ?? "-",
-                    ])}
-                    empty="No blocked queue items."
+                  <QueueList
+                    queue={data.queue}
+                    pauses={data.taskPauses}
+                    actionKey={actionKey}
+                    onPause={(item) => runAction(`pause-task:${item.taskId}:${item.coordinatorId}`, () => pauseQueuedTask(item.taskId, item.coordinatorId))}
+                    onResume={(item) => runAction(`resume-task:${item.taskId}:${item.coordinatorId}`, () => resumeQueuedTask(item.taskId, item.coordinatorId))}
+                  />
+                </Section>
+              </TabsContent>
+              <TabsContent value="Holds">
+                <Section title="Holds" count={data.holds.length}>
+                  <HoldsPanel
+                    data={data}
+                    actionKey={actionKey}
+                    onCreate={(managerName, workerId) => runAction("hold:create", () => createHold({ managerName, workerIds: workerId ? [workerId] : [], roles: [], ttlMs: 60 * 60 * 1000, reason: "Created from dashboard" }))}
+                    onExtend={(holdId, managerName) => runAction(`hold:extend:${holdId}`, () => extendHold(holdId, managerName, 60 * 60 * 1000))}
+                    onCancel={(holdId, managerName) => runAction(`hold:cancel:${holdId}`, () => cancelHold(holdId, managerName))}
                   />
                 </Section>
               </TabsContent>
@@ -202,6 +218,37 @@ export default function OrchestrationPage() {
                     onSelect={(run, lane) => runAction(
                       `select:${run.taskId}:${lane}`,
                       () => selectDualLaneWinner(run.taskId, lane),
+                    )}
+                    onApply={(run, lane) => runAction(
+                      `apply:${run.taskId}:${lane}`,
+                      () => applyDualLaneWinner(run.taskId, lane),
+                    )}
+                    onArtifact={(run, kind) => runAction(
+                      `artifact:${run.taskId}:${kind}`,
+                      async () => {
+                        const response = await viewArtifact(run.taskId, kind)
+                        setArtifactText(response.artifacts.map((artifact) => {
+                          const lane = artifact.record.lane ?? "base"
+                          return `# ${response.kind} ${lane}\n${artifact.content}`
+                        }).join("\n\n") || "No artifact content.")
+                      },
+                    )}
+                  />
+                  {artifactText && (
+                    <pre className="mt-[var(--space-3)] max-h-[28rem] overflow-auto border border-[var(--separator)] rounded-[var(--radius-md)] bg-[var(--material-thin)] p-3 text-[length:var(--text-caption1)] whitespace-pre-wrap">
+                      {artifactText}
+                    </pre>
+                  )}
+                </Section>
+              </TabsContent>
+              <TabsContent value="Recovery">
+                <Section title="Recovery notices" count={data.status.recoveryNotices?.length ?? 0}>
+                  <RecoveryPanel
+                    notices={data.status.recoveryNotices ?? []}
+                    actionKey={actionKey}
+                    onRequeue={(manifestPath, taskId, managerName) => runAction(
+                      `recovery:${taskId}`,
+                      () => requeueRecoveredTask(manifestPath, taskId, managerName),
                     )}
                   />
                 </Section>
@@ -356,10 +403,117 @@ function ContinuationList({ continuations, actionKey, onRetry }: {
   )
 }
 
-function DualLaneList({ runs, actionKey, onSelect }: {
+function QueueList({ queue, pauses, actionKey, onPause, onResume }: {
+  queue: OrchestrationDashboardData["queue"]
+  pauses: OrchestrationDashboardData["taskPauses"]
+  actionKey: string | null
+  onPause: (item: OrchestrationDashboardData["queue"][number]) => void
+  onResume: (item: OrchestrationDashboardData["queue"][number]) => void
+}) {
+  if (queue.length === 0) return <EmptyState text="No blocked queue items." />
+  const paused = new Set(pauses.map((pause) => `${pause.taskId}:${pause.coordinatorId}`))
+  return (
+    <div className="grid gap-[var(--space-2)]">
+      {queue.map((item) => {
+        const key = `${item.taskId}:${item.coordinatorId}`
+        const isPaused = paused.has(key)
+        return (
+          <Row key={key}>
+            <div className="min-w-0">
+              <div className="font-[var(--weight-semibold)] text-[var(--text-primary)] truncate">{item.taskId}</div>
+              <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] truncate">
+                {item.coordinatorId} - {item.priority ?? "-"} - {item.missingRoles?.join(", ") || "-"}
+              </div>
+            </div>
+            <div className="flex items-center gap-[var(--space-2)] shrink-0">
+              {isPaused && <Pill text="paused" tone="warn" />}
+              <button
+                disabled={isPaused || actionKey === `pause-task:${key}`}
+                title="Pause this queued task"
+                onClick={() => onPause(item)}
+                className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
+              >
+                Pause
+              </button>
+              <button
+                disabled={!isPaused || actionKey === `resume-task:${key}`}
+                title="Resume this queued task"
+                onClick={() => onResume(item)}
+                className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
+              >
+                Resume
+              </button>
+            </div>
+          </Row>
+        )
+      })}
+    </div>
+  )
+}
+
+function HoldsPanel({ data, actionKey, onCreate, onExtend, onCancel }: {
+  data: OrchestrationDashboardData
+  actionKey: string | null
+  onCreate: (managerName: string, workerId: string) => void
+  onExtend: (holdId: string, managerName: string) => void
+  onCancel: (holdId: string, managerName: string) => void
+}) {
+  function promptCreate() {
+    const managerName = window.prompt("Manager name")?.trim()
+    if (!managerName) return
+    const workerId = window.prompt("Worker id to hold")?.trim() ?? ""
+    onCreate(managerName, workerId)
+  }
+  return (
+    <div className="grid gap-[var(--space-3)]">
+      <button
+        disabled={actionKey === "hold:create"}
+        onClick={promptCreate}
+        className="focus-ring h-8 px-3 justify-self-start rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
+      >
+        Create hold
+      </button>
+      {data.holds.length === 0 ? <EmptyState text="No orchestration holds." /> : (
+        <div className="grid gap-[var(--space-2)]">
+          {data.holds.map((hold) => (
+            <Row key={hold.holdId}>
+              <div className="min-w-0">
+                <div className="font-[var(--weight-semibold)] text-[var(--text-primary)] truncate">{hold.holdId}</div>
+                <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] truncate">
+                  {hold.managerName} - expires {formatDate(hold.expiresAt)} - {hold.workerIds.join(", ") || hold.roles.join(", ") || "-"}
+                </div>
+              </div>
+              <div className="flex items-center gap-[var(--space-2)] shrink-0">
+                <Pill text={hold.state} tone={hold.state === "active" ? "warn" : "neutral"} />
+                <button
+                  disabled={hold.state !== "active" || actionKey === `hold:extend:${hold.holdId}`}
+                  onClick={() => onExtend(hold.holdId, hold.managerName)}
+                  className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
+                >
+                  Extend
+                </button>
+                <button
+                  disabled={hold.state !== "active" || actionKey === `hold:cancel:${hold.holdId}`}
+                  onClick={() => onCancel(hold.holdId, hold.managerName)}
+                  className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
+                >
+                  Cancel
+                </button>
+              </div>
+            </Row>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DualLaneList({ runs, actionKey, onSelect, onApply, onArtifact }: {
   runs: DualLaneSummary[]
   actionKey: string | null
   onSelect: (run: DualLaneSummary, lane: "openai" | "anthropic") => void
+  onApply: (run: DualLaneSummary, lane: "openai" | "anthropic") => void
+  onArtifact: (run: DualLaneSummary, kind: "diff" | "prompt" | "output") => void
 }) {
   if (runs.length === 0) return <EmptyState text="No dual-lane manifests." />
   return (
@@ -382,20 +536,72 @@ function DualLaneList({ runs, actionKey, onSelect }: {
             <div className="flex items-center gap-[var(--space-2)] shrink-0">
               <Pill text={run.state} tone={canSelect ? "warn" : "neutral"} />
               {run.lanes.map((lane) => (
+                <div key={lane.id} className="flex items-center gap-[var(--space-1)]">
+                  <button
+                    disabled={!canSelect || actionKey === `select:${run.taskId}:${lane.id}`}
+                    title={canSelect ? `Select ${lane.id} lane` : "Only selection_required manifests can be selected"}
+                    onClick={() => onSelect(run, lane.id)}
+                    className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
+                  >
+                    Select {lane.id}
+                  </button>
+                  <button
+                    disabled={actionKey === `apply:${run.taskId}:${lane.id}`}
+                    title={`Apply ${lane.id} winner as unstaged base repo changes`}
+                    onClick={() => onApply(run, lane.id)}
+                    className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
+                  >
+                    Apply
+                  </button>
+                </div>
+              ))}
+              {(["prompt", "output", "diff"] as const).map((kind) => (
                 <button
-                  key={lane.id}
-                  disabled={!canSelect || actionKey === `select:${run.taskId}:${lane.id}`}
-                  title={canSelect ? `Select ${lane.id} lane` : "Only selection_required manifests can be selected"}
-                  onClick={() => onSelect(run, lane.id)}
+                  key={kind}
+                  disabled={actionKey === `artifact:${run.taskId}:${kind}`}
+                  onClick={() => onArtifact(run, kind)}
                   className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
                 >
-                  Select {lane.id}
+                  {kind}
                 </button>
               ))}
             </div>
           </Row>
         )
       })}
+    </div>
+  )
+}
+
+function RecoveryPanel({ notices, actionKey, onRequeue }: {
+  notices: NonNullable<OrchestrationDashboardData["status"]["recoveryNotices"]>
+  actionKey: string | null
+  onRequeue: (manifestPath: string, taskId: string, managerName: string) => void
+}) {
+  if (notices.length === 0) return <EmptyState text="No recovery notices." />
+  return (
+    <div className="grid gap-[var(--space-2)]">
+      {notices.map((notice) => (
+        <Row key={notice.manifestPath}>
+          <div className="min-w-0">
+            <div className="font-[var(--weight-semibold)] text-[var(--text-primary)] truncate">{formatDate(notice.recoveredAt)}</div>
+            <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] truncate">{notice.manifestPath}</div>
+          </div>
+          <button
+            disabled={actionKey?.startsWith("recovery:")}
+            onClick={() => {
+              const taskId = window.prompt("Recovered task id")?.trim()
+              if (!taskId) return
+              const managerName = window.prompt("Manager name")?.trim()
+              if (!managerName) return
+              onRequeue(notice.manifestPath, taskId, managerName)
+            }}
+            className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)] shrink-0"
+          >
+            Requeue
+          </button>
+        </Row>
+      ))}
     </div>
   )
 }

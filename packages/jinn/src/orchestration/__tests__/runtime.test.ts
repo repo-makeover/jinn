@@ -165,6 +165,61 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     runtime.close();
   });
 
+  it("per-task pause suppresses only the matching queued task until resumed", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const first = runtime.requestAllocation(request("task-active", "coord-active"));
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(runtime.requestAllocation(request("task-paused", "coord-paused")).ok).toBe(false);
+    expect(runtime.requestAllocation(request("task-open", "coord-open")).ok).toBe(false);
+    runtime.queueLiveContinuation(continuation("task-paused", "coord-paused"));
+    runtime.queueLiveContinuation(continuation("task-open", "coord-open"));
+    runtime.pauseTask("task-paused", "coord-paused", { reason: "operator task hold" });
+    const resumed: string[] = [];
+    runtime.setResumeQueuedRunHandler(async ({ continuation }) => {
+      resumed.push(continuation.taskId);
+    });
+
+    runtime.releaseLease(first.allocation.leases[0].leaseId, "coord-active");
+
+    await waitFor(() => resumed.includes("task-open"));
+    expect(resumed).not.toContain("task-paused");
+    expect(runtime.listLiveContinuations()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: "task-paused", state: "queued" }),
+      expect.objectContaining({ taskId: "task-open", state: "completed" }),
+    ]));
+    const openLease = runtime.listLeases().find((lease) => lease.taskId === "task-open" && lease.state === "running");
+    expect(openLease).toBeDefined();
+    if (!openLease) return;
+    runtime.releaseLease(openLease.leaseId, openLease.coordinatorId);
+
+    await runtime.resumeTask("task-paused", "coord-paused");
+    await waitFor(() => resumed.includes("task-paused"));
+    runtime.close();
+  });
+
+  it("active holds block held worker allocation until expiry", async () => {
+    const runtime = new OrchestrationRuntime({
+      config: twoWorkerConfig(),
+      dbPath,
+      startReaper: false,
+    });
+    runtime.createHold({
+      managerName: "exec",
+      workerIds: ["alphaImplementer"],
+      roles: [],
+      ttlMs: 60_000,
+      reason: "reserve alpha",
+    });
+
+    const result = await runtime.requestAllocationWithLiveHeadroom(request("held-task", "held-coord"));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.allocation.leases[0].workerId).toBe("betaImplementer");
+    runtime.close();
+  });
+
   it("releases resumed allocations that have no live continuation to dispatch", async () => {
     const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
     const first = runtime.requestAllocation(request("task-1", "coord-1"));

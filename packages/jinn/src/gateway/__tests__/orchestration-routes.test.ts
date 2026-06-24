@@ -481,6 +481,46 @@ describe("GET /api/orchestration/*", () => {
     expect(cap.status).toBe(404);
     expect(cap.body).toEqual({ error: "no dual-lane run found for task missing-dual" });
   });
+
+  it("routes per-task queue pause through the live runtime", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const ctx = makeCtx(config());
+    ctx.orchestration = { runtime };
+    const cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/queue/pause-task",
+      cap.res,
+      ctx,
+      makeJsonReq({ taskId: "task-paused", coordinatorId: "coord-paused", reason: "operator" }, "/api/orchestration/queue/pause-task"),
+    );
+
+    expect(cap.status).toBe(200);
+    expect(cap.body).toMatchObject({ pause: { taskId: "task-paused", coordinatorId: "coord-paused", pauseReason: "operator" } });
+    expect(runtime.listTaskPauses()).toMatchObject([{ taskId: "task-paused", coordinatorId: "coord-paused" }]);
+    runtime.close();
+  });
+
+  it("rejects holds when managerName does not resolve to a manager or executive", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const ctx = makeCtx(config());
+    ctx.orchestration = { runtime };
+    const cap = makeRes();
+
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/holds",
+      cap.res,
+      ctx,
+      makeJsonReq({ managerName: "missing-manager", workerIds: ["codexSenior"], ttlMs: 60_000 }, "/api/orchestration/holds"),
+    );
+
+    expect(cap.status).toBe(403);
+    expect(cap.body.error).toContain("managerName does not resolve");
+    expect(runtime.listHolds({ includeInactive: true })).toEqual([]);
+    runtime.close();
+  });
 });
 
 async function get(pathname: string, ctx: ApiContext) {
