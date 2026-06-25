@@ -5,6 +5,7 @@ import type { ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { handleApiRequest, type ApiContext } from "../api.js";
 import { handleOrchestrationRoutes } from "../api/orchestration-routes.js";
+import { interruptExpiredOrchestrationLeaseSessions } from "../api/session-dispatch.js";
 import { OrchestrationRuntime } from "../../orchestration/runtime.js";
 import { PersistentMatrixScheduler } from "../../orchestration/persistent-scheduler.js";
 import type { OrchestrationConfig } from "../../orchestration/types.js";
@@ -220,7 +221,7 @@ describe("GET /api/orchestration/*", () => {
 
   it("lists dual-lane manifests without prompt hashes or raw diffs", async () => {
     const dualLaneStateDir = path.join(tmpDir, "dual-lane");
-    const taskDir = path.join(dualLaneStateDir, "dual-task");
+    const taskDir = path.join(dualLaneStateDir, "dual-task", "dual-coord");
     fs.mkdirSync(taskDir, { recursive: true });
     fs.writeFileSync(path.join(taskDir, "manifest.json"), JSON.stringify(dualLaneManifest(), null, 2));
     const ctx = makeCtx(config());
@@ -489,6 +490,53 @@ describe("GET /api/orchestration/*", () => {
     runtime.close();
   });
 
+  it("interrupts mapped running sessions when runtime lease expiry fires", async () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const allocation = runtime.requestAllocation({ ...request("expired-task", "expired-coord"), leaseDurationMs: 1 });
+    expect(allocation.ok).toBe(true);
+    if (!allocation.ok) return;
+    const lease = allocation.allocation.leases[0];
+    const session = createSession({
+      engine: "mock",
+      source: "web",
+      sourceRef: "web:expired",
+      transportMeta: {
+        orchestrationLease: {
+          leaseId: lease.leaseId,
+          taskId: lease.taskId,
+          coordinatorId: lease.coordinatorId,
+          workerId: lease.workerId,
+          role: lease.role,
+          mode: "single_worker",
+        },
+      },
+    });
+    updateSession(session.id, { status: "running" });
+    const kill = vi.fn();
+    const clearQueue = vi.fn();
+    const ctx = makeCtx(config());
+    ctx.orchestration = { runtime };
+    ctx.sessionManager = {
+      getEngine: () => ({ name: "mock", run: vi.fn(), kill, isAlive: () => true, killAll: vi.fn(), killIdle: vi.fn() }),
+      getQueue: () => ({ clearQueue, getTransportState: (_key: string, status: string) => status, getPendingCount: () => 0 }),
+    } as any;
+    runtime.setExpiredLeaseHandler((leases) => interruptExpiredOrchestrationLeaseSessions(ctx, leases));
+
+    runtime.expireLeases(new Date(Date.parse(lease.leaseExpiresAt) + 1));
+    const status = await get("/api/orchestration/status", ctx);
+
+    expect(kill).toHaveBeenCalledWith(session.id, "Interrupted: orchestration lease expired");
+    expect(clearQueue).toHaveBeenCalledWith(session.sessionKey);
+    expect(getSession(session.id)).toMatchObject({ status: "interrupted", lastError: "Interrupted: orchestration lease expired" });
+    expect(status.body.expiredLeaseHandling).toEqual([{
+      leaseId: lease.leaseId,
+      sessionId: session.id,
+      status: "interrupted",
+      interruptible: true,
+    }]);
+    runtime.close();
+  });
+
   it("routes explicit dual-lane selection requests", async () => {
     const cap = makeRes();
 
@@ -497,7 +545,7 @@ describe("GET /api/orchestration/*", () => {
       "/api/orchestration/dual-lane/select",
       cap.res,
       makeCtx(config()),
-      makeJsonReq({ taskId: "missing-dual", winnerLane: "openai" }, "/api/orchestration/dual-lane/select"),
+      makeJsonReq({ taskId: "missing-dual", coordinatorId: "missing-coord", winnerLane: "openai" }, "/api/orchestration/dual-lane/select"),
     );
 
     expect(cap.status).toBe(404);

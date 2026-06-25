@@ -220,12 +220,12 @@ describe("jinn run orchestration client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { runDualLaneSelect } = await import("../orchestration.js");
-    await runDualLaneSelect({ taskId: "cli-dual-select", winner: "openai" });
+    await runDualLaneSelect({ taskId: "cli-dual-select", coordinatorId: "cli-dual-coord", winner: "openai" });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://127.0.0.1:7799/api/orchestration/dual-lane/select");
-    expect(JSON.parse(String(init.body))).toEqual({ taskId: "cli-dual-select", winnerLane: "openai" });
+    expect(JSON.parse(String(init.body))).toEqual({ taskId: "cli-dual-select", coordinatorId: "cli-dual-coord", winnerLane: "openai" });
     expect(String(logSpy.mock.calls[0][0])).toContain("selected openai");
   });
 });
@@ -253,6 +253,6 @@ function writeGatewayFiles(dir: string): void {
     port: 7799,
     pid: 123,
     secret: "test-secret",
-    apiToken: "test-token",
+    token: "test-token",
   }));
 }

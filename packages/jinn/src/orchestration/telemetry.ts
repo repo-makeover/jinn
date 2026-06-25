@@ -46,6 +46,25 @@ export interface TelemetryReadOptions {
   maxRecords?: number;
 }
 
+export interface TelemetryScoreOptions {
+  now?: Date;
+  halfLifeMs?: number;
+  maxAgeMs?: number;
+}
+
+export interface TelemetryPruneOptions {
+  logPath?: string;
+  now?: Date;
+  maxAgeMs?: number;
+  maxRecords?: number;
+}
+
+export interface TelemetryPruneResult {
+  kept: number;
+  removed: number;
+  skippedLines: number;
+}
+
 export interface TelemetryBucket {
   count: number;
   dispositions: Record<string, number>;
@@ -79,6 +98,10 @@ export interface TelemetryDiffCounts {
 }
 
 const DISPOSITIONS: OrchestrationTelemetryDisposition[] = ["completed", "failed", "blocked", "selected", "discarded"];
+export const DEFAULT_TELEMETRY_SCORE_HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1_000;
+export const DEFAULT_TELEMETRY_SCORE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
+export const DEFAULT_TELEMETRY_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
+export const DEFAULT_TELEMETRY_RETENTION_RECORDS = 10_000;
 
 export function appendOrchestrationTelemetry(
   record: OrchestrationRunTelemetryRecord,
@@ -148,12 +171,56 @@ export function summarizeOrchestrationTelemetry(read: TelemetryReadResult): Orch
   return summary;
 }
 
-export function computeWorkerScores(records: OrchestrationRunTelemetryRecord[]): Record<string, number> {
+export function computeWorkerScores(records: OrchestrationRunTelemetryRecord[], opts?: TelemetryScoreOptions): Record<string, number> {
   const scores: Record<string, number> = {};
   for (const record of records) {
-    scores[record.worker_id] = (scores[record.worker_id] ?? 0) + scoreRecord(record);
+    const score = scoreRecord(record) * scoreWeight(record, opts);
+    if (score === 0) continue;
+    scores[record.worker_id] = rounded((scores[record.worker_id] ?? 0) + score);
   }
   return scores;
+}
+
+export function pruneOrchestrationTelemetry(opts: TelemetryPruneOptions = {}): TelemetryPruneResult {
+  const logPath = opts.logPath ?? ORCHESTRATION_TELEMETRY_LOG;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(logPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kept: 0, removed: 0, skippedLines: 0 };
+    throw err;
+  }
+
+  const nowMs = (opts.now ?? new Date()).getTime();
+  const maxAgeMs = saneNonNegative(opts.maxAgeMs, DEFAULT_TELEMETRY_RETENTION_MS);
+  const maxRecords = Math.max(0, Math.floor(saneNonNegative(opts.maxRecords, DEFAULT_TELEMETRY_RETENTION_RECORDS)));
+  const cutoffMs = nowMs - maxAgeMs;
+  const records: OrchestrationRunTelemetryRecord[] = [];
+  let skippedLines = 0;
+  let parsedLines = 0;
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    parsedLines += 1;
+    try {
+      const record = sanitizeTelemetryRecord(JSON.parse(line));
+      const timestampMs = Date.parse(record.timestamp);
+      if (!Number.isFinite(timestampMs) || timestampMs < cutoffMs) continue;
+      records.push(record);
+    } catch {
+      skippedLines += 1;
+    }
+  }
+
+  if (records.length > maxRecords) records.splice(0, records.length - maxRecords);
+  const next = records.map((record) => JSON.stringify(record)).join("\n");
+  fs.writeFileSync(logPath, next ? `${next}\n` : "", { mode: 0o600 });
+  if (process.platform !== "win32") fs.chmodSync(logPath, 0o600);
+  return {
+    kept: records.length,
+    removed: Math.max(0, parsedLines - skippedLines - records.length),
+    skippedLines,
+  };
 }
 
 export function telemetryCountsFromDiff(diff: string): TelemetryDiffCounts {
@@ -247,6 +314,26 @@ function scoreRecord(record: OrchestrationRunTelemetryRecord): number {
       : record.disposition === "discarded" || record.disposition === "blocked" ? -1
         : -2;
   return base - (record.review_blockers ?? 0) - (record.regressions ?? 0) * 2;
+}
+
+function scoreWeight(record: OrchestrationRunTelemetryRecord, opts: TelemetryScoreOptions | undefined): number {
+  if (!opts) return 1;
+  const timestampMs = Date.parse(record.timestamp);
+  if (!Number.isFinite(timestampMs)) return 0;
+  const nowMs = opts.now?.getTime() ?? Date.now();
+  const ageMs = Math.max(0, nowMs - timestampMs);
+  const maxAgeMs = sanePositive(opts.maxAgeMs, DEFAULT_TELEMETRY_SCORE_MAX_AGE_MS);
+  if (ageMs > maxAgeMs) return 0;
+  const halfLifeMs = sanePositive(opts.halfLifeMs, DEFAULT_TELEMETRY_SCORE_HALF_LIFE_MS);
+  return Math.pow(0.5, ageMs / halfLifeMs);
+}
+
+function sanePositive(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function saneNonNegative(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function changedFilesFromDiff(diff: string): string[] {

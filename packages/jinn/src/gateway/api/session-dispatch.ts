@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parseLeaseTransportMeta } from "../../orchestration/lease-meta.js";
+import type { Lease } from "../../orchestration/types.js";
 import { notifyAttachedTalkSessions } from "../../sessions/callbacks.js";
 import {
   cancelQueueItem,
@@ -8,6 +10,7 @@ import {
   getSession,
   insertMessage,
   listAllPendingQueueItems,
+  listSessions,
   updateSession,
 } from "../../sessions/registry.js";
 import { FILES_DIR } from "../../shared/paths.js";
@@ -33,6 +36,39 @@ export function killSessionEngines(context: ApiContext, session: Session, reason
     killed++;
   }
   return { interruptible, killed };
+}
+
+export interface ExpiredLeaseSessionInterruptResult {
+  leaseId: string;
+  sessionId: string | null;
+  status: "interrupted" | "unmapped" | "not_running" | "not_interruptible";
+  interruptible: boolean;
+}
+
+export function interruptExpiredOrchestrationLeaseSessions(
+  context: ApiContext,
+  leases: Lease[],
+  reason = "Interrupted: orchestration lease expired",
+): ExpiredLeaseSessionInterruptResult[] {
+  const sessions = listSessions();
+  return leases.map((lease) => {
+    const session = sessions.find((candidate) => parseLeaseTransportMeta(candidate.transportMeta)?.leaseId === lease.leaseId);
+    if (!session) {
+      return { leaseId: lease.leaseId, sessionId: null, status: "unmapped", interruptible: false };
+    }
+    if (session.status !== "running") {
+      return { leaseId: lease.leaseId, sessionId: session.id, status: "not_running", interruptible: false };
+    }
+    const stopped = killSessionEngines(context, session, reason);
+    if (stopped.interruptible === 0 || stopped.killed === 0) {
+      return { leaseId: lease.leaseId, sessionId: session.id, status: "not_interruptible", interruptible: false };
+    }
+    context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
+    updateSession(session.id, { status: "interrupted", lastActivity: new Date().toISOString(), lastError: reason });
+    context.emit("session:interrupted", { sessionId: session.id, reason });
+    context.emit("session:updated", { sessionId: session.id });
+    return { leaseId: lease.leaseId, sessionId: session.id, status: "interrupted", interruptible: true };
+  });
 }
 
 const ARCHIVE_KINDS = new Set<ArchiveKind>(["room", "scheduled", "chat"]);

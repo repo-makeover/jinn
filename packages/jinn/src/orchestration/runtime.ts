@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
+import path from "node:path";
+import { ORCH_CONFIG_DIR, ORCH_DB, ORCH_RECOVERY_DIR, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import { loadOrchestrationConfig } from "./config.js";
@@ -13,7 +14,8 @@ import { queueTaskKey } from "./scheduler.js";
 import { filterWorkersWithHeadroom, type HeadroomFilterResult } from "./routing-headroom.js";
 import { OrchestrationStore, type HoldRecord, type QueuePauseState, type TaskPauseRecord } from "./store.js";
 import { DEFAULT_MAX_LIVE_CONTINUATION_RETRIES } from "./store-continuations.js";
-import { computeWorkerScores, readOrchestrationTelemetry } from "./telemetry.js";
+import { pruneRecoveryNotices } from "./store-recovery.js";
+import { computeWorkerScores, pruneOrchestrationTelemetry, readOrchestrationTelemetry } from "./telemetry.js";
 import {
   DEFAULT_LEASE_DURATION_MS,
   type Allocation,
@@ -25,7 +27,7 @@ import {
   type QueueItem,
   type ReviewPolicySummary,
 } from "./types.js";
-import { DEFAULT_MAX_WORKTREES, reapOrphanedWorktrees, type WorktreeHandle, type WorktreeOptions } from "./worktree.js";
+import { DEFAULT_MAX_WORKTREES, reapExpiredReviewBundles, reapOrphanedWorktrees, type WorktreeHandle, type WorktreeOptions } from "./worktree.js";
 
 const DEFAULT_REAPER_INTERVAL_MS = 5_000;
 const DEFAULT_STALE_DISPATCHING_CONTINUATION_MS = 10 * 60 * 1_000;
@@ -34,6 +36,14 @@ const EMPIRICAL_ROUTING_MAX_BYTES = 1_000_000;
 const EMPIRICAL_ROUTING_MAX_RECORDS = 5_000;
 
 type HeadroomFilter = (workers: OrchestrationConfig["workers"], config: JinnConfig) => Promise<HeadroomFilterResult>;
+export interface ExpiredLeaseHandlingResult {
+  leaseId: string;
+  sessionId: string | null;
+  status: "interrupted" | "unmapped" | "not_running" | "not_interruptible";
+  interruptible: boolean;
+}
+
+type ExpiredLeaseHandler = (leases: Lease[]) => ExpiredLeaseHandlingResult[] | void;
 
 export interface OrchestrationRuntimeOptions {
   config?: OrchestrationConfig;
@@ -49,6 +59,7 @@ export interface OrchestrationRuntimeOptions {
   jinnConfig?: JinnConfig;
   headroomFilter?: HeadroomFilter;
   staleDispatchingContinuationMs?: number;
+  onLeasesExpired?: ExpiredLeaseHandler;
 }
 
 export interface ResumeQueuedRun {
@@ -92,11 +103,14 @@ export class OrchestrationRuntime {
   readonly dbPath: string;
   private readonly store: OrchestrationStore;
   private readonly scheduler: PersistentMatrixScheduler;
+  private readonly recoveryDir: string;
   private readonly reaperIntervalMs: number;
   private readonly worktrees: WorktreeOptions;
   private readonly jinnConfig?: JinnConfig;
   private readonly headroomFilter: HeadroomFilter;
   private readonly staleDispatchingContinuationMs: number;
+  private expiredLeaseHandler?: ExpiredLeaseHandler;
+  private lastExpiredLeaseHandling: ExpiredLeaseHandlingResult[] = [];
   private readonly resumeDispatches = new Set<Promise<void>>();
   private resumeQueuedRunHandler?: ResumeQueuedRunHandler;
   private reaper: ReturnType<typeof setInterval> | null = null;
@@ -105,6 +119,7 @@ export class OrchestrationRuntime {
   constructor(opts: OrchestrationRuntimeOptions) {
     this.config = opts.config ?? loadOrchestrationConfig(opts.configDir ?? ORCH_CONFIG_DIR);
     this.dbPath = opts.dbPath ?? ORCH_DB;
+    this.recoveryDir = resolveRecoveryDir(this.dbPath);
     this.store = OrchestrationStore.open(this.dbPath);
     this.scheduler = PersistentMatrixScheduler.open(this.config, {
       store: this.store,
@@ -119,12 +134,14 @@ export class OrchestrationRuntime {
       0,
       Math.floor(opts.staleDispatchingContinuationMs ?? DEFAULT_STALE_DISPATCHING_CONTINUATION_MS),
     );
+    this.expiredLeaseHandler = opts.onLeasesExpired;
     this.worktrees = {
       root: opts.worktreeRoot ?? ORCH_WORKTREE_ROOT,
       maxWorktrees: typeof opts.maxWorktrees === "number" && Number.isFinite(opts.maxWorktrees) && opts.maxWorktrees > 0
         ? Math.floor(opts.maxWorktrees)
         : DEFAULT_MAX_WORKTREES,
     };
+    this.pruneRetainedFiles();
     this.recoverStaleDispatchingContinuations();
     if (opts.startReaper !== false) this.startReaper();
   }
@@ -166,8 +183,17 @@ export class OrchestrationRuntime {
 
   expireLeases(now?: Date): Lease[] {
     const expired = this.scheduler.expireLeases(now);
+    if (expired.length > 0) this.handleExpiredLeases(expired);
     if (expired.length > 0 && !this.getControlState().queuePaused) void this.retryQueuedWithLiveHeadroom();
     return expired;
+  }
+
+  setExpiredLeaseHandler(handler: ExpiredLeaseHandler | undefined): void {
+    this.expiredLeaseHandler = handler;
+  }
+
+  listExpiredLeaseHandling(): ExpiredLeaseHandlingResult[] {
+    return this.lastExpiredLeaseHandling.map((entry) => ({ ...entry }));
   }
 
   retryQueued(): AllocationResult[] {
@@ -471,6 +497,30 @@ export class OrchestrationRuntime {
     }
   }
 
+  private handleExpiredLeases(leases: Lease[]): void {
+    if (!this.expiredLeaseHandler) {
+      this.lastExpiredLeaseHandling = leases.map((lease) => ({
+        leaseId: lease.leaseId,
+        sessionId: null,
+        status: "unmapped",
+        interruptible: false,
+      }));
+      return;
+    }
+    try {
+      const handled = this.expiredLeaseHandler(leases);
+      this.lastExpiredLeaseHandling = handled?.map((entry) => ({ ...entry })) ?? [];
+    } catch (err) {
+      logger.warn(`Orchestration expired-lease handler failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.lastExpiredLeaseHandling = leases.map((lease) => ({
+        leaseId: lease.leaseId,
+        sessionId: null,
+        status: "not_interruptible",
+        interruptible: false,
+      }));
+    }
+  }
+
   private async resumeQueuedAllocation(allocation: Allocation, reviewPolicy: ReviewPolicySummary): Promise<void> {
     if (!this.resumeQueuedRunHandler) {
       logger.warn(
@@ -584,8 +634,27 @@ export class OrchestrationRuntime {
     this.reaper = setInterval(() => {
       this.expireLeases();
       this.reapWorktrees();
+      this.pruneRetainedFiles();
     }, this.reaperIntervalMs);
     this.reaper.unref?.();
+  }
+
+  private pruneRetainedFiles(): void {
+    try {
+      pruneOrchestrationTelemetry();
+    } catch (err) {
+      logger.warn(`Orchestration telemetry pruning failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      pruneRecoveryNotices(this.recoveryDir);
+    } catch (err) {
+      logger.warn(`Orchestration recovery notice pruning failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      reapExpiredReviewBundles();
+    } catch (err) {
+      logger.warn(`Orchestration review bundle pruning failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 
@@ -650,11 +719,15 @@ function resolveEmpiricalWorkerScores(config: JinnConfig): Record<string, number
     if (telemetry.skippedLines > 0) {
       logger.warn(`Orchestration empirical routing skipped ${telemetry.skippedLines} malformed telemetry line(s)`);
     }
-    return computeWorkerScores(telemetry.records);
+    return computeWorkerScores(telemetry.records, { now: new Date() });
   } catch (err) {
     logger.warn(`Orchestration empirical routing disabled for this boot: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
+}
+
+function resolveRecoveryDir(dbPath: string): string {
+  return dbPath === ORCH_DB ? ORCH_RECOVERY_DIR : path.join(path.dirname(dbPath), "orchestration-recovery");
 }
 
 function sanitizePauseReason(reason: string | undefined): string | null {

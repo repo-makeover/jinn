@@ -31,6 +31,7 @@ import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js"
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR, ORG_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
+import { interruptExpiredOrchestrationLeaseSessions } from "./api/session-dispatch.js";
 import type { OrchestrationRuntime } from "../orchestration/runtime.js";
 import { runAllocatedDualLaneTask } from "../orchestration/dual-lane.js";
 import { runAllocatedOrchestrationTask } from "../orchestration/run-mode.js";
@@ -201,7 +202,7 @@ export function serveStatic(
   return true;
 }
 
-function bindOrchestrationResumeHandler(runtime: OrchestrationRuntime | undefined, apiContext: ApiContext): void {
+function bindOrchestrationRuntimeHandlers(runtime: OrchestrationRuntime | undefined, apiContext: ApiContext): void {
   runtime?.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
     const result = continuation.mode === "dual_lane"
       ? await runAllocatedDualLaneTask({
@@ -223,6 +224,7 @@ function bindOrchestrationResumeHandler(runtime: OrchestrationRuntime | undefine
         : `unexpected orchestration state while resuming ${continuation.taskId}/${continuation.coordinatorId}: ${result.state}`);
     }
   });
+  runtime?.setExpiredLeaseHandler((leases) => interruptExpiredOrchestrationLeaseSessions(apiContext, leases));
 }
 
 export type GatewayCleanup = () => Promise<void>;
@@ -894,7 +896,7 @@ export async function startGateway(
       (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
       { refreshState: orchestrationRefreshState, reason: "org_reload" },
     );
-    bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
+    bindOrchestrationRuntimeHandlers(orchestrationRuntime, apiContext);
     emit("org:changed", {});
   };
 
@@ -950,7 +952,7 @@ export async function startGateway(
   sessionManager.setNotificationSink(notificationSink);
   orchestrationRuntime = createGatewayOrchestrationRuntime(currentConfig, employeeRegistry);
   if (orchestrationRuntime) {
-    bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
+    bindOrchestrationRuntimeHandlers(orchestrationRuntime, apiContext);
     apiContext.orchestration = { runtime: orchestrationRuntime };
   }
 
@@ -971,7 +973,7 @@ export async function startGateway(
         (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
         { refreshState: orchestrationRefreshState, reason: "config_reload" },
       );
-      bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
+      bindOrchestrationRuntimeHandlers(orchestrationRuntime, apiContext);
       logger.info("Config reloaded successfully");
       logBoardSummary(ORG_DIR, (msg) => logger.info(msg));
       emit("config:reloaded", {});
@@ -988,7 +990,7 @@ export async function startGateway(
       orchestrationRefreshState,
       (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
     );
-    bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
+    bindOrchestrationRuntimeHandlers(orchestrationRuntime, apiContext);
   };
   apiContext.reloadConfig = reloadConfig;
 

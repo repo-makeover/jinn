@@ -60,10 +60,10 @@
 - `jinn queue list --config-dir <dir> [--db-path <path>] [--json]` lists durable blocked-resource queue items when a DB exists.
 - `jinn queue pause-task|resume-task --task-id <id> --coordinator-id <id> [--json]` pauses or resumes one queued task through the live gateway.
 - `jinn run --mode single_worker|single_worker_with_review|dual_lane|architecture|local_heavy --task <file> [--json]` posts a live task brief to the running gateway; the daemon must have `orchestration.enabled: true`.
-- `jinn dual-lane select --task-id <id> --winner openai|anthropic [--json]` explicitly selects a completed dual-lane winner, archives the loser diff/metadata, and removes the loser worktree.
-- `jinn dual-lane apply --task-id <id> --winner openai|anthropic [--json]` applies the selected or selection-required winner patch to the base repo as unstaged changes only.
+- `jinn dual-lane select --task-id <id> --coordinator-id <id> --winner openai|anthropic [--json]` explicitly selects a completed dual-lane winner, archives the loser diff/metadata, and removes the loser worktree.
+- `jinn dual-lane apply --task-id <id> --coordinator-id <id> --winner openai|anthropic [--json]` applies the selected or selection-required winner patch to the base repo as unstaged changes only.
 - `jinn holds list|create|extend|cancel` manages TTL-bounded orchestration holds with manager-scoped authorization.
-- `jinn artifacts view --task-id <id> --kind diff|prompt|output [--json]` displays raw dual-lane artifacts for authenticated operators.
+- `jinn artifacts view --task-id <id> --coordinator-id <id> --kind diff|prompt|output [--json]` displays raw dual-lane artifacts for authenticated operators.
 - `jinn continuations list [--json]` lists durable blocked/failed continuation records through the running gateway.
 - `jinn continuations retry --task-id <id> --coordinator-id <id> [--json]` re-attempts a previously failed live continuation through the running gateway.
 - `jinn scheduler stats [--path <file>] [--json]` summarizes append-only orchestration run telemetry by provider, family, role, worker, and disposition.
@@ -78,15 +78,15 @@
 - Live run output can now end in `ok: false, state: "failed"` when any leased role session errors; blocked runs remain `state: "blocked_resource"`.
 - Fidelity gaps:
   - A SQLite store, persistent scheduler wrapper, and daemon runtime now exist for leases, allocations, queue items, and telemetry events.
-  - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, `mock`, and opt-in live adapters for existing Jinn engine ids via an injected engine map. The default registry used by dry-runs remains inert-only.
+  - Provider-adapter contract modules now exist for `stub`, `manual`, `local_echo`, `mock`, and experimental opt-in live adapter parity tests for existing Jinn engine ids via an injected engine map. The default registry used by dry-runs remains inert-only, and production live orchestration does not route through the live adapter factory.
   - Live orchestration allocation applies usage-aware headroom before creating leases, filtering unavailable, exhausted, or below-threshold engines while simulation mode stays deterministic.
-  - Worktree execution is task/lane-scoped: implementation lanes can run in isolated git worktrees, reviewers inspect generated diff bundles instead of the implementation tree, and the runtime reaper removes abandoned managed worktrees.
-  - Dual-lane mode allocates OpenAI and Anthropic implementer roles atomically, sends both lanes an identical prompt in isolated worktrees, returns a deterministic comparison report, requires explicit human selection, records raw prompt/output/diff artifacts, and can apply the selected patch as unstaged base-repo changes only.
+  - Worktree execution is task/lane-scoped: implementation lanes can run in isolated git worktrees, reviewers inspect generated diff bundles instead of the implementation tree, and the runtime reaper removes abandoned managed worktrees plus review bundles older than 24 hours.
+  - Dual-lane mode allocates OpenAI and Anthropic implementer roles atomically, sends both lanes an identical prompt in isolated worktrees, returns a deterministic comparison report, requires explicit human selection keyed by `taskId + coordinatorId`, records raw prompt/output/diff artifacts, and can apply the selected patch as unstaged base-repo changes only.
   - Board-originated ticket dispatch is scheduler-aware when `orchestration.enabled: true`: manual dispatch and the board worker allocate an exact synthesized org worker role before session launch and release the lease after the run settles.
   - Durable telemetry is appended to `~/.jinn/logs/orchestration-telemetry.jsonl` for scheduler-owned live runs, dual-lane selection outcomes, and scheduler-owned board/manual ticket dispatch. Prompts, raw model output, raw diffs, cwd/worktree paths, credentials, headers, and env are not logged.
-  - `orchestration.empiricalRouting: true` lets runtime startup use historical telemetry scores as a deterministic worker tie-break after hard constraints and explicit tier/cost preferences.
+  - `orchestration.empiricalRouting: true` lets runtime startup use decayed historical telemetry scores as a deterministic worker tie-break after hard constraints and explicit tier/cost preferences.
   - Runtime reload/shutdown paths preserve active orchestration work, replay deferred org/config refresh after drain, recover stale `dispatching` continuations, and release owned leases before closing persistent state.
-  - Allocation lifecycle and retention are bounded: running allocations remain protected, terminal allocations default to 24-hour retention with a 1,000-record cap, and internal scheduler telemetry defaults to 24-hour retention with a 2,000-event cap. Append-only JSONL run telemetry is unchanged.
+  - Allocation lifecycle and retention are bounded: running allocations remain protected, terminal allocations default to 24-hour retention with a 1,000-record cap, internal scheduler telemetry defaults to 24-hour retention with a 2,000-event cap, append-only JSONL run telemetry is compacted to 90 days or 10,000 records, and recovery notices/quarantine sidecars are compacted to 30 days or 100 groups.
   - `architecture` mode requires architect, implementer, independent reviewer, adversarial reviewer, and QA roles in the resolved request. `local_heavy` rejects editing/coding roles and restricts allocation to local, near-zero, or low-cost workers.
   - The public CLI dry-runs and plans do not write the durable store; list commands read existing durable state only.
   - The `/orchestration` dashboard exposes failed-continuation retry, explicit dual-lane selection and apply, global and per-task queue pause/resume, raw artifact viewing, holds, recovery requeue, and strict running-lease stop.
@@ -96,7 +96,8 @@
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
 - `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded
-  reason, queue pause state, active counts, and recent corrupt-DB recovery notices.
+  reason, queue pause state, active counts, recent corrupt-DB recovery notices,
+  and recent expired-lease interruption diagnostics.
 - `GET /api/orchestration/workers` returns configured workers.
 - `GET /api/orchestration/leases` returns existing durable orchestration leases.
 - `GET /api/orchestration/queue` returns blocked-resource queue items, per-task pause records, missing roles, and resume triggers.
@@ -108,8 +109,8 @@
 - `GET /api/orchestration/worktrees` returns managed worktree metadata without
   diffs.
 - `GET /api/orchestration/dual-lane` returns sanitized dual-lane manifest summaries.
-- `GET /api/orchestration/artifacts/:taskId/:kind` returns bounded raw
-  prompt, output, diff, or patch-apply artifact content for one task.
+- `GET /api/orchestration/artifacts/:taskId/:kind?coordinatorId=<id>` returns bounded raw
+  prompt, output, diff, or patch-apply artifact content for one run identity.
 - `POST /api/orchestration/continuations/retry` re-attempts a failed continuation through the live runtime.
 - `POST /api/orchestration/queue/pause` persists a global queue pause with an optional reason.
 - `POST /api/orchestration/queue/resume` clears the global queue pause and retries queued work through live headroom.
@@ -117,8 +118,8 @@
 - `POST /api/orchestration/holds`, `POST /api/orchestration/holds/:id/extend`, and `POST /api/orchestration/holds/:id/cancel` manage TTL-bounded holds with `managerName` authorization.
 - `POST /api/orchestration/leases/stop` interrupts the Jinn session mapped to a running lease, or releases immediately when the mapped session is terminal.
 - `POST /api/orchestration/run` executes `single_worker`, `single_worker_with_review`, `dual_lane`, `architecture`, and `local_heavy` tasks through the daemon runtime.
-- `POST /api/orchestration/dual-lane/select` selects a completed dual-lane winner and archives/discards the loser lane.
-- `POST /api/orchestration/dual-lane/apply` applies a selected or selection-required winner patch to the base repo as unstaged changes only.
+- `POST /api/orchestration/dual-lane/select` selects a completed dual-lane winner keyed by `taskId + coordinatorId` and archives/discards the loser lane.
+- `POST /api/orchestration/dual-lane/apply` applies a selected or selection-required winner patch keyed by `taskId + coordinatorId` to the base repo as unstaged changes only.
 - `POST /api/orchestration/recovery/requeue` imports one parsed recovered continuation from an explicit recovery manifest and leaves it task-paused until resumed.
 - Run responses include `reviewPolicy.explanations` for reviewer selection, explicit same-family fallback, and blocked reviewer allocation.
 - Blocked live runs persist a durable continuation keyed by task/coordinator and auto-resume on later resource availability.

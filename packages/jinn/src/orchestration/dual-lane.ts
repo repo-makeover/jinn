@@ -11,7 +11,6 @@ import {
   runOrchestrationLeaseTurn,
 } from "./run-mode.js";
 import {
-  AmbiguousDualLaneRunError,
   dualLaneArchiveDir,
   readDualLaneManifest,
   updateDualLaneManifest,
@@ -89,7 +88,7 @@ export interface DualLaneRunLane {
 }
 
 export type DualLaneSelectionResult =
-  | { ok: false; reason: "not_found" | "ambiguous_run_identifier" | "invalid_state" | "invalid_lane"; message: string }
+  | { ok: false; reason: "not_found" | "invalid_state" | "invalid_lane"; message: string }
   | {
     ok: true;
     state: "selected";
@@ -243,22 +242,14 @@ export async function runAllocatedDualLaneTask(opts: {
 
 export function selectDualLaneWinner(opts: {
   taskId: string;
-  coordinatorId?: string;
+  coordinatorId: string;
   winnerLane: string;
 }): DualLaneSelectionResult {
   const winnerLane = parseLane(opts.winnerLane);
   if (!winnerLane) {
     return { ok: false, reason: "invalid_lane", message: `invalid dual-lane winner: ${opts.winnerLane}` };
   }
-  let manifest;
-  try {
-    manifest = readDualLaneManifest(opts.taskId, opts.coordinatorId);
-  } catch (err) {
-    if (err instanceof AmbiguousDualLaneRunError) {
-      return { ok: false, reason: "ambiguous_run_identifier", message: err.message };
-    }
-    throw err;
-  }
+  const manifest = readDualLaneManifest(opts.taskId, opts.coordinatorId);
   if (!manifest) {
     return { ok: false, reason: "not_found", message: `no dual-lane run found for task ${opts.taskId}` };
   }

@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { requeueRecoveredContinuation } from "../recovery-requeue.js";
 import { OrchestrationStore } from "../store.js";
-import { writeRecoveryManifest } from "../store-recovery.js";
+import { pruneRecoveryNotices, writeRecoveryManifest } from "../store-recovery.js";
 
 const fixedNow = new Date("2026-06-23T12:00:00.000Z");
 
@@ -327,6 +327,69 @@ describe("requeueRecoveredContinuation", () => {
     if (result.ok) return;
     expect(result.reason).toBe("invalid_manifest");
     store.close();
+  });
+
+  it("prunes old recovery notices and their quarantined database files", () => {
+    const oldCorruptDbPath = path.join(quarantineDir, "orchestration.db.corrupt.old");
+    const newCorruptDbPath = path.join(quarantineDir, "orchestration.db.corrupt.new");
+    fs.writeFileSync(oldCorruptDbPath, "old");
+    fs.writeFileSync(newCorruptDbPath, "new");
+    const oldManifestPath = writeRecoveryManifest(recoveryDir, {
+      recoveredAt: "2026-05-01T00:00:00.000Z",
+      originalDbPath: dbPath,
+      corruptDbPath: oldCorruptDbPath,
+      message: "old recovery",
+      operatorGuidance: "old guidance",
+    });
+    const newManifestPath = writeRecoveryManifest(recoveryDir, {
+      recoveredAt: "2026-06-23T00:00:00.000Z",
+      originalDbPath: dbPath,
+      corruptDbPath: newCorruptDbPath,
+      message: "new recovery",
+      operatorGuidance: "new guidance",
+    });
+
+    const result = pruneRecoveryNotices(recoveryDir, {
+      now: new Date("2026-06-24T00:00:00.000Z"),
+      maxAgeMs: 30 * 24 * 60 * 60 * 1_000,
+      maxNotices: 100,
+    });
+
+    expect(result).toEqual({ kept: 1, removed: 1 });
+    expect(fs.existsSync(oldManifestPath)).toBe(false);
+    expect(fs.existsSync(oldCorruptDbPath)).toBe(false);
+    expect(fs.existsSync(newManifestPath)).toBe(true);
+    expect(fs.existsSync(newCorruptDbPath)).toBe(true);
+  });
+
+  it("prunes recovery notices by newest-count limit and treats missing dirs as no-op", () => {
+    const firstDb = path.join(quarantineDir, "orchestration.db.corrupt.first");
+    const secondDb = path.join(quarantineDir, "orchestration.db.corrupt.second");
+    fs.writeFileSync(firstDb, "first");
+    fs.writeFileSync(secondDb, "second");
+    const firstManifestPath = writeRecoveryManifest(recoveryDir, {
+      recoveredAt: "2026-06-22T00:00:00.000Z",
+      originalDbPath: dbPath,
+      corruptDbPath: firstDb,
+      message: "first recovery",
+      operatorGuidance: "first guidance",
+    });
+    const secondManifestPath = writeRecoveryManifest(recoveryDir, {
+      recoveredAt: "2026-06-23T00:00:00.000Z",
+      originalDbPath: dbPath,
+      corruptDbPath: secondDb,
+      message: "second recovery",
+      operatorGuidance: "second guidance",
+    });
+
+    expect(pruneRecoveryNotices(recoveryDir, {
+      now: new Date("2026-06-24T00:00:00.000Z"),
+      maxAgeMs: 365 * 24 * 60 * 60 * 1_000,
+      maxNotices: 1,
+    })).toEqual({ kept: 1, removed: 1 });
+    expect(fs.existsSync(firstManifestPath)).toBe(false);
+    expect(fs.existsSync(secondManifestPath)).toBe(true);
+    expect(pruneRecoveryNotices(path.join(tmpDir, "missing-recovery"))).toEqual({ kept: 0, removed: 0 });
   });
 
   it("rolls back live-store writes when recovered holds are malformed", () => {

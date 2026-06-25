@@ -450,6 +450,36 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     runtime.close();
   });
 
+  it("invokes the expired lease handler and retains diagnostic status", () => {
+    const runtime = new OrchestrationRuntime({ config: config(), dbPath, startReaper: false });
+    const allocation = runtime.requestAllocation(request("expiry-task", "expiry-coord", { leaseDurationMs: 1 }));
+    expect(allocation.ok).toBe(true);
+    if (!allocation.ok) return;
+    const lease = allocation.allocation.leases[0];
+    const handled: string[] = [];
+    runtime.setExpiredLeaseHandler((leases) => leases.map((entry) => {
+      handled.push(entry.leaseId);
+      return {
+        leaseId: entry.leaseId,
+        sessionId: "session-expired",
+        status: "interrupted",
+        interruptible: true,
+      };
+    }));
+
+    runtime.expireLeases(new Date(Date.parse(lease.leaseExpiresAt) + 1));
+
+    expect(handled).toEqual([lease.leaseId]);
+    expect(runtime.listLeases().find((entry) => entry.leaseId === lease.leaseId)).toMatchObject({ state: "expired" });
+    expect(runtime.listExpiredLeaseHandling()).toEqual([{
+      leaseId: lease.leaseId,
+      sessionId: "session-expired",
+      status: "interrupted",
+      interruptible: true,
+    }]);
+    runtime.close();
+  });
+
   it("applies live headroom before allocating a worker", async () => {
     const runtime = new OrchestrationRuntime({
       config: twoWorkerConfig(),
@@ -503,14 +533,14 @@ function continuation(
   };
 }
 
-function request(taskId: string, coordinatorId: string) {
+function request(taskId: string, coordinatorId: string, overrides: { leaseDurationMs?: number } = {}) {
   return {
     taskId,
     coordinatorId,
     requiredRoles: ["seniorImplementer"],
     optionalRoles: [],
     priority: "normal" as const,
-    leaseDurationMs: 60_000,
+    leaseDurationMs: overrides.leaseDurationMs ?? 60_000,
   };
 }
 

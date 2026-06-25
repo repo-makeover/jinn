@@ -219,13 +219,13 @@ export async function handleOrchestrationRoutes(
     const parsed = await readJsonBody(req, res);
     if (!parsed.ok) return true;
     const body = parsed.body as { taskId?: unknown; coordinatorId?: unknown; winnerLane?: unknown } | null;
-    if (typeof body?.taskId !== "string" || typeof body?.winnerLane !== "string") {
-      json(res, { error: "taskId and winnerLane are required" }, 400);
+    if (typeof body?.taskId !== "string" || typeof body?.coordinatorId !== "string" || typeof body?.winnerLane !== "string") {
+      json(res, { error: "taskId, coordinatorId, and winnerLane are required" }, 400);
       return true;
     }
     const result = selectDualLaneWinner({
       taskId: body.taskId,
-      coordinatorId: typeof body.coordinatorId === "string" ? body.coordinatorId : undefined,
+      coordinatorId: body.coordinatorId,
       winnerLane: body.winnerLane,
     });
     if (!result.ok) {
@@ -252,15 +252,15 @@ export async function handleOrchestrationRoutes(
     const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
     if (!parsed.ok) return true;
     const body = parsed.body as { taskId?: unknown; coordinatorId?: unknown; winnerLane?: unknown } | null;
-    if (typeof body?.taskId !== "string" || typeof body?.winnerLane !== "string") {
-      json(res, { error: "taskId and winnerLane are required" }, 400);
+    if (typeof body?.taskId !== "string" || typeof body?.coordinatorId !== "string" || typeof body?.winnerLane !== "string") {
+      json(res, { error: "taskId, coordinatorId, and winnerLane are required" }, 400);
       return true;
     }
     const store = context.orchestration?.runtime?.getStore() ?? openFallbackStore(context);
     try {
       const result = applyDualLaneWinner({
         taskId: body.taskId,
-        coordinatorId: typeof body.coordinatorId === "string" ? body.coordinatorId : undefined,
+        coordinatorId: body.coordinatorId,
         winnerLane: body.winnerLane,
         store,
       });
@@ -422,11 +422,14 @@ export async function handleOrchestrationRoutes(
       const store = runtime?.getStore() ?? openFallbackStore(context);
       try {
         const coordinatorId = queryParam(req?.url, "coordinatorId");
-        json(res, { taskId: artifactParams.taskId, coordinatorId, kind, artifacts: listArtifactContents(store, artifactParams.taskId, kind, coordinatorId ?? undefined) });
+        if (!coordinatorId) {
+          json(res, { error: "coordinatorId query parameter is required" }, 400);
+          return true;
+        }
+        json(res, { taskId: artifactParams.taskId, coordinatorId, kind, artifacts: listArtifactContents(store, artifactParams.taskId, kind, coordinatorId) });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const status = message.includes("ambiguous") ? 409 : 500;
-        json(res, { error: message, reason: status === 409 ? "ambiguous_run_identifier" : "artifact_read_failed" }, status);
+        json(res, { error: message, reason: "artifact_read_failed" }, 500);
       } finally {
         if (!runtime) store.close();
       }
@@ -580,6 +583,7 @@ function buildStatusPayload(context: ApiContext, runtime: OrchestrationRuntime |
     disabledReason: enabled ? null : "orchestration is disabled",
     degradedReason: enabled && !runtime ? "orchestration runtime is not bound; observe routes may use durable fallback state" : null,
     recoveryNotices,
+    expiredLeaseHandling: runtime?.listExpiredLeaseHandling() ?? [],
     counts,
   };
 }

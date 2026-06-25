@@ -10,6 +10,7 @@ import {
   createImplementationWorktree,
   diffWorktree,
   listManagedWorktrees,
+  reapExpiredReviewBundles,
   reapOrphanedWorktrees,
 } from "../worktree.js";
 import { OrchestrationRuntime } from "../runtime.js";
@@ -134,6 +135,44 @@ describe("orchestration worktrees", () => {
     expect(fs.existsSync(path.join(bundle.path, "metadata.json"))).toBe(true);
     expect(fs.readFileSync(path.join(bundle.path, "patch.diff"), "utf-8")).toContain("feature.txt");
     cleanupReviewBundle(bundle);
+    cleanupWorktree(prepared.handle);
+  });
+
+  it("reaps only review bundles older than the grace window", () => {
+    const prepared = createImplementationWorktree({
+      taskId: "task-review-reap",
+      lane: "implementation",
+      baseCwd: repoDir,
+      worktrees: { root: worktreeRoot, maxWorktrees: 4 },
+    });
+    expect(prepared.mode).toBe("implementation_worktree");
+    if (prepared.mode !== "implementation_worktree") return;
+    const oldBundle = createReviewBundle({
+      taskId: "task-review-reap-old",
+      role: "independentReviewer",
+      workerId: "mockReviewer",
+      sourceCwd: prepared.cwd,
+      sourceWorktree: prepared.handle,
+      now: () => new Date("2026-06-24T00:00:00.000Z"),
+    });
+    const freshBundle = createReviewBundle({
+      taskId: "task-review-reap-fresh",
+      role: "independentReviewer",
+      workerId: "mockReviewer",
+      sourceCwd: prepared.cwd,
+      sourceWorktree: prepared.handle,
+      now: () => new Date("2026-06-25T12:00:00.000Z"),
+    });
+
+    const removed = reapExpiredReviewBundles({
+      now: new Date("2026-06-25T12:00:00.001Z"),
+      maxAgeMs: 24 * 60 * 60 * 1_000,
+    });
+
+    expect(removed.map((bundle) => bundle.path)).toContain(oldBundle.path);
+    expect(fs.existsSync(oldBundle.path)).toBe(false);
+    expect(fs.existsSync(freshBundle.path)).toBe(true);
+    cleanupReviewBundle(freshBundle);
     cleanupWorktree(prepared.handle);
   });
 

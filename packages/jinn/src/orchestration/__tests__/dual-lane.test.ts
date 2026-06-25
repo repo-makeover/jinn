@@ -73,7 +73,7 @@ describe("dual-lane orchestration", () => {
     expect(runtime.reapWorktrees()).toEqual([]);
     expect(worktreePaths.every((worktreePath) => fs.existsSync(worktreePath))).toBe(true);
 
-    const selection = selectDualLaneWinner({ taskId: "task-dual", winnerLane: "openai" });
+    const selection = selectDualLaneWinner({ taskId: "task-dual", coordinatorId: "coord-dual", winnerLane: "openai" });
     expect(selection.ok).toBe(true);
     if (!selection.ok) return;
     expect(selection.selectedLane).toBe("openai");
@@ -82,8 +82,8 @@ describe("dual-lane orchestration", () => {
     expect(fs.existsSync(selection.archive.diffPath)).toBe(true);
     expect(fs.readFileSync(selection.archive.diffPath, "utf-8")).toContain("anthropic.txt");
     expect(fs.existsSync(worktreePaths.find((worktreePath) => worktreePath.includes("-anthropic")) ?? "")).toBe(false);
-    expect(readDualLaneManifest("task-dual")?.state).toBe("selected");
-    const apply = applyDualLaneWinner({ taskId: "task-dual", winnerLane: "openai", store: runtime.getStore() });
+    expect(readDualLaneManifest("task-dual", "coord-dual")?.state).toBe("selected");
+    const apply = applyDualLaneWinner({ taskId: "task-dual", coordinatorId: "coord-dual", winnerLane: "openai", store: runtime.getStore() });
     expect(apply.ok).toBe(true);
     if (!apply.ok) return;
     expect(fs.readFileSync(path.join(repo, "openai.txt"), "utf-8")).toContain("Implement the same capability");
@@ -179,10 +179,14 @@ describe("dual-lane orchestration", () => {
     const { OrchestrationStore, writeDualLanePromptArtifact } = await loadModules();
     const store = OrchestrationStore.open(":memory:");
 
-    const first = writeDualLanePromptArtifact("shared-task", "coord-a", "prompt A", store);
+    const first = writeDualLanePromptArtifact("shared-task", "coord-a", "prompt A", store, {
+      now: () => new Date("2026-06-25T12:00:00.000Z"),
+    });
     const second = writeDualLanePromptArtifact("shared-task", "coord-b", "prompt B", store);
+    fs.utimesSync(first.path, new Date("2020-01-01T00:00:00.000Z"), new Date("2020-01-01T00:00:00.000Z"));
 
     expect(first.artifactId).toBe("shared-task:coord-a:prompt:base");
+    expect(first.createdAt).toBe("2026-06-25T12:00:00.000Z");
     expect(second.artifactId).toBe("shared-task:coord-b:prompt:base");
     expect(first.path).not.toBe(second.path);
     expect(store.listArtifactRecords("shared-task", "prompt", "coord-a")).toMatchObject([{ coordinatorId: "coord-a", path: first.path }]);

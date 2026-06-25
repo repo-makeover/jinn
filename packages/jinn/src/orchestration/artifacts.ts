@@ -4,7 +4,6 @@ import path from "node:path";
 import { getMessages } from "../sessions/registry.js";
 import { appendOrchestrationAudit } from "./audit.js";
 import {
-  AmbiguousDualLaneRunError,
   dualLaneTaskDir,
   readDualLaneManifest,
   updateDualLaneManifest,
@@ -27,17 +26,17 @@ export interface ArtifactContent {
 }
 
 export type DualLaneApplyResult =
-  | { ok: false; reason: "not_found" | "ambiguous_run_identifier" | "invalid_state" | "invalid_lane" | "dirty_base" | "missing_worktree" | "empty_patch" | "conflict" | "apply_in_progress"; message: string }
+  | { ok: false; reason: "not_found" | "invalid_state" | "invalid_lane" | "dirty_base" | "missing_worktree" | "empty_patch" | "conflict" | "apply_in_progress"; message: string }
   | { ok: true; taskId: string; selectedLane: "openai" | "anthropic"; baseCwd: string; patchPath: string; attemptId: string };
 
-export class AmbiguousArtifactLookupError extends Error {
-  constructor(public readonly taskId: string, public readonly coordinatorIds: string[]) {
-    super(`artifact lookup for ${taskId} is ambiguous across coordinators: ${coordinatorIds.join(", ")}`);
-  }
-}
-
-export function writeDualLanePromptArtifact(taskId: string, coordinatorId: string, prompt: string, store?: OrchestrationStore): ArtifactRecord {
-  return writeArtifact({ taskId, coordinatorId, kind: "prompt", lane: null, content: prompt, store });
+export function writeDualLanePromptArtifact(
+  taskId: string,
+  coordinatorId: string,
+  prompt: string,
+  store?: OrchestrationStore,
+  opts: { now?: () => Date } = {},
+): ArtifactRecord {
+  return writeArtifact({ taskId, coordinatorId, kind: "prompt", lane: null, content: prompt, store, now: opts.now });
 }
 
 export function writeDualLaneOutputArtifact(
@@ -46,8 +45,9 @@ export function writeDualLaneOutputArtifact(
   lane: "openai" | "anthropic",
   content: string,
   store?: OrchestrationStore,
+  opts: { now?: () => Date } = {},
 ): ArtifactRecord {
-  return writeArtifact({ taskId, coordinatorId, kind: "output", lane, content, store });
+  return writeArtifact({ taskId, coordinatorId, kind: "output", lane, content, store, now: opts.now });
 }
 
 export function writeDualLaneDiffArtifact(
@@ -56,41 +56,30 @@ export function writeDualLaneDiffArtifact(
   lane: "openai" | "anthropic",
   content: string,
   store?: OrchestrationStore,
+  opts: { now?: () => Date } = {},
 ): ArtifactRecord {
-  return writeArtifact({ taskId, coordinatorId, kind: "diff", lane, content, store });
+  return writeArtifact({ taskId, coordinatorId, kind: "diff", lane, content, store, now: opts.now });
 }
 
 export function listArtifactContents(
   store: OrchestrationStore | undefined,
   taskId: string,
   kind: ArtifactKind,
-  coordinatorId?: string,
+  coordinatorId: string,
 ): ArtifactContent[] {
   const records = store?.listArtifactRecords(taskId, kind, coordinatorId) ?? discoverDualLaneArtifacts(taskId, kind, coordinatorId);
-  if (!coordinatorId) {
-    const exactCoordinatorIds = [...new Set(records.map((record) => record.coordinatorId).filter((id): id is string => Boolean(id)))];
-    if (exactCoordinatorIds.length > 1) throw new AmbiguousArtifactLookupError(taskId, exactCoordinatorIds);
-  }
   return records.map((record) => ({ record, content: readArtifactFile(record.path) }));
 }
 
 export function applyDualLaneWinner(opts: {
   taskId: string;
-  coordinatorId?: string;
+  coordinatorId: string;
   winnerLane: string;
   store?: OrchestrationStore;
 }): DualLaneApplyResult {
   const selectedLane = parseLane(opts.winnerLane);
   if (!selectedLane) return { ok: false, reason: "invalid_lane", message: `invalid dual-lane winner: ${opts.winnerLane}` };
-  let manifest;
-  try {
-    manifest = readDualLaneManifest(opts.taskId, opts.coordinatorId);
-  } catch (err) {
-    if (err instanceof AmbiguousDualLaneRunError) {
-      return { ok: false, reason: "ambiguous_run_identifier", message: err.message };
-    }
-    throw err;
-  }
+  const manifest = readDualLaneManifest(opts.taskId, opts.coordinatorId);
   if (!manifest) return { ok: false, reason: "not_found", message: `no dual-lane run found for task ${opts.taskId}` };
   if (manifest.state !== "selection_required" && manifest.state !== "selected") {
     return {
@@ -168,11 +157,12 @@ export function persistDualLaneArtifacts(opts: {
   prompt: string;
   lanes: DualLaneManifestLane[];
   store?: OrchestrationStore;
+  now?: () => Date;
 }): void {
-  writeDualLanePromptArtifact(opts.taskId, opts.coordinatorId, opts.prompt, opts.store);
+  writeDualLanePromptArtifact(opts.taskId, opts.coordinatorId, opts.prompt, opts.store, { now: opts.now });
   for (const lane of opts.lanes) {
-    writeDualLaneOutputArtifact(opts.taskId, opts.coordinatorId, lane.id, rawOutputForSession(lane.session.sessionId), opts.store);
-    writeDualLaneDiffArtifact(opts.taskId, opts.coordinatorId, lane.id, patchWorktree(lane.worktree), opts.store);
+    writeDualLaneOutputArtifact(opts.taskId, opts.coordinatorId, lane.id, rawOutputForSession(lane.session.sessionId), opts.store, { now: opts.now });
+    writeDualLaneDiffArtifact(opts.taskId, opts.coordinatorId, lane.id, patchWorktree(lane.worktree), opts.store, { now: opts.now });
   }
 }
 
@@ -192,6 +182,7 @@ function writeArtifact(opts: {
   content: string;
   store?: OrchestrationStore;
   note?: string;
+  now?: () => Date;
 }): ArtifactRecord {
   const dir = path.join(dualLaneTaskDir(opts.taskId, opts.coordinatorId), "artifacts");
   fs.mkdirSync(dir, { recursive: true });
@@ -199,6 +190,7 @@ function writeArtifact(opts: {
   const file = path.join(dir, filename);
   fs.writeFileSync(file, opts.content);
   const stat = fs.statSync(file);
+  const createdAt = (opts.now?.() ?? new Date()).toISOString();
   const record: ArtifactRecord = {
     artifactId: `${opts.taskId}:${opts.coordinatorId}:${opts.kind}:${opts.lane ?? "base"}`,
     taskId: opts.taskId,
@@ -207,7 +199,7 @@ function writeArtifact(opts: {
     lane: opts.lane,
     path: file,
     bytes: stat.size,
-    createdAt: new Date(stat.mtimeMs).toISOString(),
+    createdAt,
     note: opts.note ?? null,
   };
   opts.store?.addArtifactRecord(record);
@@ -215,20 +207,11 @@ function writeArtifact(opts: {
   return record;
 }
 
-function discoverDualLaneArtifacts(taskId: string, kind: ArtifactKind, coordinatorId?: string): ArtifactRecord[] {
-  const manifests = coordinatorId
-    ? [readDualLaneManifest(taskId, coordinatorId)].filter((manifest): manifest is NonNullable<typeof manifest> => Boolean(manifest))
-    : (() => {
-      try {
-        return [readDualLaneManifest(taskId)].filter((manifest): manifest is NonNullable<typeof manifest> => Boolean(manifest));
-      } catch (err) {
-        if (err instanceof AmbiguousDualLaneRunError) return [];
-        throw err;
-      }
-    })();
+function discoverDualLaneArtifacts(taskId: string, kind: ArtifactKind, coordinatorId: string): ArtifactRecord[] {
+  const manifests = [readDualLaneManifest(taskId, coordinatorId)].filter((manifest): manifest is NonNullable<typeof manifest> => Boolean(manifest));
   const dir = manifests[0]
     ? path.join(dualLaneTaskDir(taskId, manifests[0].coordinatorId), "artifacts")
-    : path.join(dualLaneTaskDir(taskId), "artifacts");
+    : path.join(dualLaneTaskDir(taskId, coordinatorId), "artifacts");
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile())
@@ -238,9 +221,9 @@ function discoverDualLaneArtifacts(taskId: string, kind: ArtifactKind, coordinat
       const stat = fs.statSync(file);
       const laneMatch = entry.name.match(new RegExp(`^${kind}-(.+)\\.txt$`));
       return {
-        artifactId: `${taskId}:${kind}:${laneMatch?.[1] ?? "base"}`,
+        artifactId: `${taskId}:${coordinatorId}:${kind}:${laneMatch?.[1] ?? "base"}`,
         taskId,
-        coordinatorId: manifests[0]?.coordinatorId ?? null,
+        coordinatorId,
         kind,
         lane: laneMatch?.[1] ?? null,
         path: file,

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendOrchestrationTelemetry,
   computeWorkerScores,
+  pruneOrchestrationTelemetry,
   readOrchestrationTelemetry,
   summarizeOrchestrationTelemetry,
   telemetryCountsFromDiff,
@@ -73,6 +74,19 @@ describe("orchestration telemetry", () => {
     expect(scores.loser).toBe(-3);
   });
 
+  it("decays empirical worker scores by age while clamping future timestamps", () => {
+    const now = new Date("2026-06-24T00:00:00.000Z");
+    const scores = computeWorkerScores([
+      record({ worker_id: "recent", disposition: "completed", timestamp: "2026-06-23T00:00:00.000Z" }),
+      record({ worker_id: "ancient", disposition: "selected", timestamp: "2026-01-01T00:00:00.000Z" }),
+      record({ worker_id: "future", disposition: "completed", timestamp: "2026-07-01T00:00:00.000Z" }),
+    ], { now });
+
+    expect(scores.recent).toBeGreaterThan(0.9);
+    expect(scores.ancient).toBeUndefined();
+    expect(scores.future).toBe(1);
+  });
+
   it("supports bounded tail reads for runtime scoring", () => {
     const logPath = path.join(tmpDir, "large-runs.jsonl");
     const lines = [
@@ -85,6 +99,33 @@ describe("orchestration telemetry", () => {
 
     expect(read.records).toHaveLength(1);
     expect(read.records[0].worker_id).toBe("new-worker");
+  });
+
+  it("prunes telemetry by age and record count while dropping corrupt lines", () => {
+    const logPath = path.join(tmpDir, "retained-runs.jsonl");
+    fs.writeFileSync(logPath, [
+      JSON.stringify(record({ task_id: "old", worker_id: "old-worker", timestamp: "2026-01-01T00:00:00.000Z" })),
+      "{not-json",
+      JSON.stringify(record({ task_id: "new-1", worker_id: "new-worker-1", timestamp: "2026-06-22T00:00:00.000Z" })),
+      JSON.stringify(record({ task_id: "new-2", worker_id: "new-worker-2", timestamp: "2026-06-23T00:00:00.000Z" })),
+    ].join("\n"));
+
+    const result = pruneOrchestrationTelemetry({
+      logPath,
+      now: new Date("2026-06-24T00:00:00.000Z"),
+      maxAgeMs: 30 * 24 * 60 * 60 * 1_000,
+      maxRecords: 1,
+    });
+    const read = readOrchestrationTelemetry(logPath);
+
+    expect(result).toEqual({ kept: 1, removed: 2, skippedLines: 1 });
+    expect(read.records.map((entry) => entry.task_id)).toEqual(["new-2"]);
+    expect(read.skippedLines).toBe(0);
+  });
+
+  it("treats missing telemetry logs as a prune no-op", () => {
+    expect(pruneOrchestrationTelemetry({ logPath: path.join(tmpDir, "missing.jsonl") }))
+      .toEqual({ kept: 0, removed: 0, skippedLines: 0 });
   });
 
   it("counts changed files and test files without exposing paths", () => {

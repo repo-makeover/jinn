@@ -6,6 +6,7 @@ import type { JinnConfig } from "../shared/types.js";
 
 export const WORKTREE_MARKER = ".jinn-worktree.json";
 export const DEFAULT_MAX_WORKTREES = 8;
+export const DEFAULT_REVIEW_BUNDLE_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 export type WorktreeMode = "implementation_worktree" | "shared";
 export type WorktreeDowngradeReason = "non_git_cwd";
@@ -41,6 +42,12 @@ export type WorktreePreparation =
 export interface WorktreeCleanupResult {
   path: string;
   removed: boolean;
+}
+
+export interface ReviewBundleReapOptions {
+  root?: string;
+  now?: Date;
+  maxAgeMs?: number;
 }
 
 export function resolveWorktreeOptions(config: JinnConfig): WorktreeOptions {
@@ -187,7 +194,7 @@ export function createReviewBundle(opts: {
   sourceWorktree?: WorktreeHandle;
   now?: () => Date;
 }): ReviewBundleHandle {
-  const bundleRoot = path.join(JINN_HOME, "tmp", "orchestration-review");
+  const bundleRoot = reviewBundleRoot();
   fs.mkdirSync(bundleRoot, { recursive: true });
   const bundlePath = fs.mkdtempSync(path.join(bundleRoot, `review-${safeSegment(opts.taskId)}-${safeSegment(opts.role)}-`));
   const createdAt = (opts.now?.() ?? new Date()).toISOString();
@@ -219,6 +226,33 @@ export function cleanupReviewBundle(handle: ReviewBundleHandle): void {
   fs.rmSync(handle.path, { recursive: true, force: true });
 }
 
+export function reapExpiredReviewBundles(opts: ReviewBundleReapOptions = {}): ReviewBundleHandle[] {
+  const root = path.resolve(opts.root ?? reviewBundleRoot());
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  const nowMs = (opts.now ?? new Date()).getTime();
+  const maxAgeMs = typeof opts.maxAgeMs === "number" && Number.isFinite(opts.maxAgeMs) && opts.maxAgeMs >= 0
+    ? opts.maxAgeMs
+    : DEFAULT_REVIEW_BUNDLE_RETENTION_MS;
+  const removed: ReviewBundleHandle[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith("review-")) continue;
+    const bundlePath = path.join(root, entry.name);
+    const handle = readReviewBundle(bundlePath);
+    if (!handle) continue;
+    const createdAtMs = Date.parse(handle.createdAt);
+    if (!Number.isFinite(createdAtMs) || nowMs - createdAtMs < maxAgeMs) continue;
+    cleanupReviewBundle(handle);
+    removed.push(handle);
+  }
+  return removed;
+}
+
 export function reapOrphanedWorktrees(root: string, activeTaskIds: Set<string>): WorktreeHandle[] {
   const removed: WorktreeHandle[] = [];
   for (const handle of listManagedWorktrees(root)) {
@@ -227,6 +261,32 @@ export function reapOrphanedWorktrees(root: string, activeTaskIds: Set<string>):
     removed.push(handle);
   }
   return removed;
+}
+
+function reviewBundleRoot(): string {
+  return path.join(JINN_HOME, "tmp", "orchestration-review");
+}
+
+function readReviewBundle(bundlePath: string): ReviewBundleHandle | null {
+  const metadataPath = path.join(bundlePath, "metadata.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(metadataPath, "utf-8")) as Partial<{
+      createdAt: unknown;
+      sourceCwd: unknown;
+      sourceWorktreePath: unknown;
+    }>;
+    if (typeof parsed.createdAt !== "string" || typeof parsed.sourceCwd !== "string") return null;
+    return {
+      path: bundlePath,
+      patchPath: path.join(bundlePath, "patch.diff"),
+      metadataPath,
+      sourceCwd: parsed.sourceCwd,
+      sourceWorktreePath: typeof parsed.sourceWorktreePath === "string" ? parsed.sourceWorktreePath : undefined,
+      createdAt: parsed.createdAt,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function listManagedWorktrees(root: string): WorktreeHandle[] {

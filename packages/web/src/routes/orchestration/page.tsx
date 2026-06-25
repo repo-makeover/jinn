@@ -538,7 +538,7 @@ function DualLaneList({ runs, actionKey, onSelect, onApply, onArtifact }: {
               {run.lanes.map((lane) => (
                 <div key={lane.id} className="flex items-center gap-[var(--space-1)]">
                   <button
-                    disabled={!canSelect || actionKey === `select:${run.taskId}:${lane.id}`}
+                    disabled={!canSelect || actionKey === `select:${run.taskId}:${run.coordinatorId}:${lane.id}`}
                     title={canSelect ? `Select ${lane.id} lane` : "Only selection_required manifests can be selected"}
                     onClick={() => onSelect(run, lane.id)}
                     className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
@@ -546,7 +546,7 @@ function DualLaneList({ runs, actionKey, onSelect, onApply, onArtifact }: {
                     Select {lane.id}
                   </button>
                   <button
-                    disabled={actionKey === `apply:${run.taskId}:${lane.id}`}
+                    disabled={actionKey === `apply:${run.taskId}:${run.coordinatorId}:${lane.id}`}
                     title={`Apply ${lane.id} winner as unstaged base repo changes`}
                     onClick={() => onApply(run, lane.id)}
                     className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
@@ -558,7 +558,7 @@ function DualLaneList({ runs, actionKey, onSelect, onApply, onArtifact }: {
               {(["prompt", "output", "diff"] as const).map((kind) => (
                 <button
                   key={kind}
-                  disabled={actionKey === `artifact:${run.taskId}:${kind}`}
+                  disabled={actionKey === `artifact:${run.taskId}:${run.coordinatorId}:${kind}`}
                   onClick={() => onArtifact(run, kind)}
                   className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)]"
                 >

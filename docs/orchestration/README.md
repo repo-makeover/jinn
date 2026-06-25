@@ -106,11 +106,11 @@ jinn run --mode single_worker_with_review --task docs/orchestration/examples/tas
 jinn run --mode dual_lane --task docs/orchestration/examples/task-live.yaml
 jinn run --mode architecture --task docs/orchestration/examples/task-architecture.yaml
 jinn run --mode local_heavy --task docs/orchestration/examples/task-local-heavy.yaml
-jinn dual-lane select --task-id task-live --winner openai
-jinn dual-lane apply --task-id task-live --winner openai
+jinn dual-lane select --task-id task-live --coordinator-id task-live-review --winner openai
+jinn dual-lane apply --task-id task-live --coordinator-id task-live-review --winner openai
 jinn queue pause-task --task-id task-live --coordinator-id task-live-review
 jinn holds list --json
-jinn artifacts view --task-id task-live --kind diff
+jinn artifacts view --task-id task-live --coordinator-id task-live-review --kind diff
 jinn continuations list
 jinn continuations retry --task-id task-live --coordinator-id task-live-review
 jinn recovery notices --json
@@ -145,12 +145,13 @@ using `openaiRole` and `anthropicRole` task fields, defaulting to
 `openaiImplementer` and `anthropicImplementer`. Both lanes receive the identical
 prompt in separate managed git worktrees. Successful runs return
 `state: "selection_required"` with a deterministic comparison report and raw
-prompt/output/diff artifacts. Use `jinn dual-lane select --task-id <id>
---winner openai|anthropic` to explicitly choose the retained lane and archive
-then remove the loser lane. Use `jinn dual-lane apply --task-id <id> --winner
-openai|anthropic` to apply the winner patch to the base repo as unstaged
-changes only; dirty base worktrees, missing winner worktrees, empty patches,
-and patch conflicts are refused.
+prompt/output/diff artifacts. Dual-lane operator actions use the strict run
+identity `taskId + coordinatorId`. Use `jinn dual-lane select --task-id <id>
+--coordinator-id <id> --winner openai|anthropic` to explicitly choose the
+retained lane and archive then remove the loser lane. Use `jinn dual-lane apply
+--task-id <id> --coordinator-id <id> --winner openai|anthropic` to apply the
+winner patch to the base repo as unstaged changes only; dirty base worktrees,
+missing winner worktrees, empty patches, and patch conflicts are refused.
 `jinn continuations list` inspects durable blocked/failed continuation records
 through the live gateway. `jinn continuations retry` re-attempts a continuation
 only when it is already in `failed` state; queued continuations remain
@@ -191,7 +192,7 @@ gateway token gate.
 - `GET /api/orchestration/worktrees`
 - `GET /api/orchestration/dual-lane`
 - `GET /api/orchestration/holds`
-- `GET /api/orchestration/artifacts/:taskId/:kind`
+- `GET /api/orchestration/artifacts/:taskId/:kind?coordinatorId=<id>`
 - `POST /api/orchestration/queue/pause`
 - `POST /api/orchestration/queue/resume`
 - `POST /api/orchestration/queue/pause-task`
@@ -215,7 +216,8 @@ scheduler-state routes read that shared instance; otherwise they use the old
 no-daemon/test fallback that opens a scheduler for read-only inspection.
 `GET /api/orchestration/status` also includes `recoveryNotices`, a bounded list
 of recent corrupt-DB recovery manifests with paths and operator guidance
-metadata only.
+metadata only, and `expiredLeaseHandling`, the last best-effort session
+interruption outcomes for leases that expired before normal release.
 
 `POST /api/orchestration/run` executes `single_worker`,
 `single_worker_with_review`, `dual_lane`, `architecture`, and `local_heavy`
@@ -264,13 +266,17 @@ terminal, an allocation becomes `completed` when all leases were released or
 allocations are retained for 24 hours by default and capped at 1,000 newest
 terminal records. Running allocations are never pruned. Internal scheduler
 telemetry is retained for 24 hours and capped at 2,000 newest events. The
-append-only JSONL run telemetry file is unchanged.
+append-only JSONL run telemetry file is retained for 90 days or 10,000 newest
+valid records by default, and is compacted on runtime boot/reaper ticks rather
+than on every append.
 
 If the orchestration SQLite DB is corrupt, Jinn moves the DB plus any WAL/SHM
 sidecars to quarantine paths, writes a recovery manifest under
 `~/.jinn/orchestration-recovery/`, emits `store_corrupt_recovered` telemetry
 with the manifest path, and starts with an empty orchestration DB. Operators
 must inspect the manifest and quarantined files manually if recovery is needed.
+Recovery manifests and quarantined DB sidecars are pruned on runtime boot/reaper
+ticks after 30 days or beyond the newest 100 notice groups.
 
 ## Smoke Test
 
@@ -417,7 +423,9 @@ derived from diffs, not file paths.
 Worker scores are derived from historical dispositions when
 `orchestration.empiricalRouting: true`: completed and selected work improves the
 score; failed, blocked, discarded, blocker-heavy, or regression-heavy records
-degrade it. Corrupt telemetry lines do not block runtime startup; they are
+degrade it. Runtime empirical routing uses decayed scoring with a 14-day
+half-life and ignores records older than 90 days; future timestamps are treated
+as age zero. Corrupt telemetry lines do not block runtime startup; they are
 skipped and counted. Runtime score loading reads a bounded tail of the JSONL log,
 while CLI stats can still read an explicit full file. Hot-path run telemetry
 append avoids per-record fsync stalls but keeps private append-only JSONL records.
@@ -439,7 +447,8 @@ released. The bundle contains `patch.diff` plus `metadata.json`, so the patch
 remains inspectable without handing the reviewer the implementation tree as its
 session `cwd`. The implementation worktree is cleaned up at task end. If
 cleanup is missed, the runtime's existing boot/timer reaper removes managed
-worktrees whose task no longer has a running lease.
+worktrees whose task no longer has a running lease and removes review bundles
+older than 24 hours.
 
 For `dual_lane`, OpenAI and Anthropic lanes always require managed git
 worktrees; non-git cwd downgrade is rejected instead of silently sharing a
@@ -463,12 +472,13 @@ The default adapter registry remains inert and registers only:
 - `manual`: validates the lease, then returns `manual_required`.
 - `stub`: validates the lease, then returns `unsupported_operation`.
 
-M3 adds `real-adapter.ts` plus an explicit `createLiveProviderAdapterRegistry`
-factory. Live adapters are opt-in and receive the gateway's existing engine
-`Map` as a dependency. They register only existing Jinn engine ids
-(`claude`, `codex`, `antigravity`, `grok`, `hermes`, `pi`, `kiro`) that are
-present in the injected map; unknown providers still fail closed with
-`adapter_not_found`.
+`real-adapter.ts` plus `createLiveProviderAdapterRegistry` are experimental,
+opt-in parity infrastructure. They are not the production orchestration
+execution contract. If explicitly constructed by tests or future experiments,
+live adapters receive the gateway's existing engine `Map` as a dependency and
+register only existing Jinn engine ids (`claude`, `codex`, `antigravity`,
+`grok`, `hermes`, `pi`, `kiro`) that are present in the injected map; unknown
+providers still fail closed with `adapter_not_found`.
 
 Live adapter behavior is intentionally narrow:
 
@@ -481,7 +491,9 @@ Live adapter behavior is intentionally narrow:
   injected interactive PTY engine.
 
 This is not a live scheduler mode. No route, CLI command, dashboard control, or
-daemon startup path calls the live adapter factory yet.
+daemon startup path calls the live adapter factory; production live
+orchestration continues through the daemon-owned scheduler and existing Jinn
+session path.
 
 ## Usage-Aware Routing
 

@@ -47,6 +47,7 @@ export interface OrchestrationContinuationRetryOptions {
 
 export interface DualLaneSelectOptions {
   taskId: string;
+  coordinatorId: string;
   winner: string;
   json?: boolean;
 }
@@ -76,6 +77,7 @@ export interface HoldChangeOptions {
 
 export interface ArtifactViewOptions {
   taskId: string;
+  coordinatorId: string;
   kind: "diff" | "prompt" | "output";
   json?: boolean;
 }
@@ -254,7 +256,7 @@ function formatRunResult(result: any): string {
       ? result.comparisonReport.majorDifferences
       : [];
     for (const difference of differences) lines.push(`Difference: ${difference}`);
-    lines.push("Select explicitly with: jinn dual-lane select --task-id <id> --winner openai|anthropic");
+    lines.push("Select explicitly with: jinn dual-lane select --task-id <id> --coordinator-id <id> --winner openai|anthropic");
     return lines.join("\n");
   }
   const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
@@ -555,7 +557,7 @@ export async function runContinuationRetry(opts: OrchestrationContinuationRetryO
 export async function runDualLaneSelect(opts: DualLaneSelectOptions): Promise<void> {
   const res = await fetchGatewayOrchestration("/api/orchestration/dual-lane/select", {
     method: "POST",
-    body: JSON.stringify({ taskId: opts.taskId, winnerLane: opts.winner }),
+    body: JSON.stringify({ taskId: opts.taskId, coordinatorId: opts.coordinatorId, winnerLane: opts.winner }),
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
@@ -568,7 +570,7 @@ export async function runDualLaneSelect(opts: DualLaneSelectOptions): Promise<vo
 export async function runDualLaneApply(opts: DualLaneSelectOptions): Promise<void> {
   const res = await fetchGatewayOrchestration("/api/orchestration/dual-lane/apply", {
     method: "POST",
-    body: JSON.stringify({ taskId: opts.taskId, winnerLane: opts.winner }),
+    body: JSON.stringify({ taskId: opts.taskId, coordinatorId: opts.coordinatorId, winnerLane: opts.winner }),
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
@@ -627,7 +629,8 @@ export async function runHoldsCancel(opts: HoldChangeOptions): Promise<void> {
 }
 
 export async function runArtifactsView(opts: ArtifactViewOptions): Promise<void> {
-  const res = await fetchGatewayOrchestration(`/api/orchestration/artifacts/${encodeURIComponent(opts.taskId)}/${opts.kind}`, {
+  const query = new URLSearchParams({ coordinatorId: opts.coordinatorId });
+  const res = await fetchGatewayOrchestration(`/api/orchestration/artifacts/${encodeURIComponent(opts.taskId)}/${opts.kind}?${query}`, {
     method: "GET",
   });
   const body = await res.json().catch(() => null);

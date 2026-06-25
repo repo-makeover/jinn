@@ -175,6 +175,21 @@ describe("orchestration import boundaries", () => {
     expect(source).not.toMatch(/engines\//);
     expect(source).not.toMatch(/ClaudeEngine|InteractiveClaudeEngine|CodexEngine|GrokEngine|KiroEngine|PiEngine|Hermes/);
   });
+
+  it("keeps production runtime construction independent from opt-in live adapters", () => {
+    const runtimeEntrypoints = [
+      "src/orchestration/runtime.ts",
+      "src/orchestration/run-mode.ts",
+      "src/gateway/server.ts",
+      "src/gateway/orchestration-runtime-factory.ts",
+    ];
+    const imports = runtimeEntrypoints
+      .flatMap((entrypoint) => fs.readFileSync(path.join(process.cwd(), entrypoint), "utf-8").split("\n"))
+      .filter((line) => line.startsWith("import"))
+      .join("\n");
+
+    expect(imports).not.toMatch(/createLiveProviderAdapterRegistry|RealProviderAdapter|orchestration\/adapter|\.\.?\/adapter/);
+  });
 });
 
 class RecordingEngine implements Engine {
