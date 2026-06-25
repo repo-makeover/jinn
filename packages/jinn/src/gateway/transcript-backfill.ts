@@ -3,7 +3,7 @@ import path from "node:path";
 import { logger } from "../shared/logger.js";
 import { getMessages, insertMessage, initDb } from "../sessions/registry.js";
 import { transcriptEntryText } from "./external-turns.js";
-import type { ApiContext } from "./api.js";
+import type { ApiContext } from "./api/context.js";
 
 /**
  * Claude Code session transcript loading + lazy backfill.

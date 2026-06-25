@@ -29,7 +29,7 @@ import { createModelFallbackHandoff } from "./model-fallback.js";
 import { deliverConnectorReply } from "./connector-reply.js";
 import { isTurnSuperseded, clearSupersededTurnMeta } from "./session-turn-state.js";
 import { resultAlreadyInStreamedBlocks, shouldPreserveStreamedBlocks } from "./streamed-blocks.js";
-import type { ApiContext } from "./api.js";
+import type { ApiContext } from "./api/context.js";
 import { parseLeaseTransportMeta } from "../orchestration/lease-meta.js";
 
 export interface TurnStallWatchdogConfig {

@@ -10,7 +10,7 @@ import { FILES_DIR, UPLOADS_DIR, JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import { redactText } from "../shared/redact.js";
 import { insertFile, getFile, listFiles, deleteFile, setFilePath, insertMessage, type FileMeta, type MessageMedia } from "../sessions/registry.js";
-import type { ApiContext } from "./api.js";
+import type { ApiContext } from "./api/context.js";
 import { readJsonBody } from "./http-helpers.js";
 import { jsonApiHeaders } from "./internal-auth.js";
 import { checkPublicUrl } from "../shared/ssrf-guard.js";
