@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.23.2] - 2026-06-25
+
+### ⚡ Performance
+- **Chat switching feels instant for recently opened sessions.** The web UI now reuses a bounded in-memory session snapshot cache so already-opened chats render immediately while still revalidating from the gateway, with automatic cleanup to avoid unbounded growth.
+
+### 🐛 Fixes
+- **Route navigation no longer blanks the app on stale or transient chunks.** Lazy route loads now show a lightweight spinner, retry once with a refresh on recoverable chunk failures, and fall back to a refresh prompt instead of leaving an empty page.
+- **New-chat engine switching opens the real new-chat flow.** The existing-chat engine picker now routes to the employee picker instead of a blank starter surface, and cold chat switches show a loading spinner instead of flashing the new-chat template.
+
 ## [0.23.1] - 2026-06-25
 
 ### 🐛 Fixes
