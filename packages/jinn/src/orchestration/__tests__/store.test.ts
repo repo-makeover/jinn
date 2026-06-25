@@ -184,6 +184,45 @@ describe("OrchestrationStore", () => {
     reopened.close();
   });
 
+  it("expireHoldsInDb transitions active-but-overdue holds to expired state", () => {
+    const store = OrchestrationStore.open(dbPath);
+    const expiresAt = new Date(fixedNow.getTime() - 1).toISOString();
+    store.upsertHold({
+      holdId: "hold-expired",
+      managerName: "manager",
+      state: "active",
+      roles: [],
+      workerIds: ["worker-held"],
+      taskId: null,
+      coordinatorId: null,
+      reason: null,
+      createdAt: fixedNow.toISOString(),
+      updatedAt: fixedNow.toISOString(),
+      expiresAt,
+    });
+    store.upsertHold({
+      holdId: "hold-fresh",
+      managerName: "manager",
+      state: "active",
+      roles: [],
+      workerIds: ["worker-held-2"],
+      taskId: null,
+      coordinatorId: null,
+      reason: null,
+      createdAt: fixedNow.toISOString(),
+      updatedAt: fixedNow.toISOString(),
+      expiresAt: new Date(fixedNow.getTime() + 60_000).toISOString(),
+    });
+
+    const expired = store.expireHolds(fixedNow.toISOString());
+
+    expect(expired).toBe(1);
+    expect(store.listHolds({ includeInactive: false })).toMatchObject([{ holdId: "hold-fresh", state: "active" }]);
+    expect(store.listHolds({ includeInactive: true })).toHaveLength(2);
+    expect(store.listHolds({ includeInactive: true }).find((h) => h.holdId === "hold-expired")).toMatchObject({ state: "expired" });
+    store.close();
+  });
+
   it("persists task pauses, holds, artifact metadata, and patch apply attempts", () => {
     const store = OrchestrationStore.open(dbPath);
     store.setTaskPause({

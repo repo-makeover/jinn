@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PersistentMatrixScheduler } from "../persistent-scheduler.js";
+import { OrchestrationStore } from "../store.js";
 import type { AllocationRequest, OrchestrationConfig, RoleDefinition, Worker } from "../types.js";
 
 const fixedNow = new Date("2026-06-23T12:00:00.000Z");
@@ -120,6 +121,43 @@ describe("PersistentMatrixScheduler", () => {
       retention: { terminalAllocationRetentionMs: 500, terminalAllocationLimit: 10 },
     });
     expect(reopened.listAllocations().map((allocation) => allocation.taskId)).toEqual(["running"]);
+    reopened.close();
+  });
+
+  it("rehydrates the in-memory scheduler when applySnapshotDelta throws", () => {
+    const store = OrchestrationStore.open(dbPath);
+    // Inject a failing applySnapshotDelta via the stored object to simulate disk failure
+    const applyOrig = store.applySnapshotDelta.bind(store);
+    let failCount = 0;
+    store.applySnapshotDelta = (...args) => {
+      if (++failCount === 2) throw new Error("simulated disk full");
+      return applyOrig(...args);
+    };
+
+    const scheduler = new PersistentMatrixScheduler(config(), store, { now: () => fixedNow, expireOnHydrate: false });
+    // First mutation succeeds (failCount=1)
+    const first = scheduler.requestAllocation(request({ taskId: "task-ok" }));
+    expect(first.ok).toBe(true);
+
+    // Second mutation (failCount=2) triggers the throw → rehydrate branch
+    expect(() => scheduler.requestAllocation(request({ taskId: "task-fail", coordinatorId: "coord-fail" }))).toThrow("simulated disk full");
+
+    // Scheduler should still be valid and reflect persisted state (rehydrated from DB)
+    expect(scheduler.listLeases().filter((l) => l.state === "running")).toHaveLength(1);
+    expect(scheduler.listLeases()[0]).toMatchObject({ taskId: "task-ok", state: "running" });
+    store.close();
+  });
+
+  it("does not expire leases when expireOnHydrate is false", () => {
+    const first = PersistentMatrixScheduler.open(config(), { dbPath, now: () => fixedNow });
+    const result = first.requestAllocation(request({ taskId: "short", leaseDurationMs: 1_000 }));
+    expect(result.ok).toBe(true);
+    first.close();
+
+    // Reopen after lease would have expired, but with expireOnHydrate: false
+    const reopened = PersistentMatrixScheduler.open(config(), { dbPath, now: () => afterExpiry, expireOnHydrate: false });
+    // Lease is still running (not expired)
+    expect(reopened.listLeases()[0]).toMatchObject({ taskId: "short", state: "running" });
     reopened.close();
   });
 });

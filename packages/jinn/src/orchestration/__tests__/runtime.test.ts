@@ -308,6 +308,49 @@ describe("OrchestrationRuntime continuation dispatch", () => {
     runtime.close();
   });
 
+  it("headroomFilter exception closes the headroom gate and blocks allocation", async () => {
+    const runtime = new OrchestrationRuntime({
+      config: config(),
+      dbPath,
+      startReaper: false,
+      jinnConfig: jinnConfig(dbPath),
+      headroomFilter: async () => {
+        throw new Error("headroom service unavailable");
+      },
+    });
+    const result = await runtime.requestAllocationWithLiveHeadroom(request("headroom-fail-task", "headroom-fail-coord"));
+
+    // fail-closed: exception → empty allowedWorkerIds → no allocation
+    expect(result.ok).toBe(false);
+    expect(runtime.listLeases()).toHaveLength(0);
+    runtime.close();
+  });
+
+  it("hold TTL expiry un-blocks held workers for subsequent allocations", async () => {
+    const runtime = new OrchestrationRuntime({
+      config: twoWorkerConfig(),
+      dbPath,
+      startReaper: false,
+    });
+    const hold = runtime.createHold({
+      managerName: "exec",
+      workerIds: ["alphaImplementer"],
+      roles: [],
+      ttlMs: 1, // expires almost immediately
+      reason: "reserve alpha",
+    });
+    expect(hold.state).toBe("active");
+
+    // Wait just a bit for the hold to expire, then allocate with headroom resolution
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Use live headroom path which calls expireHolds first
+    const result = await runtime.requestAllocationWithLiveHeadroom(request("hold-expired-task", "hold-expired-coord"));
+    // With no jinnConfig (no live filter), expireHolds runs and alphaImplementer becomes available again
+    expect(result.ok).toBe(true);
+    runtime.close();
+  });
+
   it("loads empirical routing scores while skipping corrupt telemetry lines", async () => {
     const prevHome = process.env.JINN_HOME;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-orch-runtime-telemetry-"));

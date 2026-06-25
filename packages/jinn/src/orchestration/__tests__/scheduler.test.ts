@@ -482,4 +482,67 @@ describe("MatrixScheduler", () => {
     if (!retried[0].ok) return;
     expect(retried[0].allocation.taskId).toBe("high");
   });
+
+  it("validateLeaseForWorker returns each failure code for the appropriate mismatch", () => {
+    const s = scheduler(config([
+      worker({ id: "codexSenior", provider: "openai", family: "openai" }),
+      worker({ id: "haikuReviewer", provider: "anthropic", family: "anthropic" }),
+    ]));
+    const result = s.requestAllocation(request({ taskId: "task-1", coordinatorId: "coord-1" }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const leaseId = result.allocation.leases[0].leaseId;
+
+    // lease_not_found: bogus leaseId
+    expect(s.validateLeaseForWorker("codexSenior", "nonexistent-lease", "task-1", "coord-1"))
+      .toEqual({ ok: false, reason: "lease_not_found" });
+
+    // worker_mismatch: wrong workerId
+    expect(s.validateLeaseForWorker("haikuReviewer", leaseId, "task-1", "coord-1"))
+      .toEqual({ ok: false, reason: "worker_mismatch" });
+
+    // task_mismatch: wrong taskId
+    expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-other", "coord-1"))
+      .toEqual({ ok: false, reason: "task_mismatch" });
+
+    // coordinator_mismatch: wrong coordinatorId
+    expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-1", "coord-other"))
+      .toEqual({ ok: false, reason: "coordinator_mismatch" });
+
+    // lease_expired: explicitly expire via expireLeases (short duration)
+    const shortResult = s.requestAllocation(request({ taskId: "task-short", coordinatorId: "coord-short", leaseDurationMs: 1 }));
+    expect(shortResult.ok).toBe(true);
+    if (!shortResult.ok) return;
+    const shortLeaseId = shortResult.allocation.leases[0].leaseId;
+    const expired = s.expireLeases(new Date(fixedNow.getTime() + 100));
+    expect(expired.some((l) => l.leaseId === shortLeaseId)).toBe(true);
+    expect(s.validateLeaseForWorker("codexSenior", shortLeaseId, "task-short", "coord-short"))
+      .toEqual({ ok: false, reason: "lease_expired" });
+
+    // lease_released: release and check
+    s.releaseLease(leaseId, "coord-1");
+    expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-1", "coord-1"))
+      .toEqual({ ok: false, reason: "lease_released" });
+  });
+
+  it("allowedWorkerIds headroom gate blocks excluded workers from allocation", () => {
+    const s = scheduler(config([
+      worker({ id: "allowed", provider: "openai", family: "openai" }),
+      worker({ id: "blocked", provider: "openai", family: "openai" }),
+    ]));
+
+    // Only "allowed" is in the allowed set
+    const result = s.requestAllocation(request(), { allowedWorkerIds: new Set(["allowed"]) });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.allocation.leases[0].workerId).toBe("allowed");
+
+    // Now block the only remaining worker by passing an empty allowed set
+    const empty = s.requestAllocation(request({ taskId: "task-2", coordinatorId: "coord-2" }), {
+      allowedWorkerIds: new Set<string>(),
+    });
+    expect(empty.ok).toBe(false);
+    expect(s.listLeases().filter((l) => l.taskId === "task-2")).toHaveLength(0);
+  });
 });
