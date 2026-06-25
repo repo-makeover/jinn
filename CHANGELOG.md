@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.3] - 2026-06-25
+
+### 🐛 Fixes
+- **Completed chats refresh from the final transcript.** Returning to a long-running session now replaces cached mid-turn progress and tool rows with the gateway's completed history instead of requiring a browser refresh.
+- **New-chat sends stay visually continuous.** The optimistic first user message now survives the newly-created session hydration handoff, removing the brief loading flash after pressing send.
+- **Chat header fade no longer covers message text.** The title keeps its soft scrim while the message list starts below the fade, balancing title legibility with readable chat content.
+
 ## [0.23.2] - 2026-06-25
 
 ### ⚡ Performance
