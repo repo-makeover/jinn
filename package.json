@@ -6,7 +6,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "postinstall": "chmod +x node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "postinstall": "node scripts/fix-node-pty-spawn-helper.mjs",
     "build": "turbo build && rm -rf packages/jinn/dist/web && cp -r packages/web/out packages/jinn/dist/web",
     "dev": "turbo dev",
     "lint": "turbo lint",
@@ -15,26 +15,25 @@
     "coverage": "turbo run coverage",
     "test:e2e": "playwright test",
     "clean": "rm -rf .turbo node_modules/.cache && turbo clean",
-    "jinn": "node packages/jinn/dist/bin/jinn.js",
+    "jinn": "node scripts/run-jinn-cli.mjs",
     "setup": "pnpm build && node packages/jinn/dist/bin/jinn.js setup",
     "setup:force": "pnpm build && node packages/jinn/dist/bin/jinn.js setup --force",
     "start": "pnpm clean && pnpm build && node packages/jinn/dist/bin/jinn.js start",
-    "stop": "node packages/jinn/dist/bin/jinn.js stop",
-    "nuke": "node packages/jinn/dist/bin/jinn.js nuke",
-    "status": "node packages/jinn/dist/bin/jinn.js status"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@swc/core",
-      "better-sqlite3",
-      "classic-level",
-      "node-pty"
-    ]
+    "stop": "node scripts/run-jinn-cli.mjs stop",
+    "nuke": "node scripts/run-jinn-cli.mjs nuke",
+    "status": "node scripts/run-jinn-cli.mjs status"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@next/eslint-plugin-next": "^16.2.9",
     "@playwright/test": "^1.58.2",
+    "eslint": "^10.5.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
     "turbo": "^2.4.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.62.0"
   },
   "dependencies": {
     "classic-level": "^2.0.0"

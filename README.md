@@ -296,6 +296,12 @@ Open **[http://localhost:5173](http://localhost:5173)** - Vite proxies `/api` an
 
 > **Prerequisites:** Node.js **24.13.0** (the repo pins it via `.nvmrc` + `engine-strict` - native modules like `better-sqlite3` are ABI-locked), pnpm 10+, and at least one engine CLI. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the full setup.
 
+If you rebuild the machine or reinstall dependencies and the native modules are missing, rerun:
+
+```bash
+pnpm rebuild better-sqlite3 node-pty classic-level @swc/core
+```
+
 ---
 
 ## License

@@ -5,3 +5,4 @@ onlyBuiltDependencies:
   - "@swc/core"
   - better-sqlite3
   - classic-level
+  - node-pty

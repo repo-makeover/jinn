@@ -924,7 +924,7 @@ Build milestone <M#> from docs/superpowers/plans/2026-06-23-matrix-orchestration
 autonomously through Gates 0–7. Do not pause between gates; infer conservative defaults
 and record assumptions.
 
-repo_path: /home/ericl/vscode_github_public/jinn
+repo_path: /home/ericl/Work/vscode/public_share/jinn
 target_language: TypeScript (ESM, .js import suffixes), Node >=24
 target_platform: jinn-cli daemon + CLI (+ packages/web for M11)
 authority: patch-authorized

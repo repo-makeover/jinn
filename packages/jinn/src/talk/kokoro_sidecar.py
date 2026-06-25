@@ -26,6 +26,7 @@ Files expected in the model dir: kokoro-v1.0.onnx  +  voices-v1.0.bin
 from __future__ import annotations
 
 import argparse
+import array
 import glob
 import io
 import json
@@ -34,8 +35,6 @@ import sys
 import threading
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-import numpy as np
 
 # kokoro-onnx is imported lazily inside the loader so /health works even if the
 # heavy onnxruntime import is slow.
@@ -46,6 +45,7 @@ SAMPLE_RATE = 24000  # Kokoro's native rate.
 _model = None
 _model_lock = threading.Lock()
 _model_dir = ""
+_default_voice = DEFAULT_VOICE
 
 
 def _resolve_file(model_dir: str, preferred: str, pattern: str) -> str | None:
@@ -78,11 +78,23 @@ def _load_model():
         return _model
 
 
-def _pcm_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
-    """Encode float32 [-1,1] mono samples as a 16-bit PCM WAV (RIFF) byte string."""
-    arr = np.asarray(samples, dtype=np.float32).flatten()
-    arr = np.clip(arr, -1.0, 1.0)
-    pcm = (arr * 32767.0).astype("<i2")  # little-endian int16
+def _iter_pcm_samples(samples):
+    """Yield scalar samples from lists/tuples/numpy-like arrays without importing numpy."""
+    if hasattr(samples, "tolist"):
+        samples = samples.tolist()
+    if isinstance(samples, (list, tuple)):
+        for item in samples:
+            yield from _iter_pcm_samples(item)
+        return
+    yield float(samples)
+
+
+def _pcm_wav_bytes(samples, sample_rate: int) -> bytes:
+    """Encode float [-1,1] mono samples as a 16-bit PCM WAV (RIFF) byte string."""
+    pcm = array.array("h")
+    for sample in _iter_pcm_samples(samples):
+        clamped = max(-1.0, min(1.0, sample))
+        pcm.append(int(clamped * 32767.0))
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
@@ -133,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
         if not text:
             self._json(400, {"error": "missing 'text'"})
             return
-        voice = req.get("voice") or DEFAULT_VOICE
+        voice = req.get("voice") or _default_voice
         speed = float(req.get("speed") or 1.0)
         lang = req.get("lang") or "en-us"
 
@@ -156,15 +168,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    global _model_dir
+    global _default_voice, _model_dir
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=int(os.environ.get("KOKORO_PORT", "8765")))
+    parser.add_argument("--port", type=int, default=os.environ.get("KOKORO_PORT", "8765"))
     parser.add_argument("--model-dir", default=os.environ.get("KOKORO_MODEL_DIR", os.getcwd()))
     parser.add_argument("--voice", default=os.environ.get("KOKORO_VOICE", DEFAULT_VOICE))
     parser.add_argument("--warm", action="store_true", help="load the model before serving")
     args = parser.parse_args()
 
     _model_dir = os.path.abspath(args.model_dir)
+    _default_voice = args.voice
     if not os.path.isdir(_model_dir):
         print("KOKORO_SIDECAR_MODEL_DIR_MISSING", flush=True)
         return 1
