@@ -3,6 +3,7 @@ import path from "node:path";
 import { TMP_DIR } from "../shared/paths.js";
 import type { OrchestrationRunSession } from "./run-mode.js";
 import type { WorktreeHandle } from "./worktree.js";
+import { safePathSegment } from "./path-segments.js";
 
 export const DUAL_LANE_STATE_DIR = path.join(TMP_DIR, "orchestration-dual-lane");
 
@@ -55,18 +56,28 @@ export interface DualLaneComparisonReport {
   majorDifferences: string[];
 }
 
+export class AmbiguousDualLaneRunError extends Error {
+  constructor(public readonly taskId: string, public readonly coordinatorIds: string[]) {
+    super(`dual-lane run ${taskId} is ambiguous across coordinators: ${coordinatorIds.join(", ")}`);
+  }
+}
+
 export function writeDualLaneManifest(manifest: DualLaneManifest): void {
-  const file = dualLaneManifestPath(manifest.taskId);
+  const file = dualLaneManifestPath(manifest.taskId, manifest.coordinatorId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-export function readDualLaneManifest(taskId: string): DualLaneManifest | undefined {
-  const file = dualLaneManifestPath(taskId);
-  if (!fs.existsSync(file)) return undefined;
-  const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as DualLaneManifest;
-  if (parsed.taskId !== taskId) throw new Error(`dual-lane manifest task mismatch: ${file}`);
-  return parsed;
+export function readDualLaneManifest(taskId: string, coordinatorId?: string): DualLaneManifest | undefined {
+  if (coordinatorId) {
+    const manifest = readManifestFile(dualLaneManifestPath(taskId, coordinatorId), taskId, coordinatorId);
+    return manifest ?? readManifestFile(legacyDualLaneManifestPath(taskId), taskId);
+  }
+  const matches = listDualLaneManifests().filter((manifest) => manifest.taskId === taskId);
+  if (matches.length === 0) return undefined;
+  const uniqueCoordinatorIds = [...new Set(matches.map((manifest) => manifest.coordinatorId))];
+  if (uniqueCoordinatorIds.length > 1) throw new AmbiguousDualLaneRunError(taskId, uniqueCoordinatorIds);
+  return matches[0];
 }
 
 export function updateDualLaneManifest(manifest: DualLaneManifest): DualLaneManifest {
@@ -77,18 +88,9 @@ export function updateDualLaneManifest(manifest: DualLaneManifest): DualLaneMani
 
 export function listProtectedDualLaneTaskIds(root = DUAL_LANE_STATE_DIR): Set<string> {
   const protectedIds = new Set<string>();
-  if (!fs.existsSync(root)) return protectedIds;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = path.join(root, entry.name, "manifest.json");
-    if (!fs.existsSync(manifestPath)) continue;
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as DualLaneManifest;
-      if (manifest.state === "selection_required" || manifest.state === "selected") {
-        protectedIds.add(manifest.taskId);
-      }
-    } catch {
-      // Ignore malformed local artifacts; the worktree reaper should not fail closed.
+  for (const manifest of listDualLaneManifests(root)) {
+    if (manifest.state === "selection_required" || manifest.state === "selected") {
+      protectedIds.add(manifest.taskId);
     }
   }
   return protectedIds;
@@ -97,34 +99,58 @@ export function listProtectedDualLaneTaskIds(root = DUAL_LANE_STATE_DIR): Set<st
 export function listDualLaneManifests(root = DUAL_LANE_STATE_DIR): DualLaneManifest[] {
   if (!fs.existsSync(root)) return [];
   const manifests: DualLaneManifest[] = [];
+  const seen = new Set<string>();
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const manifestPath = path.join(root, entry.name, "manifest.json");
-    if (!fs.existsSync(manifestPath)) continue;
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as DualLaneManifest;
-      if (manifest.taskId) manifests.push(manifest);
-    } catch {
-      // Ignore malformed local artifacts; observe routes report only valid manifests.
+    for (const manifestPath of manifestPathsUnder(path.join(root, entry.name))) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as DualLaneManifest;
+        const key = `${manifest.taskId}\0${manifest.coordinatorId}`;
+        if (manifest.taskId && manifest.coordinatorId && !seen.has(key)) {
+          seen.add(key);
+          manifests.push(manifest);
+        }
+      } catch {
+        // Ignore malformed local artifacts; observe routes report only valid manifests.
+      }
     }
   }
-  return manifests.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.taskId.localeCompare(b.taskId));
+  return manifests.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.taskId.localeCompare(b.taskId) || a.coordinatorId.localeCompare(b.coordinatorId));
 }
 
-export function dualLaneTaskDir(taskId: string): string {
-  return path.join(DUAL_LANE_STATE_DIR, safeSegment(taskId));
+export function dualLaneTaskDir(taskId: string, coordinatorId?: string): string {
+  const taskDir = path.join(DUAL_LANE_STATE_DIR, safePathSegment(taskId, "dual-lane task path segment"));
+  return coordinatorId ? path.join(taskDir, safePathSegment(coordinatorId, "dual-lane coordinator path segment")) : taskDir;
 }
 
-export function dualLaneArchiveDir(taskId: string): string {
-  return path.join(dualLaneTaskDir(taskId), "archive");
+export function dualLaneArchiveDir(taskId: string, coordinatorId?: string): string {
+  return path.join(dualLaneTaskDir(taskId, coordinatorId), "archive");
 }
 
-function dualLaneManifestPath(taskId: string): string {
+function dualLaneManifestPath(taskId: string, coordinatorId: string): string {
+  return path.join(dualLaneTaskDir(taskId, coordinatorId), "manifest.json");
+}
+
+function legacyDualLaneManifestPath(taskId: string): string {
   return path.join(dualLaneTaskDir(taskId), "manifest.json");
 }
 
-function safeSegment(value: string): string {
-  const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!safe) throw new Error(`invalid dual-lane path segment: ${value}`);
-  return safe.slice(0, 80);
+function readManifestFile(file: string, taskId: string, coordinatorId?: string): DualLaneManifest | undefined {
+  if (!fs.existsSync(file)) return undefined;
+  const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as DualLaneManifest;
+  if (parsed.taskId !== taskId) throw new Error(`dual-lane manifest task mismatch: ${file}`);
+  if (coordinatorId && parsed.coordinatorId !== coordinatorId) throw new Error(`dual-lane manifest coordinator mismatch: ${file}`);
+  return parsed;
+}
+
+function manifestPathsUnder(dir: string): string[] {
+  const direct = path.join(dir, "manifest.json");
+  const paths: string[] = [];
+  if (fs.existsSync(direct)) paths.push(direct);
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const nested = path.join(dir, entry.name, "manifest.json");
+    if (fs.existsSync(nested)) paths.push(nested);
+  }
+  return paths;
 }

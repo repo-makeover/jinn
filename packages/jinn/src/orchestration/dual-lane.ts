@@ -11,6 +11,7 @@ import {
   runOrchestrationLeaseTurn,
 } from "./run-mode.js";
 import {
+  AmbiguousDualLaneRunError,
   dualLaneArchiveDir,
   readDualLaneManifest,
   updateDualLaneManifest,
@@ -88,7 +89,7 @@ export interface DualLaneRunLane {
 }
 
 export type DualLaneSelectionResult =
-  | { ok: false; reason: "not_found" | "invalid_state" | "invalid_lane"; message: string }
+  | { ok: false; reason: "not_found" | "ambiguous_run_identifier" | "invalid_state" | "invalid_lane"; message: string }
   | {
     ok: true;
     state: "selected";
@@ -215,6 +216,7 @@ export async function runAllocatedDualLaneTask(opts: {
     });
     persistDualLaneArtifacts({
       taskId: opts.task.taskId,
+      coordinatorId: opts.task.coordinatorId,
       prompt: opts.task.prompt,
       lanes: manifestLanes,
       store: runtime.getStore(),
@@ -241,13 +243,22 @@ export async function runAllocatedDualLaneTask(opts: {
 
 export function selectDualLaneWinner(opts: {
   taskId: string;
+  coordinatorId?: string;
   winnerLane: string;
 }): DualLaneSelectionResult {
   const winnerLane = parseLane(opts.winnerLane);
   if (!winnerLane) {
     return { ok: false, reason: "invalid_lane", message: `invalid dual-lane winner: ${opts.winnerLane}` };
   }
-  const manifest = readDualLaneManifest(opts.taskId);
+  let manifest;
+  try {
+    manifest = readDualLaneManifest(opts.taskId, opts.coordinatorId);
+  } catch (err) {
+    if (err instanceof AmbiguousDualLaneRunError) {
+      return { ok: false, reason: "ambiguous_run_identifier", message: err.message };
+    }
+    throw err;
+  }
   if (!manifest) {
     return { ok: false, reason: "not_found", message: `no dual-lane run found for task ${opts.taskId}` };
   }
@@ -266,7 +277,7 @@ export function selectDualLaneWinner(opts: {
 
   const winnerCounts = laneTelemetryCounts(winner);
   const loserCounts = laneTelemetryCounts(loser);
-  const archive = archiveLane(manifest.taskId, loser);
+  const archive = archiveLane(manifest.taskId, manifest.coordinatorId, loser);
   cleanupWorktree(loser.worktree);
   loser.archive = archive;
   const updated = updateDualLaneManifest({
@@ -391,8 +402,8 @@ function buildComparisonReport(taskId: string, lanes: DualLaneRunLane[]): DualLa
   };
 }
 
-function archiveLane(taskId: string, lane: DualLaneManifestLane): DualLaneArchiveRecord {
-  const archiveRoot = dualLaneArchiveDir(taskId);
+function archiveLane(taskId: string, coordinatorId: string, lane: DualLaneManifestLane): DualLaneArchiveRecord {
+  const archiveRoot = dualLaneArchiveDir(taskId, coordinatorId);
   fs.mkdirSync(archiveRoot, { recursive: true });
   const archivedAt = new Date().toISOString();
   const diffPath = path.join(archiveRoot, `${lane.id}.patch.diff`);
@@ -400,6 +411,7 @@ function archiveLane(taskId: string, lane: DualLaneManifestLane): DualLaneArchiv
   fs.writeFileSync(diffPath, diffWorktree(lane.worktree));
   fs.writeFileSync(metadataPath, `${JSON.stringify({
     taskId,
+    coordinatorId,
     archivedAt,
     lane: lane.id,
     role: lane.role,

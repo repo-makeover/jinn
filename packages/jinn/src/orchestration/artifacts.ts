@@ -4,6 +4,7 @@ import path from "node:path";
 import { getMessages } from "../sessions/registry.js";
 import { appendOrchestrationAudit } from "./audit.js";
 import {
+  AmbiguousDualLaneRunError,
   dualLaneTaskDir,
   readDualLaneManifest,
   updateDualLaneManifest,
@@ -15,8 +16,10 @@ import {
   isGitWorkspaceDirty,
   patchWorktree,
 } from "./worktree.js";
+import { safePathSegment } from "./path-segments.js";
 
 const MAX_ARTIFACT_BYTES = 2_000_000;
+const applyLocks = new Set<string>();
 
 export interface ArtifactContent {
   record: ArtifactRecord;
@@ -24,48 +27,70 @@ export interface ArtifactContent {
 }
 
 export type DualLaneApplyResult =
-  | { ok: false; reason: "not_found" | "invalid_state" | "invalid_lane" | "dirty_base" | "missing_worktree" | "empty_patch" | "conflict"; message: string }
+  | { ok: false; reason: "not_found" | "ambiguous_run_identifier" | "invalid_state" | "invalid_lane" | "dirty_base" | "missing_worktree" | "empty_patch" | "conflict" | "apply_in_progress"; message: string }
   | { ok: true; taskId: string; selectedLane: "openai" | "anthropic"; baseCwd: string; patchPath: string; attemptId: string };
 
-export function writeDualLanePromptArtifact(taskId: string, prompt: string, store?: OrchestrationStore): ArtifactRecord {
-  return writeArtifact({ taskId, kind: "prompt", lane: null, content: prompt, store });
+export class AmbiguousArtifactLookupError extends Error {
+  constructor(public readonly taskId: string, public readonly coordinatorIds: string[]) {
+    super(`artifact lookup for ${taskId} is ambiguous across coordinators: ${coordinatorIds.join(", ")}`);
+  }
+}
+
+export function writeDualLanePromptArtifact(taskId: string, coordinatorId: string, prompt: string, store?: OrchestrationStore): ArtifactRecord {
+  return writeArtifact({ taskId, coordinatorId, kind: "prompt", lane: null, content: prompt, store });
 }
 
 export function writeDualLaneOutputArtifact(
   taskId: string,
+  coordinatorId: string,
   lane: "openai" | "anthropic",
   content: string,
   store?: OrchestrationStore,
 ): ArtifactRecord {
-  return writeArtifact({ taskId, kind: "output", lane, content, store });
+  return writeArtifact({ taskId, coordinatorId, kind: "output", lane, content, store });
 }
 
 export function writeDualLaneDiffArtifact(
   taskId: string,
+  coordinatorId: string,
   lane: "openai" | "anthropic",
   content: string,
   store?: OrchestrationStore,
 ): ArtifactRecord {
-  return writeArtifact({ taskId, kind: "diff", lane, content, store });
+  return writeArtifact({ taskId, coordinatorId, kind: "diff", lane, content, store });
 }
 
 export function listArtifactContents(
   store: OrchestrationStore | undefined,
   taskId: string,
   kind: ArtifactKind,
+  coordinatorId?: string,
 ): ArtifactContent[] {
-  const records = store?.listArtifactRecords(taskId, kind) ?? discoverDualLaneArtifacts(taskId, kind);
+  const records = store?.listArtifactRecords(taskId, kind, coordinatorId) ?? discoverDualLaneArtifacts(taskId, kind, coordinatorId);
+  if (!coordinatorId) {
+    const exactCoordinatorIds = [...new Set(records.map((record) => record.coordinatorId).filter((id): id is string => Boolean(id)))];
+    if (exactCoordinatorIds.length > 1) throw new AmbiguousArtifactLookupError(taskId, exactCoordinatorIds);
+  }
   return records.map((record) => ({ record, content: readArtifactFile(record.path) }));
 }
 
 export function applyDualLaneWinner(opts: {
   taskId: string;
+  coordinatorId?: string;
   winnerLane: string;
   store?: OrchestrationStore;
 }): DualLaneApplyResult {
   const selectedLane = parseLane(opts.winnerLane);
   if (!selectedLane) return { ok: false, reason: "invalid_lane", message: `invalid dual-lane winner: ${opts.winnerLane}` };
-  const manifest = readDualLaneManifest(opts.taskId);
+  let manifest;
+  try {
+    manifest = readDualLaneManifest(opts.taskId, opts.coordinatorId);
+  } catch (err) {
+    if (err instanceof AmbiguousDualLaneRunError) {
+      return { ok: false, reason: "ambiguous_run_identifier", message: err.message };
+    }
+    throw err;
+  }
   if (!manifest) return { ok: false, reason: "not_found", message: `no dual-lane run found for task ${opts.taskId}` };
   if (manifest.state !== "selection_required" && manifest.state !== "selected") {
     return {
@@ -86,59 +111,68 @@ export function applyDualLaneWinner(opts: {
   if (!fs.existsSync(winner.worktree.path)) {
     return { ok: false, reason: "missing_worktree", message: `winner worktree is missing: ${winner.worktree.path}` };
   }
-  if (isGitWorkspaceDirty(manifest.baseCwd)) {
-    recordPatchAttempt(opts.store, opts.taskId, selectedLane, "failed", manifest.baseCwd, null, "base working tree is dirty");
-    return { ok: false, reason: "dirty_base", message: "base working tree is dirty; apply refused" };
-  }
-  const patch = patchWorktree(winner.worktree);
-  if (!patch.trim()) {
-    recordPatchAttempt(opts.store, opts.taskId, selectedLane, "failed", manifest.baseCwd, null, "winner patch is empty");
-    return { ok: false, reason: "empty_patch", message: "winner patch is empty" };
-  }
-  const patchRecord = writeArtifact({
-    taskId: opts.taskId,
-    kind: "patch_apply",
-    lane: selectedLane,
-    content: patch,
-    store: opts.store,
-    note: "dual-lane apply patch",
-  });
+  const lockKey = path.resolve(manifest.baseCwd);
+  if (applyLocks.has(lockKey)) return { ok: false, reason: "apply_in_progress", message: `another dual-lane apply is already in progress for ${manifest.baseCwd}` };
+  applyLocks.add(lockKey);
   try {
-    applyPatchToGitWorkspace(manifest.baseCwd, patch);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    recordPatchAttempt(opts.store, opts.taskId, selectedLane, "failed", manifest.baseCwd, patchRecord.path, message);
-    return { ok: false, reason: "conflict", message: `winner patch conflicts or cannot apply: ${message}` };
-  }
-  const attempt = recordPatchAttempt(opts.store, opts.taskId, selectedLane, "applied", manifest.baseCwd, patchRecord.path, null);
-  if (manifest.state === "selection_required") {
-    updateDualLaneManifest({
-      ...manifest,
-      state: "selected",
-      selectedLane,
-      archivedLane: manifest.lanes.find((lane) => lane.id !== selectedLane)?.id,
+    if (isGitWorkspaceDirty(manifest.baseCwd)) {
+      recordPatchAttempt(opts.store, opts.taskId, selectedLane, "failed", manifest.baseCwd, null, "base working tree is dirty");
+      return { ok: false, reason: "dirty_base", message: "base working tree is dirty; apply refused" };
+    }
+    const patch = patchWorktree(winner.worktree);
+    if (!patch.trim()) {
+      recordPatchAttempt(opts.store, opts.taskId, selectedLane, "failed", manifest.baseCwd, null, "winner patch is empty");
+      return { ok: false, reason: "empty_patch", message: "winner patch is empty" };
+    }
+    const patchRecord = writeArtifact({
+      taskId: opts.taskId,
+      coordinatorId: manifest.coordinatorId,
+      kind: "patch_apply",
+      lane: selectedLane,
+      content: patch,
+      store: opts.store,
+      note: "dual-lane apply patch",
     });
+    try {
+      applyPatchToGitWorkspace(manifest.baseCwd, patch);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      recordPatchAttempt(opts.store, opts.taskId, selectedLane, "failed", manifest.baseCwd, patchRecord.path, message);
+      return { ok: false, reason: "conflict", message: `winner patch conflicts or cannot apply: ${message}` };
+    }
+    const attempt = recordPatchAttempt(opts.store, opts.taskId, selectedLane, "applied", manifest.baseCwd, patchRecord.path, null);
+    if (manifest.state === "selection_required") {
+      updateDualLaneManifest({
+        ...manifest,
+        state: "selected",
+        selectedLane,
+        archivedLane: manifest.lanes.find((lane) => lane.id !== selectedLane)?.id,
+      });
+    }
+    return {
+      ok: true,
+      taskId: opts.taskId,
+      selectedLane,
+      baseCwd: manifest.baseCwd,
+      patchPath: patchRecord.path,
+      attemptId: attempt,
+    };
+  } finally {
+    applyLocks.delete(lockKey);
   }
-  return {
-    ok: true,
-    taskId: opts.taskId,
-    selectedLane,
-    baseCwd: manifest.baseCwd,
-    patchPath: patchRecord.path,
-    attemptId: attempt,
-  };
 }
 
 export function persistDualLaneArtifacts(opts: {
   taskId: string;
+  coordinatorId: string;
   prompt: string;
   lanes: DualLaneManifestLane[];
   store?: OrchestrationStore;
 }): void {
-  writeDualLanePromptArtifact(opts.taskId, opts.prompt, opts.store);
+  writeDualLanePromptArtifact(opts.taskId, opts.coordinatorId, opts.prompt, opts.store);
   for (const lane of opts.lanes) {
-    writeDualLaneOutputArtifact(opts.taskId, lane.id, rawOutputForSession(lane.session.sessionId), opts.store);
-    writeDualLaneDiffArtifact(opts.taskId, lane.id, patchWorktree(lane.worktree), opts.store);
+    writeDualLaneOutputArtifact(opts.taskId, opts.coordinatorId, lane.id, rawOutputForSession(lane.session.sessionId), opts.store);
+    writeDualLaneDiffArtifact(opts.taskId, opts.coordinatorId, lane.id, patchWorktree(lane.worktree), opts.store);
   }
 }
 
@@ -152,21 +186,23 @@ function rawOutputForSession(sessionId: string): string {
 
 function writeArtifact(opts: {
   taskId: string;
+  coordinatorId: string;
   kind: ArtifactKind;
   lane: string | null;
   content: string;
   store?: OrchestrationStore;
   note?: string;
 }): ArtifactRecord {
-  const dir = path.join(dualLaneTaskDir(opts.taskId), "artifacts");
+  const dir = path.join(dualLaneTaskDir(opts.taskId, opts.coordinatorId), "artifacts");
   fs.mkdirSync(dir, { recursive: true });
-  const filename = `${opts.kind}${opts.lane ? `-${safeSegment(opts.lane)}` : ""}.txt`;
+  const filename = `${opts.kind}${opts.lane ? `-${safePathSegment(opts.lane, "artifact lane path segment")}` : ""}.txt`;
   const file = path.join(dir, filename);
   fs.writeFileSync(file, opts.content);
   const stat = fs.statSync(file);
   const record: ArtifactRecord = {
-    artifactId: `${opts.taskId}:${opts.kind}:${opts.lane ?? "base"}`,
+    artifactId: `${opts.taskId}:${opts.coordinatorId}:${opts.kind}:${opts.lane ?? "base"}`,
     taskId: opts.taskId,
+    coordinatorId: opts.coordinatorId,
     kind: opts.kind,
     lane: opts.lane,
     path: file,
@@ -179,8 +215,20 @@ function writeArtifact(opts: {
   return record;
 }
 
-function discoverDualLaneArtifacts(taskId: string, kind: ArtifactKind): ArtifactRecord[] {
-  const dir = path.join(dualLaneTaskDir(taskId), "artifacts");
+function discoverDualLaneArtifacts(taskId: string, kind: ArtifactKind, coordinatorId?: string): ArtifactRecord[] {
+  const manifests = coordinatorId
+    ? [readDualLaneManifest(taskId, coordinatorId)].filter((manifest): manifest is NonNullable<typeof manifest> => Boolean(manifest))
+    : (() => {
+      try {
+        return [readDualLaneManifest(taskId)].filter((manifest): manifest is NonNullable<typeof manifest> => Boolean(manifest));
+      } catch (err) {
+        if (err instanceof AmbiguousDualLaneRunError) return [];
+        throw err;
+      }
+    })();
+  const dir = manifests[0]
+    ? path.join(dualLaneTaskDir(taskId, manifests[0].coordinatorId), "artifacts")
+    : path.join(dualLaneTaskDir(taskId), "artifacts");
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile())
@@ -192,6 +240,7 @@ function discoverDualLaneArtifacts(taskId: string, kind: ArtifactKind): Artifact
       return {
         artifactId: `${taskId}:${kind}:${laneMatch?.[1] ?? "base"}`,
         taskId,
+        coordinatorId: manifests[0]?.coordinatorId ?? null,
         kind,
         lane: laneMatch?.[1] ?? null,
         path: file,
@@ -243,10 +292,4 @@ function recordPatchAttempt(
 
 function parseLane(value: string): "openai" | "anthropic" | null {
   return value === "openai" || value === "anthropic" ? value : null;
-}
-
-function safeSegment(value: string): string {
-  const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!safe) throw new Error(`invalid artifact path segment: ${value}`);
-  return safe.slice(0, 80);
 }

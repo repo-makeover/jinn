@@ -174,10 +174,25 @@ describe("dual-lane orchestration", () => {
     expect(fs.existsSync(path.join(tmpHome, "worktrees", "jinn-task-dual-failed-anthropic"))).toBe(false);
     runtime.close();
   });
+
+  it("keeps dual-lane artifacts isolated by task and coordinator", async () => {
+    const { OrchestrationStore, writeDualLanePromptArtifact } = await loadModules();
+    const store = OrchestrationStore.open(":memory:");
+
+    const first = writeDualLanePromptArtifact("shared-task", "coord-a", "prompt A", store);
+    const second = writeDualLanePromptArtifact("shared-task", "coord-b", "prompt B", store);
+
+    expect(first.artifactId).toBe("shared-task:coord-a:prompt:base");
+    expect(second.artifactId).toBe("shared-task:coord-b:prompt:base");
+    expect(first.path).not.toBe(second.path);
+    expect(store.listArtifactRecords("shared-task", "prompt", "coord-a")).toMatchObject([{ coordinatorId: "coord-a", path: first.path }]);
+    expect(store.listArtifactRecords("shared-task", "prompt", "coord-b")).toMatchObject([{ coordinatorId: "coord-b", path: second.path }]);
+    store.close();
+  });
 });
 
 async function loadModules() {
-  const [runtime, runMode, dualLane, state, registry, telemetry, artifacts] = await Promise.all([
+  const [runtime, runMode, dualLane, state, registry, telemetry, artifacts, store] = await Promise.all([
     import("../runtime.js"),
     import("../run-mode.js"),
     import("../dual-lane.js"),
@@ -185,6 +200,7 @@ async function loadModules() {
     import("../../sessions/registry.js"),
     import("../telemetry.js"),
     import("../artifacts.js"),
+    import("../store.js"),
   ]);
   registry.initDb();
   return {
@@ -195,6 +211,8 @@ async function loadModules() {
     readDualLaneManifest: state.readDualLaneManifest,
     readOrchestrationTelemetry: telemetry.readOrchestrationTelemetry,
     ORCHESTRATION_TELEMETRY_LOG: telemetry.ORCHESTRATION_TELEMETRY_LOG,
+    OrchestrationStore: store.OrchestrationStore,
+    writeDualLanePromptArtifact: artifacts.writeDualLanePromptArtifact,
   };
 }
 

@@ -265,12 +265,12 @@ export async function retryContinuation(taskId: string, coordinatorId: string) {
   return post("/api/orchestration/continuations/retry", { taskId, coordinatorId })
 }
 
-export async function selectDualLaneWinner(taskId: string, winnerLane: "openai" | "anthropic") {
-  return post("/api/orchestration/dual-lane/select", { taskId, winnerLane })
+export async function selectDualLaneWinner(taskId: string, coordinatorId: string, winnerLane: "openai" | "anthropic") {
+  return post("/api/orchestration/dual-lane/select", { taskId, coordinatorId, winnerLane })
 }
 
-export async function applyDualLaneWinner(taskId: string, winnerLane: "openai" | "anthropic") {
-  return post("/api/orchestration/dual-lane/apply", { taskId, winnerLane })
+export async function applyDualLaneWinner(taskId: string, coordinatorId: string, winnerLane: "openai" | "anthropic") {
+  return post("/api/orchestration/dual-lane/apply", { taskId, coordinatorId, winnerLane })
 }
 
 export async function pauseQueuedTask(taskId: string, coordinatorId: string) {
@@ -293,9 +293,9 @@ export async function cancelHold(holdId: string, managerName: string) {
   return post(`/api/orchestration/holds/${encodeURIComponent(holdId)}/cancel`, { managerName })
 }
 
-export async function viewArtifact(taskId: string, kind: "diff" | "prompt" | "output") {
-  return get<{ taskId: string; kind: string; artifacts: Array<{ record: { lane: string | null; path: string }; content: string }> }>(
-    `/api/orchestration/artifacts/${encodeURIComponent(taskId)}/${kind}`,
+export async function viewArtifact(taskId: string, coordinatorId: string, kind: "diff" | "prompt" | "output") {
+  return get<{ taskId: string; coordinatorId: string | null; kind: string; artifacts: Array<{ record: { lane: string | null; path: string }; content: string }> }>(
+    `/api/orchestration/artifacts/${encodeURIComponent(taskId)}/${kind}?coordinatorId=${encodeURIComponent(coordinatorId)}`,
   )
 }
 

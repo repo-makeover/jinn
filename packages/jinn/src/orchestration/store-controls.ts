@@ -30,6 +30,7 @@ export interface HoldRecord {
 export interface ArtifactRecord {
   artifactId: string;
   taskId: string;
+  coordinatorId: string | null;
   kind: ArtifactKind;
   lane: string | null;
   path: string;
@@ -74,6 +75,7 @@ interface HoldRow {
 interface ArtifactRow {
   artifact_id: string;
   task_id: string;
+  coordinator_id: string | null;
   kind: ArtifactKind;
   lane: string | null;
   path: string;
@@ -188,9 +190,10 @@ export function cancelHoldInDb(db: Database.Database, holdId: string, updatedAt:
 
 export function addArtifactRecordInDb(db: Database.Database, record: ArtifactRecord): void {
   db.prepare(`
-    INSERT INTO artifact_records (artifact_id, task_id, kind, lane, path, bytes, created_at, note)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO artifact_records (artifact_id, task_id, coordinator_id, kind, lane, path, bytes, created_at, note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(artifact_id) DO UPDATE SET
+      coordinator_id = excluded.coordinator_id,
       path = excluded.path,
       bytes = excluded.bytes,
       created_at = excluded.created_at,
@@ -198,6 +201,7 @@ export function addArtifactRecordInDb(db: Database.Database, record: ArtifactRec
   `).run(
     record.artifactId,
     record.taskId,
+    record.coordinatorId,
     record.kind,
     record.lane,
     record.path,
@@ -211,8 +215,19 @@ export function listArtifactRecordsFromDb(
   db: Database.Database,
   taskId: string,
   kind?: ArtifactKind,
+  coordinatorId?: string,
 ): ArtifactRecord[] {
-  const rows = kind
+  const rows = coordinatorId && kind
+    ? db.prepare(`
+      SELECT * FROM artifact_records WHERE task_id = ? AND coordinator_id = ? AND kind = ?
+      ORDER BY created_at, lane, artifact_id
+    `).all(taskId, coordinatorId, kind) as ArtifactRow[]
+    : coordinatorId
+      ? db.prepare(`
+      SELECT * FROM artifact_records WHERE task_id = ? AND coordinator_id = ?
+      ORDER BY created_at, kind, lane, artifact_id
+    `).all(taskId, coordinatorId) as ArtifactRow[]
+      : kind
     ? db.prepare(`
       SELECT * FROM artifact_records WHERE task_id = ? AND kind = ?
       ORDER BY created_at, lane, artifact_id
@@ -284,6 +299,7 @@ function rowToArtifact(row: ArtifactRow): ArtifactRecord {
   return {
     artifactId: row.artifact_id,
     taskId: row.task_id,
+    coordinatorId: row.coordinator_id,
     kind: row.kind,
     lane: row.lane,
     path: row.path,

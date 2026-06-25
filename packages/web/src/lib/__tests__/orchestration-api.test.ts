@@ -43,7 +43,7 @@ describe("orchestration-api", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await retryContinuation("task-1", "coord-1")
-    await selectDualLaneWinner("task-2", "openai")
+    await selectDualLaneWinner("task-2", "coord-2", "openai")
     await pauseOrchestrationQueue("operator hold")
     await resumeOrchestrationQueue()
     await stopOrchestrationLease("lease-1", "operator stop")
@@ -54,7 +54,7 @@ describe("orchestration-api", () => {
     }))
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/dual-lane/select"), expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ taskId: "task-2", winnerLane: "openai" }),
+      body: JSON.stringify({ taskId: "task-2", coordinatorId: "coord-2", winnerLane: "openai" }),
     }))
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/queue/pause"), expect.objectContaining({
       method: "POST",

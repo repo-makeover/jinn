@@ -157,7 +157,7 @@ describe("OrchestrationPage", () => {
     expect((openaiButtons[1] as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(openaiButtons[0])
 
-    await waitFor(() => expect(selectMock).toHaveBeenCalledWith("select-task", "openai"))
+    await waitFor(() => expect(selectMock).toHaveBeenCalledWith("select-task", "dual-coord", "openai"))
   })
 })
 

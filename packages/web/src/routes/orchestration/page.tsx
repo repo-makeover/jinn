@@ -216,17 +216,17 @@ export default function OrchestrationPage() {
                     runs={data.dualLane}
                     actionKey={actionKey}
                     onSelect={(run, lane) => runAction(
-                      `select:${run.taskId}:${lane}`,
-                      () => selectDualLaneWinner(run.taskId, lane),
+                      `select:${run.taskId}:${run.coordinatorId}:${lane}`,
+                      () => selectDualLaneWinner(run.taskId, run.coordinatorId, lane),
                     )}
                     onApply={(run, lane) => runAction(
-                      `apply:${run.taskId}:${lane}`,
-                      () => applyDualLaneWinner(run.taskId, lane),
+                      `apply:${run.taskId}:${run.coordinatorId}:${lane}`,
+                      () => applyDualLaneWinner(run.taskId, run.coordinatorId, lane),
                     )}
                     onArtifact={(run, kind) => runAction(
-                      `artifact:${run.taskId}:${kind}`,
+                      `artifact:${run.taskId}:${run.coordinatorId}:${kind}`,
                       async () => {
-                        const response = await viewArtifact(run.taskId, kind)
+                        const response = await viewArtifact(run.taskId, run.coordinatorId, kind)
                         setArtifactText(response.artifacts.map((artifact) => {
                           const lane = artifact.record.lane ?? "base"
                           return `# ${response.kind} ${lane}\n${artifact.content}`
