@@ -12,21 +12,150 @@ export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(os.homedir(), `.${instance}`);
 }
 
-export const JINN_HOME = resolveHome();
-export const CONFIG_PATH = path.join(JINN_HOME, "config.yaml");
-export const SESSIONS_DB = path.join(JINN_HOME, "sessions", "registry.db");
-export const CRON_JOBS = path.join(JINN_HOME, "cron", "jobs.json");
-export const CRON_RUNS = path.join(JINN_HOME, "cron", "runs");
-export const ORG_DIR = path.join(JINN_HOME, "org");
-export const SKILLS_DIR = path.join(JINN_HOME, "skills");
-export const DOCS_DIR = path.join(JINN_HOME, "docs");
-export const LOGS_DIR = path.join(JINN_HOME, "logs");
-export const TMP_DIR = path.join(JINN_HOME, "tmp");
-export const ENGINE_LIMITS_DIR = path.join(TMP_DIR, "engine-limits");
-export const CLAUDE_LIMITS_DIR = path.join(ENGINE_LIMITS_DIR, "claude");
-export const MODELS_DIR = path.join(JINN_HOME, "models");
-export const STT_MODELS_DIR = path.join(JINN_HOME, "models", "whisper");
-export const PID_FILE = path.join(JINN_HOME, "gateway.pid");
+export interface JinnPaths {
+  JINN_HOME: string;
+  CONFIG_PATH: string;
+  SESSIONS_DB: string;
+  ORCH_DB: string;
+  ORCH_CONFIG_DIR: string;
+  ORCH_WORKTREE_ROOT: string;
+  ORCH_RECOVERY_DIR: string;
+  CRON_JOBS: string;
+  AUDIT_LOG: string;
+  APPROVALS_FILE: string;
+  CRON_RUNS: string;
+  ORG_DIR: string;
+  SKILLS_DIR: string;
+  DOCS_DIR: string;
+  LOGS_DIR: string;
+  TMP_DIR: string;
+  ENGINE_LIMITS_DIR: string;
+  CLAUDE_LIMITS_DIR: string;
+  MODELS_DIR: string;
+  STT_MODELS_DIR: string;
+  PID_FILE: string;
+  GATEWAY_INFO_FILE: string;
+  CLAUDE_SETTINGS_DIR: string;
+  HOOK_RELAY_SCRIPT: string;
+  CLAUDE_SKILLS_DIR: string;
+  AGENTS_SKILLS_DIR: string;
+  FILES_DIR: string;
+  UPLOADS_DIR: string;
+  MIGRATIONS_DIR: string;
+}
+
+function buildJinnPaths(home: string): JinnPaths {
+  const tmpDir = path.join(home, "tmp");
+  const engineLimitsDir = path.join(tmpDir, "engine-limits");
+  return {
+    JINN_HOME: home,
+    CONFIG_PATH: path.join(home, "config.yaml"),
+    SESSIONS_DB: path.join(home, "sessions", "registry.db"),
+    ORCH_DB: path.join(home, "orchestration.db"),
+    ORCH_CONFIG_DIR: path.join(home, "orchestration"),
+    ORCH_WORKTREE_ROOT: path.join(home, "worktrees"),
+    ORCH_RECOVERY_DIR: path.join(home, "orchestration-recovery"),
+    CRON_JOBS: path.join(home, "cron", "jobs.json"),
+    AUDIT_LOG: path.join(home, "audit.jsonl"),
+    APPROVALS_FILE: path.join(home, "approvals.json"),
+    CRON_RUNS: path.join(home, "cron", "runs"),
+    ORG_DIR: path.join(home, "org"),
+    SKILLS_DIR: path.join(home, "skills"),
+    DOCS_DIR: path.join(home, "docs"),
+    LOGS_DIR: path.join(home, "logs"),
+    TMP_DIR: tmpDir,
+    ENGINE_LIMITS_DIR: engineLimitsDir,
+    CLAUDE_LIMITS_DIR: path.join(engineLimitsDir, "claude"),
+    MODELS_DIR: path.join(home, "models"),
+    STT_MODELS_DIR: path.join(home, "models", "whisper"),
+    PID_FILE: path.join(home, "gateway.pid"),
+    GATEWAY_INFO_FILE: path.join(home, "gateway.json"),
+    CLAUDE_SETTINGS_DIR: path.join(home, "tmp", "settings"),
+    HOOK_RELAY_SCRIPT: path.join(home, "hook-relay.mjs"),
+    CLAUDE_SKILLS_DIR: path.join(home, ".claude", "skills"),
+    AGENTS_SKILLS_DIR: path.join(home, ".agents", "skills"),
+    FILES_DIR: path.join(home, "files"),
+    UPLOADS_DIR: path.join(home, "uploads"),
+    MIGRATIONS_DIR: path.join(home, "migrations"),
+  };
+}
+
+function applyRuntimePaths(paths: JinnPaths): void {
+  JINN_HOME = paths.JINN_HOME;
+  CONFIG_PATH = paths.CONFIG_PATH;
+  SESSIONS_DB = paths.SESSIONS_DB;
+  ORCH_DB = paths.ORCH_DB;
+  ORCH_CONFIG_DIR = paths.ORCH_CONFIG_DIR;
+  ORCH_WORKTREE_ROOT = paths.ORCH_WORKTREE_ROOT;
+  ORCH_RECOVERY_DIR = paths.ORCH_RECOVERY_DIR;
+  CRON_JOBS = paths.CRON_JOBS;
+  AUDIT_LOG = paths.AUDIT_LOG;
+  APPROVALS_FILE = paths.APPROVALS_FILE;
+  CRON_RUNS = paths.CRON_RUNS;
+  ORG_DIR = paths.ORG_DIR;
+  SKILLS_DIR = paths.SKILLS_DIR;
+  DOCS_DIR = paths.DOCS_DIR;
+  LOGS_DIR = paths.LOGS_DIR;
+  TMP_DIR = paths.TMP_DIR;
+  ENGINE_LIMITS_DIR = paths.ENGINE_LIMITS_DIR;
+  CLAUDE_LIMITS_DIR = paths.CLAUDE_LIMITS_DIR;
+  MODELS_DIR = paths.MODELS_DIR;
+  STT_MODELS_DIR = paths.STT_MODELS_DIR;
+  PID_FILE = paths.PID_FILE;
+  GATEWAY_INFO_FILE = paths.GATEWAY_INFO_FILE;
+  CLAUDE_SETTINGS_DIR = paths.CLAUDE_SETTINGS_DIR;
+  HOOK_RELAY_SCRIPT = paths.HOOK_RELAY_SCRIPT;
+  CLAUDE_SKILLS_DIR = paths.CLAUDE_SKILLS_DIR;
+  AGENTS_SKILLS_DIR = paths.AGENTS_SKILLS_DIR;
+  FILES_DIR = paths.FILES_DIR;
+  UPLOADS_DIR = paths.UPLOADS_DIR;
+  MIGRATIONS_DIR = paths.MIGRATIONS_DIR;
+}
+
+export function getJinnPaths(env: NodeJS.ProcessEnv = process.env): JinnPaths {
+  return buildJinnPaths(resolveHome(env));
+}
+
+export function refreshJinnPaths(env: NodeJS.ProcessEnv = process.env): JinnPaths {
+  const paths = getJinnPaths(env);
+  applyRuntimePaths(paths);
+  return paths;
+}
+
+export function setJinnHomeForTest(home: string): JinnPaths {
+  process.env.JINN_HOME = home;
+  return refreshJinnPaths();
+}
+
+const initialPaths = getJinnPaths();
+
+export let JINN_HOME = initialPaths.JINN_HOME;
+export let CONFIG_PATH = initialPaths.CONFIG_PATH;
+export let SESSIONS_DB = initialPaths.SESSIONS_DB;
+/** Durable state for the inert provider-neutral matrix scheduler. */
+export let ORCH_DB = initialPaths.ORCH_DB;
+/** Default repo-local operator config directory for matrix orchestration YAML. */
+export let ORCH_CONFIG_DIR = initialPaths.ORCH_CONFIG_DIR;
+/** Default root for temporary matrix orchestration git worktrees. */
+export let ORCH_WORKTREE_ROOT = initialPaths.ORCH_WORKTREE_ROOT;
+/** Operator-visible recovery manifests for quarantined orchestration databases. */
+export let ORCH_RECOVERY_DIR = initialPaths.ORCH_RECOVERY_DIR;
+export let CRON_JOBS = initialPaths.CRON_JOBS;
+/** Hash-chained, append-only integrity ledger for safe-write file mutations. */
+export let AUDIT_LOG = initialPaths.AUDIT_LOG;
+/** Persisted approval queue (model-fallback + future tool/custom approvals). */
+export let APPROVALS_FILE = initialPaths.APPROVALS_FILE;
+export let CRON_RUNS = initialPaths.CRON_RUNS;
+export let ORG_DIR = initialPaths.ORG_DIR;
+export let SKILLS_DIR = initialPaths.SKILLS_DIR;
+export let DOCS_DIR = initialPaths.DOCS_DIR;
+export let LOGS_DIR = initialPaths.LOGS_DIR;
+export let TMP_DIR = initialPaths.TMP_DIR;
+export let ENGINE_LIMITS_DIR = initialPaths.ENGINE_LIMITS_DIR;
+export let CLAUDE_LIMITS_DIR = initialPaths.CLAUDE_LIMITS_DIR;
+export let MODELS_DIR = initialPaths.MODELS_DIR;
+export let STT_MODELS_DIR = initialPaths.STT_MODELS_DIR;
+export let PID_FILE = initialPaths.PID_FILE;
 /** Gateway connection info (port + hook secret + pids) for hook-relay discovery. */
 export let GATEWAY_INFO_FILE = initialPaths.GATEWAY_INFO_FILE;
 /** Per-session Claude Code --settings files. */
@@ -43,5 +172,5 @@ export let MIGRATIONS_DIR = initialPaths.MIGRATIONS_DIR;
 export const TEMPLATE_DIR = path.join(__dirname, "..", "..", "..", "template");
 export const TEMPLATE_MIGRATIONS_DIR = path.join(TEMPLATE_DIR, "migrations");
 
-/** Path to the global multi-instance registry. Override only for isolated tests. */
-export const INSTANCES_REGISTRY = process.env.JINN_INSTANCES_REGISTRY || path.join(os.homedir(), ".jinn", "instances.json");
+/** Path to the global instances registry (always in default ~/.jinn/) */
+export const INSTANCES_REGISTRY = path.join(os.homedir(), ".jinn", "instances.json");

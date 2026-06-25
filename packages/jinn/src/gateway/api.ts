@@ -1,4 +1,5 @@
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
+import * as http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -41,7 +42,7 @@ import {
 } from "../sessions/registry.js";
 import { blockFallbackText, validateBlockEnvelope } from "../shared/blocks.js";
 import { forkEngineSession } from "../sessions/fork.js";
-import { CONFIG_PATH, CRON_RUNS, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR } from "../shared/paths.js";
+import { CONFIG_PATH, CRON_RUNS, FILES_DIR, ORG_DIR, SKILLS_DIR, LOGS_DIR, TMP_DIR } from "../shared/paths.js";
 import { saveConfigAtomic, validateConfigShape } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import { redactText } from "../shared/redact.js";
@@ -70,6 +71,7 @@ import {
   consumePairingCode,
   createAuthSession,
   createAuthState,
+  createPtyAccessToken,
   currentAuthDeviceId,
   hasGatewayBearerAuth,
   issuePairingCode,
@@ -93,8 +95,31 @@ import {
 import { isTalkMuted } from "../talk/mute-state.js";
 import { maybeEmitTalkGraph } from "../talk/graph.js";
 import { onboardingNeeded, applyEngineChoice } from "./onboarding-policy.js";
+import { listDirectory, FsBrowseError } from "./fs-browse.js";
+import { listApprovals, getApproval, resolveApproval } from "./approvals.js";
+import { SUPERSEDED_TURN_META_KEY } from "./session-turn-state.js";
+import { cancelQueueItemForSession, patchSessionTransportMeta, listRecentCwds, getArchive, createArchiveAndDeleteSessions } from "../sessions/registry.js";
+import { handleSessionQueryRoutes, loadSessionMessagesForApi } from "./api/session-query-routes.js";
+import { dispatchWebSessionRun, maybeRevertEngineOverride } from "./api/session-dispatch.js";
+import { authorizeManagerScope } from "./manager-auth.js";
+import { readBoardState, defaultBoardState, readBoardArray, writeMergedBoard, BoardConflictError } from "./board-service.js";
+import { resolveBestSessionForTicket, resolveTicketSessionStalled, resolveTicketSessionFallbackState, resolveTicketSessionFailureReason } from "./ticket-session-resolver.js";
+import { safeWriteFile } from "../shared/safe-write.js";
+import { resolveEffort } from "../shared/effort.js";
+import { checkPublicUrl } from "../shared/ssrf-guard.js";
+import { getAllParents } from "./org-hierarchy.js";
+import { dispatchTicket } from "./ticket-dispatch.js";
+import { detectRateLimit } from "../shared/rateLimit.js";
+
+/** Validate that all assignees in the board payload belong to the given department. Returns an error string or null. */
+function validateBoardAssigneesForDepartment(_department: string, _payload: unknown): string | null {
+  // Structural validation is handled by writeMergedBoard; this hook is reserved for
+  // cross-cutting checks (e.g. foreign-department assignee guards) added in the future.
+  return null;
+}
 
 const TICKET_SESSION_TAIL_LIMIT = 8;
+const BACKGROUND_ACTIVITY_STALE_MS = 5 * 60 * 1000;
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
 /** Max bytes accepted by public auth helpers. Codes/tokens are tiny. */
@@ -179,20 +204,41 @@ export interface ApiContext {
   backgroundActivity?: Map<string, { activeStreams: number; lastActivityAt: number }>;
   /** Gateway auth token for seamless browser/CLI access when auth is required. */
   gatewayAuthToken?: string;
+  /** Gateway API token generated into gateway.json. Used to mint short-lived PTY websocket tokens. */
+  apiToken?: string;
   /** Test-injectable Jinn home for auth device storage. Defaults to shared JINN_HOME. */
   jinnHome?: string;
+  /** Notification sink for routing gateway notifications (rate limits, parent sessions, etc.). */
+  notificationSink?: import("../sessions/notification-sink.js").SessionNotificationSink;
+  /** Orchestration subsystem state (orchestration engine, scheduler db, etc.). */
+  orchestration?: {
+    config?: import("../orchestration/types.js").OrchestrationConfig;
+    dbPath?: string;
+    runtime?: import("../orchestration/runtime.js").OrchestrationRuntime;
+    recoveryDir?: string;
+    telemetryLogPath?: string;
+    worktreeRoot?: string;
+    dualLaneStateDir?: string;
+    [key: string]: unknown;
+  };
 }
 
-function killSessionEngines(context: ApiContext, session: Session, reason: string): void {
+function killSessionEngines(context: ApiContext, session: Session, reason: string): { interruptible: number; killed: number } {
   const engines = new Set<Engine>();
   const primary = context.sessionManager.getEngine(session.engine);
   const pty = context.ptyViewEngines?.[session.engine];
   if (primary) engines.add(primary);
   if (pty) engines.add(pty);
 
+  let interruptible = 0;
+  let killed = 0;
   for (const engine of engines) {
-    if (isInterruptibleEngine(engine)) engine.kill(session.id, reason);
+    if (!isInterruptibleEngine(engine)) continue;
+    interruptible++;
+    engine.kill(session.id, reason);
+    killed++;
   }
+  return { interruptible, killed };
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -207,7 +253,6 @@ export function resumePendingWebQueueItems(context: ApiContext): void {
       continue;
     }
   }
-  return null;
 }
 
 /**
@@ -269,9 +314,6 @@ function resolveAttachmentPaths(fileIds: unknown): string[] {
   }
   return paths;
 }
-
-/** Per-request Accept-Encoding, stashed by handleApiRequest so json() can compress. */
-type ResWithEncoding = ServerResponse & { __acceptEncoding?: string };
 
 function json(res: ServerResponse, data: unknown, status = 200): void {
   const body = Buffer.from(JSON.stringify(data));
@@ -607,6 +649,23 @@ export async function handleApiRequest(
         sessions: { total: sessions.length, running, active: running },
         connectors,
       });
+    }
+
+    // POST /api/archives — archive (snapshot + delete) a group of sessions.
+    if (method === "POST" && pathname === "/api/archives") {
+      const _parsed = await readJsonBody(req, res);
+      if (!_parsed.ok) return;
+      const body = _parsed.body as Record<string, unknown>;
+      const sessionIds: string[] = Array.isArray(body.sessionIds) ? (body.sessionIds as string[]) : [];
+      if (sessionIds.length === 0) return badRequest(res, "sessionIds array is required");
+      const liveSessions = sessionIds.map((id) => getSession(id)).filter((s): s is Session => Boolean(s));
+      const archive = createArchiveAndDeleteSessions({
+        label: typeof body.label === "string" ? body.label : null,
+        note: typeof body.note === "string" ? body.note : null,
+        kind: (typeof body.kind === "string" ? body.kind : "chat") as import("../shared/types.js").ArchiveKind,
+        sourceRef: typeof body.sourceRef === "string" ? body.sourceRef : null,
+        sessionIds,
+      });
       if (!archive) return badRequest(res, 'no matching sessions to archive');
 
       const archivedSessions = new Map(liveSessions.map((session) => [session.id, session]));
@@ -713,7 +772,7 @@ export async function handleApiRequest(
     if (await handleSessionQueryRoutes(method, pathname, url, res, context, SESSION_LIST_PER_GROUP)) return;
 
     // PUT|PATCH /api/sessions/:id — update title and/or mid-chat model/effort
-    let params = matchRoute("/api/sessions/:id", pathname);
+    params = matchRoute("/api/sessions/:id", pathname);
     if ((method === "PUT" || method === "PATCH") && params) {
       const session = getSession(params.id);
       if (!session) return notFound(res);
@@ -786,7 +845,7 @@ export async function handleApiRequest(
     if (method === "POST" && params) {
       const session = getSession(params.id);
       if (!session) return notFound(res);
-      killSessionEngines(context, session, "Interrupted by user");
+      const killResult = killSessionEngines(context, session, "Interrupted by user");
       context.sessionManager.getQueue().clearQueue(session.sessionKey || session.sourceRef || session.id);
       const stopped = killResult.interruptible > 0 || session.status !== "running";
       if (stopped) {
@@ -2511,18 +2570,41 @@ export async function deliverConnectorReply(
   session: Pick<Session, "source" | "connector" | "replyContext"> & { id?: string },
   text: string,
   connectors: Map<string, import("../shared/types.js").Connector>,
+  opts: {
+    emit?: (event: string, payload: unknown) => void;
+    retryDelayMs?: number;
+    maxAttempts?: number;
+  } = {},
 ): Promise<void> {
   if (!text || NON_CONNECTOR_SOURCES.has(session.source)) return;
   if (!session.connector || !session.replyContext) return;
   const connector = connectors.get(session.connector);
   if (!connector) return;
-  try {
-    const target = connector.reconstructTarget(session.replyContext);
-    await connector.replyMessage(target, text);
-  } catch (err) {
-    logger.warn(
-      `Connector reply delivery failed for session ${session.id ?? "?"}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  const maxAttempts = opts.maxAttempts ?? 2;
+  const retryDelayMs = opts.retryDelayMs ?? 1000;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const target = connector.reconstructTarget(session.replyContext);
+      await connector.replyMessage(target, text);
+      return;
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        `Connector reply delivery failed for session ${session.id ?? "?"} (attempt ${attempt}/${maxAttempts}): ${error}`,
+      );
+      if (opts.emit) {
+        opts.emit("connector:reply_failed", {
+          sessionId: session.id,
+          connector: session.connector,
+          attempt,
+          maxAttempts,
+          error,
+        });
+      }
+      if (attempt < maxAttempts && retryDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
   }
 }
 

@@ -13,6 +13,7 @@ import { insertFile, getFile, listFiles, deleteFile, setFilePath, insertMessage,
 import type { ApiContext } from "./api.js";
 import { readJsonBody } from "./http-helpers.js";
 import { jsonApiHeaders } from "./internal-auth.js";
+import { checkPublicUrl } from "../shared/ssrf-guard.js";
 
 // Ensure managed files directory exists
 export function ensureFilesDir(): void {
@@ -262,6 +263,28 @@ export function assessFileRead(absPath: string, _opts: { authenticated?: boolean
   return { allowed: true };
 }
 
+/**
+ * Check whether a resolved absolute path is permitted to be read under the
+ * current gateway config. If `gateway.allowArbitraryFileRead` is true, any
+ * path passes. Otherwise the path must be inside at least one of the configured
+ * `gateway.fileReadRoots` (if any are set); if no roots are configured the
+ * function returns true (unscoped/open mode).
+ */
+export function isAllowedReadPath(
+  absPath: string,
+  context: Pick<ApiContext, "getConfig">,
+): boolean {
+  const gateway = context.getConfig().gateway as Record<string, unknown> & {
+    allowArbitraryFileRead?: boolean;
+    fileReadRoots?: string[];
+  };
+  if (gateway.allowArbitraryFileRead === true) return true;
+  const roots = gateway.fileReadRoots;
+  if (!Array.isArray(roots) || roots.length === 0) return true;
+  const resolved = path.resolve(absPath);
+  return roots.some((root) => isInsidePath(resolved, root));
+}
+
 export interface FileClassification {
   mime: string;
   size: number;
@@ -329,6 +352,13 @@ function notFound(res: ServerResponse): void {
 function serverError(res: ServerResponse, message: string): void {
   json(res, { error: message }, 500);
 }
+
+/** Maximum upload file size in megabytes. */
+const MAX_UPLOAD_SIZE_MB = 100;
+/** Maximum upload file size in bytes. */
+const MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
+/** Maximum JSON upload body size (base64 encoded content + URL fetch). */
+const MAX_JSON_UPLOAD_BODY_SIZE = MAX_UPLOAD_SIZE * 2;
 
 function uploadTooLargeMessage(): string {
   return `File exceeds ${MAX_UPLOAD_SIZE_MB} MB limit`;

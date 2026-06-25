@@ -22,6 +22,7 @@ import { GrokEngine } from "../engines/grok.js";
 import { GrokInteractiveEngine } from "../engines/grok-interactive.js";
 import { HermesAcpEngine } from "../engines/hermes-acp.js";
 import { HermesInteractiveEngine } from "../engines/hermes-interactive.js";
+import { KiroEngine } from "../engines/kiro.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { HookRegistry } from "./hook-registry.js";
 import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids, staleGatewayPids } from "./gateway-info.js";
@@ -277,6 +278,9 @@ export async function startGateway(
   // Resolve gateway port/host early so boot artifacts (gateway.json) can record it.
   const port = config.gateway.port || 7777;
   const host = config.gateway.host || "127.0.0.1";
+  // Mutable config reference for hot-reload
+  let currentConfig = config;
+
   const exposure = validateGatewayExposure(config);
   if (!exposure.ok) throw new Error(exposure.error);
   const gatewayAuthToken = ensureGatewayAuthToken(JINN_HOME);
@@ -397,7 +401,8 @@ export async function startGateway(
   });
   const hermesInteractiveEngine = new HermesInteractiveEngine(hermesLifecycle);
   const piEngine = new PiEngine();
-  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), hermes (headless + interactive PTY), pi");
+  const kiroEngine = new KiroEngine({ configProvider: () => currentConfig });
+  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), hermes (headless + interactive PTY), pi, kiro (headless)");
 
   const codexEngine = new CodexEngine();
   const grokEngine = new GrokEngine();
@@ -413,6 +418,7 @@ export async function startGateway(
   engines.set("grok", grokEngine);
   engines.set("hermes", hermesEngine);
   engines.set("pi", piEngine);
+  engines.set("kiro", kiroEngine);
 
   // PTY-capable engines, keyed by engine name — the /ws/pty handler routes by
   // session.engine so the xterm view attaches to the right engine.
@@ -860,6 +866,8 @@ export async function startGateway(
       .finally(() => emit("engines:updated", {}));
   };
   refreshDynamicModels(currentConfig);
+  let orchestrationRuntime: OrchestrationRuntime | undefined;
+  const orchestrationRefreshState: OrchestrationRuntimeRefreshState = { pending: false };
 
   // Synchronously re-scan org/ into the in-memory registry and drop warm PTYs so the
   // next turn respawns with a fresh system prompt. Shared by the API employee-update
@@ -922,7 +930,7 @@ export async function startGateway(
     reloadConnectorInstances,
     hookRegistry,
     hookSecret: gatewayInfo.secret,
-    apiToken: gatewayInfo.apiToken,
+    apiToken: gatewayInfo.token,
     interactiveClaudeEngine,
     ptyViewEngines,
     reloadOrg,
@@ -1007,7 +1015,7 @@ export async function startGateway(
   // Create HTTP server
   const authRequiredNow = (): boolean => shouldRequireGatewayAuth(currentConfig);
 
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = req.url || "/";
     const corsAllowed = setCorsHeaders(req, res);
 
@@ -1035,7 +1043,7 @@ export async function startGateway(
 
     // API routes
     if (url.startsWith("/api/")) {
-      if (!isAuthenticatedRequest(req, gatewayInfo.apiToken)) {
+      if (!isAuthenticatedRequest(req, gatewayInfo.token)) {
         unauthorized(res);
         return;
       }
@@ -1115,7 +1123,7 @@ export async function startGateway(
       }
     }
     if (reqUrl === "/ws") {
-      if (!isAuthenticatedRequest(req, gatewayInfo.apiToken)) {
+      if (!isAuthenticatedRequest(req, gatewayInfo.token)) {
         socket.destroy();
         return;
       }

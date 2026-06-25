@@ -254,7 +254,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
       this.injectPrompt(warm, opts);
     } else {
       const handle = this.spawn(jinnSessionId, opts, cwd, convId);
-      turn.boundProc = (handle as any)._proc as pty.IPty | undefined;
+      turn.boundProc = (handle as any)._proc as IPty | undefined;
       this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
       this.lifecycle.turnStarted(jinnSessionId);
     }
@@ -303,7 +303,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
     const args = this.buildArgs(resumeConvId, opts.model);
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`AntigravityEngine spawning ${bin} (resume: ${resumeConvId || "none"}, geom: ${geom ? `${geom.cols}×${geom.rows}` : "default"})`);
-    const proc = await spawnPty(bin, args, {
+    const proc = spawnPty(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,

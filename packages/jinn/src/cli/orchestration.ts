@@ -674,10 +674,10 @@ function formatWorktreeCleanup(result: { path: string; removed: boolean }): stri
 function getGatewayFetchBase(): { baseUrl: string; apiToken: string } {
   const config = loadConfig();
   const gateway = readGatewayInfo(GATEWAY_INFO_FILE);
-  if (!gateway?.apiToken) throw new Error("gateway is not running or gateway token is unavailable");
+  if (!gateway?.token) throw new Error("gateway is not running or gateway token is unavailable");
   return {
     baseUrl: `http://${config.gateway.host}:${gateway.port || config.gateway.port}`,
-    apiToken: gateway.apiToken,
+    apiToken: gateway.token,
   };
 }
 

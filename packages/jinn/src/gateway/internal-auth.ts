@@ -11,7 +11,7 @@ function normalizedToken(token: string | null | undefined): string | undefined {
 }
 
 export function gatewayInfoApiToken(): string | undefined {
-  return normalizedToken(readGatewayInfo(GATEWAY_INFO_FILE)?.apiToken);
+  return normalizedToken(readGatewayInfo(GATEWAY_INFO_FILE)?.token);
 }
 
 export function apiAuthHeaders(

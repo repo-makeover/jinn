@@ -2,12 +2,21 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, startTransition } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useQueryClient } from "@tanstack/react-query"
-import { Archive as ArchiveIcon, ChevronDown, Clock3, EllipsisVertical, Layers, Search, X } from "lucide-react"
+import { ChevronDown, Clock3, Copy, EllipsisVertical, Pencil, Pin, Plus, Search, Trash2, X } from "lucide-react"
 import { api, type BackgroundActivity, type Employee, type SessionsResponse } from "@/lib/api"
 import { useOrg } from "@/hooks/use-employees"
+import { EmployeeAvatar } from "@/components/ui/employee-avatar"
 import { useSettings } from "@/routes/settings-provider"
+import { cleanPreview } from "@/lib/clean-preview"
 import { queryKeys } from "@/lib/query-keys"
 import { useSessions, useSessionCounts, useSessionSearch, useUpdateSession, useDeleteSession, useBulkDeleteSessions, useDuplicateSession } from "@/hooks/use-sessions"
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -49,8 +58,11 @@ interface Session {
   [key: string]: unknown
 }
 
-const OLDER_EXPANDED_STORAGE_KEY = "jinn-sidebar-older-expanded"
-const FOCUS_MODE_STORAGE_KEY = "jinn-sidebar-focus-mode"
+export interface SidebarOrder {
+  sessionIds: string[]
+  employeeNames: string[]
+  employeeSessionMap: Record<string, string[]>
+}
 
 interface ChatSidebarProps {
   selectedId: string | null
@@ -63,8 +75,6 @@ interface ChatSidebarProps {
   onOrderComputed?: (order: SidebarOrder) => void
   /** Start a new chat with a session-less roster employee (contactable list). */
   onContactEmployee?: (name: string) => void
-  /** Open a department project-room's merged timeline (Rooms view-mode). */
-  onSelectRoom?: (roomId: string) => void
 }
 
 interface FlatItem {
@@ -895,7 +905,6 @@ export function ChatSidebar({
   onEmployeeSessionsAvailable,
   onOrderComputed,
   onContactEmployee,
-  onSelectRoom,
 }: ChatSidebarProps) {
   const { settings } = useSettings()
   const portalName = settings.portalName ?? "Jinn"
@@ -910,10 +919,16 @@ export function ChatSidebar({
   const bulkDeleteMutation = useBulkDeleteSessions()
   const duplicateSessionMutation = useDuplicateSession()
 
-  const sessions = useMemo(
-    () => buildVisibleSessions(rawSessions as Session[] | undefined),
-    [rawSessions],
-  )
+  const sessions = useMemo(() => {
+    if (!rawSessions) return []
+    const filtered = (rawSessions as Session[]).filter(isVisibleSource)
+    filtered.sort((a, b) => {
+      const ta = a.lastActivity || a.createdAt || ""
+      const tb = b.lastActivity || b.createdAt || ""
+      return tb.localeCompare(ta)
+    })
+    return filtered
+  }, [rawSessions])
 
   const [search, setSearch] = useState("")
   // Search spans ALL sessions server-side (the loaded page is only a subset).
@@ -936,9 +951,12 @@ export function ChatSidebar({
   const [olderExpanded, setOlderExpanded] = useState(false)
   const [focusMode, setFocusMode] = useState<FocusMode>("all")
   const [loadingMore, setLoadingMore] = useState<Set<string>>(new Set())
-  const [deleteTarget, setDeleteTarget] = useState<SidebarDeleteTarget | null>(null)
-  const [archiveTarget, setArchiveTarget] = useState<ArchiveDialogTarget | null>(null)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{
+    type: "session" | "employee"
+    id: string
+    label: string
+    sessions?: Session[]
+  } | null>(null)
   const deleteButtonRef = useRef<HTMLButtonElement>(null)
   const { data: orgData } = useOrg()
   const employeeData = useMemo(() => {
@@ -1067,7 +1085,6 @@ export function ChatSidebar({
   async function handleDeleteEmployee(empName: string, empSessions: Session[]) {
     const ids = empSessions.map((s) => s.id)
     try {
-      setDeleteError(null)
       await bulkDeleteMutation.mutateAsync(ids)
       setPinnedSessions((prev) => {
         const next = new Set(prev)
@@ -1079,9 +1096,7 @@ export function ChatSidebar({
       startTransition(() => {
         if (selectedId && ids.includes(selectedId)) onNewChat()
       })
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Failed to delete selected sessions.')
-    }
+    } catch {}
   }
 
   async function handleDelete(sessionId: string) {
@@ -1100,7 +1115,6 @@ export function ChatSidebar({
     }
 
     try {
-      setDeleteError(null)
       await deleteSessionMutation.mutateAsync(sessionId)
       setPinnedSessions((prev) => {
         if (!prev.has(sessionId)) return prev
@@ -1118,9 +1132,7 @@ export function ChatSidebar({
           onNewChat()
         }
       })
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Failed to delete session.')
-    }
+    } catch {}
   }
 
   const {
@@ -1171,12 +1183,7 @@ export function ChatSidebar({
         cronSessions: [] as Session[],
         cronTotal: 0,
       }
-      if (archiveTarget?.kind === "room" && archiveTarget.sourceRef) {
-        if (next.delete(`room:${archiveTarget.sourceRef}`)) changed = true
-      }
-      if (changed) savePinnedSessions(next)
-      return changed ? next : prev
-    })
+    }
 
     // ---- Default mode: recency buckets + per-employee Older drawer. ----
     // In "focused" mode the Today/Yesterday/Older buckets only contain the
@@ -1332,14 +1339,17 @@ export function ChatSidebar({
   // Hidden while searching (search spans real sessions, not the roster) and the
   // COO/portal row is excluded (reachable via "New chat").
   const contactableEmployees = useMemo(() => {
-    return buildContactableEmployees({
-      search,
-      pinnedFlat,
-      unpinnedFlat,
-      orgEmployees: orgData?.employees ?? [],
-      employeeData,
-      portalSlug,
-    })
+    if (search.trim()) return []
+    const sessionful = [...pinnedFlat, ...unpinnedFlat]
+      .map((item) => item.employeeName)
+      .filter((n): n is string => !!n)
+    const sessionfulSet = new Set(sessionful)
+    const rosterNames = (orgData?.employees ?? []).map((e) => e.name)
+    const merged = mergeSidebarEmployees(sessionful, rosterNames)
+    return merged
+      .filter((name) => !sessionfulSet.has(name) && name !== portalSlug)
+      .map((name) => employeeData.get(name))
+      .filter((e): e is Employee => !!e)
   }, [search, pinnedFlat, unpinnedFlat, orgData, employeeData, portalSlug])
 
   // Emit flat session order for keyboard navigation (J/K/E shortcuts).
@@ -1435,7 +1445,7 @@ export function ChatSidebar({
   }, [duplicateSessionMutation, onDuplicate, onSelect])
 
   // Shared props passed to all SessionRow and EmployeeRow instances
-  const sharedRowProps = useMemo<SidebarSharedRowProps>(() => ({
+  const sharedRowProps = useMemo(() => ({
     selectedId,
     readSessions,
     pinnedSessions,
@@ -1446,7 +1456,6 @@ export function ChatSidebar({
     onEmployeeSessionsAvailable,
     togglePin,
     handleDuplicate: handleDuplicateCb,
-    setArchiveTarget,
     setDeleteTarget,
     setRenamingSessionId,
     updateSessionTitle,
@@ -1814,12 +1823,6 @@ export function ChatSidebar({
         </div>
       </div>
 
-      <ArchiveDialog
-        target={archiveTarget}
-        onOpenChange={(open) => { if (!open) setArchiveTarget(null) }}
-        onArchived={handleArchiveComplete}
-      />
-
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <DialogContent showCloseButton={false} className="max-w-sm" onOpenAutoFocus={(e) => { e.preventDefault(); deleteButtonRef.current?.focus() }}>
           <DialogHeader>
@@ -1842,9 +1845,9 @@ export function ChatSidebar({
               onClick={() => {
                 if (!deleteTarget) return
                 if (deleteTarget.type === "employee" && deleteTarget.sessions) {
-                  void handleDeleteEmployee(deleteTarget.id, deleteTarget.sessions)
+                  handleDeleteEmployee(deleteTarget.id, deleteTarget.sessions)
                 } else {
-                  void handleDelete(deleteTarget.id)
+                  handleDelete(deleteTarget.id)
                 }
                 setDeleteTarget(null)
               }}

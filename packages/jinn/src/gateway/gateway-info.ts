@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { safeWriteFile } from "../shared/safe-write.js";
-import { generateApiToken } from "./auth.js";
 
 export interface GatewayInfo { port: number; host?: string; secret: string; pid: number; token?: string; ptyPids?: number[]; }
 

@@ -439,7 +439,7 @@ export function isNativeClaudeCommand(prompt: string): boolean {
  *  bash-mode, and jinn-skill slash commands, while letting engine-native commands
  *  (/compact, /clear, /model, …) pass through raw so the TUI actually runs them.
  *  Shared by injectPrompt() (warm-PTY first turn) and writeStdin() (raw WS input). */
-export function pasteAndSubmit(proc: Pick<pty.IPty, "write">, text: string): void {
+export function pasteAndSubmit(proc: Pick<IPty, "write">, text: string): void {
   const payload = neutralizeForPaste(text);
   proc.write(`\x1b[200~${payload}\x1b[201~`);
   setTimeout(() => proc.write("\r"), 150);
@@ -646,7 +646,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       native: nativeCommand,
       shouldDeferStopFailure: () => this.hasActiveUpstream(jinnSessionId),
     });
-    const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: pty.IPty; activeTools: number } = {
+    const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: IPty; activeTools: number } = {
       resolver,
       onStream: opts.onStream,
       activeTools: 0,
@@ -681,13 +681,13 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
         this.lifecycle.turnStarted(jinnSessionId);
         turnMarkedStarted = true;
         this.injectPrompt(warm, opts);
-        entry.boundProc = (warm as any)._proc as pty.IPty | undefined;
+        entry.boundProc = (warm as any)._proc as IPty | undefined;
       } else {
         const handle = await this.spawn(jinnSessionId, opts, settingsPath);
         this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
         this.lifecycle.turnStarted(jinnSessionId);
         turnMarkedStarted = true;
-        entry.boundProc = (handle as any)._proc as pty.IPty | undefined;
+        entry.boundProc = (handle as any)._proc as IPty | undefined;
       }
 
       // Watchdog: if the bound PTY dies without the resolver settling (e.g. the

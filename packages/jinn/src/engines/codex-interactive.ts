@@ -45,7 +45,7 @@ interface CodexSpawnParams {
   cliFlags?: string[];
 }
 
-function pasteAndSubmit(proc: pty.IPty, text: string): void {
+function pasteAndSubmit(proc: IPty, text: string): void {
   const payload = neutralizeForPaste(text);
   proc.write(`\x1b[200~${payload}\x1b[201~\r`);
 }
@@ -355,7 +355,7 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
       else turn.interrupt("Interrupted: codex PTY unavailable");
     } else {
       const handle = this.spawn(jinnSessionId, opts, prompt, codexSessionId);
-      turn.boundProc = (handle as any)._proc as pty.IPty | undefined;
+      turn.boundProc = (handle as any)._proc as IPty | undefined;
       this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
       this.lifecycle.turnStarted(jinnSessionId);
     }

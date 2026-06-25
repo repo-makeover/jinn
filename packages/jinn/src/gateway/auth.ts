@@ -414,3 +414,107 @@ export function cleanupExpiredPairingCodes(store: PairingCodeStore = pairingCode
     if (entry.expiresAt < now) store.delete(hash);
   }
 }
+
+// ── PTY access tokens ─────────────────────────────────────────────────────────
+// Short-lived HMAC tokens that bind a session id to a gateway secret so the
+// WebSocket pty upgrade can be authenticated without an auth-cookie round-trip.
+
+const PTY_TOKEN_TTL_MS = 60_000; // 60 s
+
+export function createPtyAccessToken(sessionId: string, secret: string, now = Date.now()): string {
+  const expiresAt = now + PTY_TOKEN_TTL_MS;
+  const payload = `${sessionId}:${expiresAt}`;
+  const sig = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+export function verifyPtyAccessToken(sessionId: string, token: string, secret: string, now = Date.now()): boolean {
+  try {
+    const lastDot = token.lastIndexOf(".");
+    if (lastDot < 0) return false;
+    const payload = token.slice(0, lastDot);
+    const sig = token.slice(lastDot + 1);
+    const [sid, expiresStr] = payload.split(":");
+    if (sid !== sessionId) return false;
+    const expiresAt = Number(expiresStr);
+    if (!Number.isFinite(expiresAt) || now > expiresAt) return false;
+    const expected = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+    return safeEqual(sig, expected);
+  } catch {
+    return false;
+  }
+}
+
+// ── Simple authenticated-request check ───────────────────────────────────────
+
+export function isAuthenticatedRequest(
+  req: Pick<IncomingMessage, "headers">,
+  expectedToken: string | undefined,
+): boolean {
+  if (!expectedToken) return false;
+  const headers = req.headers as Record<string, string | string[] | undefined>;
+  // Bearer token
+  const authHeaderRaw = headers["authorization"];
+  const authHeader = Array.isArray(authHeaderRaw) ? authHeaderRaw[0] : authHeaderRaw;
+  if (typeof authHeader === "string") {
+    const [scheme, ...rest] = authHeader.trim().split(/\s+/);
+    if (scheme?.toLowerCase() === "bearer" && safeEqual(rest.join(" "), expectedToken)) return true;
+  }
+  // X-Jinn-Token header
+  const xToken = headers["x-jinn-token"];
+  const xTokenValue = Array.isArray(xToken) ? xToken[0] : xToken;
+  if (typeof xTokenValue === "string" && safeEqual(xTokenValue, expectedToken)) return true;
+  // Auth cookie
+  const cookieRaw = headers["cookie"];
+  const cookie = Array.isArray(cookieRaw) ? cookieRaw[0] : cookieRaw;
+  const parsed = parseCookieHeader(cookie);
+  if (parsed[AUTH_COOKIE] && safeEqual(parsed[AUTH_COOKIE], expectedToken)) return true;
+  return false;
+}
+
+// ── Auth API request handler ──────────────────────────────────────────────────
+
+import type { ServerResponse } from "node:http";
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); } catch { resolve({}); }
+    });
+    req.on("error", reject);
+  });
+}
+
+function jsonResponse(res: ServerResponse, status: number, body: unknown, extraHeaders?: Record<string, string>): void {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, { "Content-Type": "application/json", ...extraHeaders });
+  res.end(payload);
+}
+
+export async function handleAuthApiRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  method: string,
+  expectedToken: string | undefined,
+): Promise<boolean> {
+  if (pathname === "/api/auth/login" && method === "POST") {
+    const body = await readJsonBody(req) as Record<string, unknown>;
+    if (typeof body.token === "string" && expectedToken && safeEqual(body.token, expectedToken)) {
+      jsonResponse(res, 200, { ok: true }, {
+        "Set-Cookie": authCookieHeader(expectedToken),
+      });
+    } else {
+      jsonResponse(res, 401, { error: "Invalid token" });
+    }
+    return true;
+  }
+  return false;
+}
+
+export function unauthorized(res: ServerResponse): void {
+  jsonResponse(res, 401, { error: "Authentication required" });
+}

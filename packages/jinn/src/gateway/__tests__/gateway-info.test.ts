@@ -14,8 +14,8 @@ describe("gateway-info", () => {
     expect(info.pid).toBe(1234);
     expect(typeof info.secret).toBe("string");
     expect(info.secret.length).toBeGreaterThanOrEqual(32);
-    expect(typeof info.apiToken).toBe("string");
-    expect(info.apiToken.length).toBeGreaterThanOrEqual(32);
+    expect(typeof info.token).toBe("string");
+    expect((info.token ?? "").length).toBeGreaterThanOrEqual(32);
     expect(readGatewayInfo(file)).toEqual(info);
   });
 
