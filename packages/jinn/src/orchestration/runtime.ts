@@ -12,6 +12,7 @@ import { PersistentMatrixScheduler } from "./persistent-scheduler.js";
 import { queueTaskKey } from "./scheduler.js";
 import { filterWorkersWithHeadroom, type HeadroomFilterResult } from "./routing-headroom.js";
 import { OrchestrationStore, type HoldRecord, type QueuePauseState, type TaskPauseRecord } from "./store.js";
+import { DEFAULT_MAX_LIVE_CONTINUATION_RETRIES } from "./store-continuations.js";
 import { computeWorkerScores, readOrchestrationTelemetry } from "./telemetry.js";
 import {
   DEFAULT_LEASE_DURATION_MS,
@@ -354,6 +355,13 @@ export class OrchestrationRuntime {
         ok: false,
         reason: "invalid_state",
         message: `live continuation ${taskId}/${coordinatorId} is ${current.state}; only failed continuations can be retried manually`,
+      };
+    }
+    if (current.retryCount >= DEFAULT_MAX_LIVE_CONTINUATION_RETRIES) {
+      return {
+        ok: false,
+        reason: "invalid_state",
+        message: `live continuation ${taskId}/${coordinatorId} reached retry limit (${current.retryCount})`,
       };
     }
 

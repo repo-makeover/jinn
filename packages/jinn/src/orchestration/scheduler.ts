@@ -170,7 +170,7 @@ export class MatrixScheduler {
   }
 
   heartbeatLease(leaseId: string, coordinatorId?: string): Lease {
-    const lease = this.getRunningLease(leaseId);
+    const lease = this.getLiveLease(leaseId);
     if (coordinatorId && lease.coordinatorId !== coordinatorId) {
       throw new Error(`lease ${leaseId} belongs to coordinator ${lease.coordinatorId}`);
     }
@@ -187,7 +187,7 @@ export class MatrixScheduler {
   }
 
   releaseLease(leaseId: string, coordinatorId?: string): Lease {
-    const lease = this.getRunningLease(leaseId);
+    const lease = this.getLiveLease(leaseId);
     if (coordinatorId && lease.coordinatorId !== coordinatorId) {
       throw new Error(`lease ${leaseId} belongs to coordinator ${lease.coordinatorId}`);
     }
@@ -307,9 +307,9 @@ export class MatrixScheduler {
   }
 
   resolveLease(selector: { leaseId?: string; taskId?: string; role?: string; workerId?: string }): Lease {
-    if (selector.leaseId) return this.getRunningLease(selector.leaseId);
+    if (selector.leaseId) return this.getLiveLease(selector.leaseId);
     const matches = this.listLeases().filter((lease) => {
-      if (lease.state !== "running") return false;
+      if (!this.isLeaseLive(lease)) return false;
       if (selector.taskId && lease.taskId !== selector.taskId) return false;
       if (selector.role && lease.role !== selector.role) return false;
       if (selector.workerId && lease.workerId !== selector.workerId) return false;
@@ -457,7 +457,7 @@ export class MatrixScheduler {
       familyCounts: new Map(),
     };
     for (const lease of this.leases.values()) {
-      if (lease.state !== "running") continue;
+      if (!this.isLeaseLive(lease)) continue;
       const worker = this.workers.find((candidate) => candidate.id === lease.workerId);
       if (!worker) continue;
       this.reserve(worker, state);
@@ -517,11 +517,16 @@ export class MatrixScheduler {
     };
   }
 
-  private getRunningLease(leaseId: string): Lease {
+  private getLiveLease(leaseId: string): Lease {
     const lease = this.leases.get(leaseId);
     if (!lease) throw new Error(`unknown lease: ${leaseId}`);
     if (lease.state !== "running") throw new Error(`lease ${leaseId} is ${lease.state}`);
+    if (!this.isLeaseLive(lease)) throw new Error(`lease ${leaseId} is expired`);
     return lease;
+  }
+
+  private isLeaseLive(lease: Lease): boolean {
+    return lease.state === "running" && Date.parse(lease.leaseExpiresAt) > this.now().getTime();
   }
 
   private isoNow(): string {

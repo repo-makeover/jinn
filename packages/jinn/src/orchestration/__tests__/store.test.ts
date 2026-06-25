@@ -184,6 +184,40 @@ describe("OrchestrationStore", () => {
     reopened.close();
   });
 
+  it("blocks active continuation overwrite and fails queued work at the retry cap", () => {
+    const store = OrchestrationStore.open(dbPath);
+    const record = {
+      taskId: "task-live",
+      coordinatorId: "coord-live",
+      mode: "single_worker" as const,
+      state: "queued" as const,
+      task: {
+        taskId: "task-live",
+        coordinatorId: "coord-live",
+        priority: "normal" as const,
+        leaseDurationMs: 60_000,
+        prompt: "Resume me later",
+      },
+      enqueuedAt: fixedNow.toISOString(),
+      updatedAt: fixedNow.toISOString(),
+      retryCount: 3,
+    };
+
+    store.upsertLiveContinuation(record);
+
+    expect(() => store.upsertLiveContinuation({ ...record, updatedAt: new Date(fixedNow.getTime() + 1).toISOString() })).toThrow(/active/);
+    expect(store.claimQueuedLiveContinuation("task-live", "coord-live", {
+      updatedAt: new Date(fixedNow.getTime() + 2).toISOString(),
+      allocationId: "alloc-capped",
+    })).toBeUndefined();
+    expect(store.getLiveContinuation("task-live", "coord-live")).toMatchObject({
+      state: "failed",
+      retryCount: 3,
+      lastError: expect.stringContaining("retry limit reached"),
+    });
+    store.close();
+  });
+
   it("expireHoldsInDb transitions active-but-overdue holds to expired state", () => {
     const store = OrchestrationStore.open(dbPath);
     const expiresAt = new Date(fixedNow.getTime() - 1).toISOString();
@@ -248,6 +282,7 @@ describe("OrchestrationStore", () => {
     store.addArtifactRecord({
       artifactId: "artifact-1",
       taskId: "task-paused",
+      coordinatorId: "coord-paused",
       kind: "diff",
       lane: "openai",
       path: path.join(tmpDir, "diff.patch"),

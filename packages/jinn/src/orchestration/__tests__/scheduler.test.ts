@@ -467,6 +467,22 @@ describe("MatrixScheduler", () => {
     expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-1", "coord-1")).toEqual({ ok: true });
   });
 
+  it("rejects heartbeat for expired but unswept leases", () => {
+    let now = fixedNow;
+    const s = new MatrixScheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]), {
+      now: () => now,
+    });
+    const result = s.requestAllocation(request({ leaseDurationMs: 1_000 }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const leaseId = result.allocation.leases[0].leaseId;
+
+    now = new Date("2026-06-23T12:00:01.001Z");
+
+    expect(() => s.heartbeatLease(leaseId, "coord-1")).toThrow(/expired/);
+    expect(s.validateLeaseForWorker("codexSenior", leaseId, "task-1", "coord-1")).toEqual({ ok: false, reason: "lease_expired" });
+  });
+
   it("retries queued work by priority", () => {
     const s = scheduler(config([worker({ id: "codexSenior", provider: "openai", family: "openai" })]));
     const first = s.requestAllocation(request({ taskId: "running" }));

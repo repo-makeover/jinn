@@ -4,6 +4,8 @@ import type { LiveRunContinuationRecord, LiveRunContinuationState } from "./live
 import { QUEUE_PAUSE_META_KEY } from "./store-schema.js";
 import { parseDbJson, setMeta } from "./store-utils.js";
 
+export const DEFAULT_MAX_LIVE_CONTINUATION_RETRIES = 3;
+
 export interface QueuePauseState {
   queuePaused: boolean;
   pausedAt: string | null;
@@ -57,6 +59,10 @@ export function getLiveContinuationFromDb(
 }
 
 export function upsertLiveContinuationInDb(db: Database.Database, record: LiveRunContinuationRecord): void {
+  const existing = getLiveContinuationFromDb(db, record.taskId, record.coordinatorId);
+  if (existing && (existing.state === "queued" || existing.state === "dispatching")) {
+    throw new Error(`live continuation ${record.taskId}/${record.coordinatorId} is active (${existing.state}) and cannot be overwritten`);
+  }
   db.prepare(`
     INSERT INTO live_run_continuations (
       task_id, coordinator_id, mode, state, task_json, enqueued_at, updated_at,
@@ -98,15 +104,31 @@ export function claimQueuedLiveContinuationInDb(
   db: Database.Database,
   taskId: string,
   coordinatorId: string,
-  opts: { updatedAt?: string; allocationId?: string } = {},
+  opts: { updatedAt?: string; allocationId?: string; maxRetryCount?: number } = {},
 ): LiveRunContinuationRecord | undefined {
   const updatedAt = opts.updatedAt ?? new Date().toISOString();
+  const maxRetryCount = opts.maxRetryCount ?? DEFAULT_MAX_LIVE_CONTINUATION_RETRIES;
   const claim = db.transaction(() => {
     const current = db.prepare(`
       SELECT * FROM live_run_continuations
       WHERE task_id = ? AND coordinator_id = ?
     `).get(taskId, coordinatorId) as LiveRunContinuationRow | undefined;
     if (!current || current.state !== "queued") return undefined;
+    if (current.retry_count >= maxRetryCount) {
+      db.prepare(`
+        UPDATE live_run_continuations
+        SET state = ?, updated_at = ?, allocation_id = NULL, last_error = ?
+        WHERE task_id = ? AND coordinator_id = ? AND state = ?
+      `).run(
+        "failed",
+        updatedAt,
+        `retry limit reached after ${current.retry_count} attempt(s)`,
+        taskId,
+        coordinatorId,
+        "queued",
+      );
+      return undefined;
+    }
     db.prepare(`
       UPDATE live_run_continuations
       SET state = ?, updated_at = ?, retry_count = ?, last_dispatched_at = ?, allocation_id = ?, last_error = NULL
