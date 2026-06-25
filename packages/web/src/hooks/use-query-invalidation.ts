@@ -119,12 +119,6 @@ export function useQueryInvalidation() {
             case 'engines':
               qc.invalidateQueries({ queryKey: queryKeys.engines.all })
               break
-            case 'approvals':
-              qc.invalidateQueries({ queryKey: queryKeys.approvals.all })
-              break
-            case 'work':
-              qc.invalidateQueries({ queryKey: queryKeys.work.all })
-              break
             case 'config':
               qc.invalidateQueries({ queryKey: queryKeys.config })
               break

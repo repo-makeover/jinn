@@ -121,7 +121,7 @@ export function findExistingSkill(name: string): { name: string; dir: string } |
 }
 
 export function runNpxSkills(args: string[], stdio: "inherit" | "pipe" = "inherit"): ReturnType<typeof spawnSync> {
-  return spawnSync("npx", ["--yes", SKILLS_NPX_SPEC, ...args], {
+  return spawnSync("npx", ["skills", ...args], {
     stdio,
     shell: false,
   });

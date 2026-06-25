@@ -64,6 +64,8 @@ export function rateLimitTimeoutError(engine: string): string {
   return `${rateLimitSummary(engine)} did not clear in time`;
 }
 
+const WAIT_CANCEL_POLL_MS = 5000;
+
 /** What detectRateLimit returned for the original turn. */
 export interface RateLimitInfo {
   /** Unix timestamp (seconds) when the limit is expected to reset, if known. */
@@ -393,6 +395,18 @@ export async function handleRateLimit(opts: RateLimitHandlerOpts): Promise<RateL
   } finally {
     clearInterval(heartbeat);
   }
+}
+
+async function waitWhileSessionWaiting(sessionId: string, delayMs: number): Promise<boolean> {
+  const end = Date.now() + Math.max(0, delayMs);
+  while (Date.now() < end) {
+    const currentSession = getSession(sessionId);
+    if (!currentSession || currentSession.status !== "waiting") return false;
+    const sleepMs = Math.min(WAIT_CANCEL_POLL_MS, end - Date.now());
+    if (sleepMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, sleepMs));
+  }
+  const currentSession = getSession(sessionId);
+  return !!currentSession && currentSession.status === "waiting";
 }
 
 async function waitWhileSessionWaiting(sessionId: string, delayMs: number): Promise<boolean> {

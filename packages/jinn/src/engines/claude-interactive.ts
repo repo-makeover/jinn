@@ -439,7 +439,7 @@ export function isNativeClaudeCommand(prompt: string): boolean {
  *  bash-mode, and jinn-skill slash commands, while letting engine-native commands
  *  (/compact, /clear, /model, …) pass through raw so the TUI actually runs them.
  *  Shared by injectPrompt() (warm-PTY first turn) and writeStdin() (raw WS input). */
-export function pasteAndSubmit(proc: Pick<IPty, "write">, text: string): void {
+export function pasteAndSubmit(proc: Pick<pty.IPty, "write">, text: string): void {
   const payload = neutralizeForPaste(text);
   proc.write(`\x1b[200~${payload}\x1b[201~`);
   setTimeout(() => proc.write("\r"), 150);
@@ -643,10 +643,10 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     const resolver = new TurnResolver({
       fallbackSessionId: opts.resumeSessionId,
       assumeStarted: !!warm, // warm PTY = SessionStart already fired (turn 1 or idle spawn)
-      shouldDeferStopFailure: () => this.hasActiveUpstream(jinnSessionId),
       native: nativeCommand,
+      shouldDeferStopFailure: () => this.hasActiveUpstream(jinnSessionId),
     });
-    const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: IPty; activeTools: number } = {
+    const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: pty.IPty; activeTools: number } = {
       resolver,
       onStream: opts.onStream,
       activeTools: 0,
@@ -662,10 +662,9 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       // Register BEFORE spawning so a fast SessionStart is buffered+drained, not lost.
       this.hookRegistry.register(jinnSessionId, (h) => {
         resolver.onHook(h);
-        // tool_use markers + intermediate text now stream from the per-PTY SSE proxy
-        // (content_block_start / content_block_delta) in true order. The hook only
-        // supplies tool_result — the assistant SSE stream has no tool_result event
-        // (tools execute locally between assistant messages).
+        // tool_use markers + intermediate text stream from the per-PTY SSE proxy
+        // in true order. The hook only supplies tool_result; SSE has no local tool
+        // completion event because tools execute between assistant messages.
         if (h.hook_event_name === "PreToolUse") {
           entry.activeTools += 1;
         }
@@ -682,13 +681,13 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
         this.lifecycle.turnStarted(jinnSessionId);
         turnMarkedStarted = true;
         this.injectPrompt(warm, opts);
-        entry.boundProc = (warm as any)._proc as IPty | undefined;
+        entry.boundProc = (warm as any)._proc as pty.IPty | undefined;
       } else {
         const handle = await this.spawn(jinnSessionId, opts, settingsPath);
         this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
         this.lifecycle.turnStarted(jinnSessionId);
         turnMarkedStarted = true;
-        entry.boundProc = (handle as any)._proc as IPty | undefined;
+        entry.boundProc = (handle as any)._proc as pty.IPty | undefined;
       }
 
       // Watchdog: if the bound PTY dies without the resolver settling (e.g. the
@@ -790,7 +789,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       const recovered = recoveryPath ? lastAssistantTextFromTranscript(recoveryPath, turnStartedAt) : undefined;
       if (recovered) {
         logger.info(`Recovered ${recovered.length} chars of lost turn text for session ${jinnSessionId} from transcript (Stop hook missing)`);
-        result.result = recovered;
+        result.result = stripReasoningBlocks(recovered);
       }
     }
     // Map a StopFailure rate-limit into result.rateLimit so manager.ts's
@@ -1113,9 +1112,10 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       const text = String(h.last_assistant_message ?? "");
       const sid = typeof h.session_id === "string" ? h.session_id : "";
       this.cancelLateRecovery(jinnSessionId);
-      if (text.trim()) {
+      const safeText = stripReasoningBlocks(text);
+      if (safeText.trim()) {
         logger.info(`InteractiveClaudeEngine: late Stop superseded failed turn for ${jinnSessionId}`);
-        opts.onLateRecovery?.({ result: text, sessionId: sid });
+        opts.onLateRecovery?.({ result: safeText, sessionId: sid });
       } else {
         logger.info(`InteractiveClaudeEngine: late Stop with no text for ${jinnSessionId} — recovery abandoned`);
       }

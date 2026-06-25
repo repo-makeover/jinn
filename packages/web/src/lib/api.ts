@@ -1,4 +1,5 @@
 import type { TalkGraphNodeWire } from '@/routes/talk/protocol'
+import { authFetch } from "@/lib/auth"
 
 export interface TranscriptContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
@@ -76,86 +77,6 @@ export interface OrgData {
   hierarchy: OrgHierarchy;
 }
 
-export interface DispatchTicketResponse {
-  status: string
-  sessionId: string
-}
-
-export interface TicketSessionTailMessage {
-  role: 'user' | 'assistant' | 'notification'
-  text: string
-  ts: number
-  kind: 'message' | 'notification' | 'tool_call' | 'partial'
-  toolCall?: string
-}
-
-export interface TicketSessionResponse {
-  found: boolean
-  sessionId?: string
-  status?: 'idle' | 'running' | 'error' | 'waiting' | 'interrupted'
-  engine?: string | null
-  model?: string | null
-  employee?: string | null
-  totalCost?: number
-  lastActivityIso?: string | null
-  lastActivityAgoMs?: number | null
-  stalled?: boolean
-  stalledForMs?: number | null
-  failureReason?: string | null
-  fallback?: {
-    active: boolean
-    fromEngine: string | null
-    toEngine: string | null
-    toModel: string | null
-  } | null
-  lastError?: string | null
-  messages?: TicketSessionTailMessage[]
-}
-
-export type DepartmentBoardTicketStatus =
-  | 'backlog'
-  | 'todo'
-  | 'in_progress'
-  | 'review'
-  | 'done'
-  | 'blocked'
-export type DepartmentBoardTicketPriority = 'low' | 'medium' | 'high'
-export type DepartmentBoardTicketComplexity = 'low' | 'medium' | 'high'
-
-export interface DepartmentBoardTicket {
-  id: string
-  title: string
-  description?: string
-  status: DepartmentBoardTicketStatus
-  priority?: DepartmentBoardTicketPriority
-  complexity?: DepartmentBoardTicketComplexity
-  assignee?: string
-  source?: string
-  sessionId?: string
-  createdAt?: string
-  updatedAt?: string
-  baseUpdatedAt?: string
-  deletedAt?: string
-}
-
-export interface DepartmentBoardResponse {
-  tickets: DepartmentBoardTicket[]
-  deletedTickets: DepartmentBoardTicket[]
-  retentionDays: number
-}
-
-export interface UpdateDepartmentBoardPayload {
-  tickets: DepartmentBoardTicket[]
-  deletedIds?: string[]
-  deletedVersions?: Record<string, string>
-  retentionDays?: number
-}
-
-const BASE =
-  typeof window !== "undefined"
-    ? window.location.origin
-    : "http://127.0.0.1:7777";
-
 async function extractErrorMessage(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -168,13 +89,13 @@ async function extractErrorMessage(res: Response): Promise<string> {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { credentials: "include" });
+  const res = await authFetch(path);
   if (!res.ok) throw new Error(await extractErrorMessage(res));
   return res.json();
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await authFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -185,13 +106,13 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { method: "DELETE", credentials: "include" });
+  const res = await authFetch(path, { method: "DELETE" });
   if (!res.ok) throw new Error(await extractErrorMessage(res));
   return res.json();
 }
 
 async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await authFetch(path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -202,7 +123,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function patch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await authFetch(path, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -251,7 +172,7 @@ export interface EngineRegistryEntry {
   name: string;
   available: boolean;
   defaultModel: string;
-  effortMechanism: "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "kiro-flag" | "none";
+  effortMechanism: "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "none";
   models: ModelInfo[];
 }
 export interface EnginesResponse {
@@ -285,7 +206,6 @@ export interface EngineLimitCredits {
   remainingPercent?: number;
   resetsAt?: number;
   resetsAtIso?: string;
-  estimated?: boolean;
 }
 
 export interface EngineLimitBucket {
@@ -557,7 +477,7 @@ export const api = {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5 * 60_000); // 5 min timeout
     try {
-      const res = await fetch(`${BASE}/api/stt/transcribe${params}`, {
+      const res = await authFetch(`/api/stt/transcribe${params}`, {
         method: "POST",
         headers: { "Content-Type": audioBlob.type || "audio/webm" },
         credentials: "include",
@@ -678,7 +598,7 @@ export const api = {
     form.append('file', file)
     // When known, scope the upload to the session so it lands in the date-bucketed uploads dir.
     if (sessionId) form.append('sessionId', sessionId)
-    const res = await fetch(`${BASE}/api/files`, { method: 'POST', body: form, credentials: "include" })
+    const res = await authFetch("/api/files", { method: 'POST', body: form })
     if (!res.ok) throw new Error(await extractErrorMessage(res))
     return res.json()
   },

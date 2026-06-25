@@ -194,3 +194,40 @@ describe("handleRateLimit — wait cancellation", () => {
     expect(retryEngine.run).not.toHaveBeenCalled();
   });
 });
+
+describe("handleRateLimit — wait cancellation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("cancels a long wait when the session leaves waiting status", async () => {
+    vi.useFakeTimers();
+    engineAvailableMock.mockReturnValue(false);
+    vi.mocked(computeNextRetryDelayMs).mockReturnValue({ delayMs: 10_000, resumeAt: undefined });
+    vi.mocked(computeRateLimitDeadlineMs).mockReturnValue(Date.now() + 60_000);
+
+    let status: Session["status"] = "waiting";
+    getSessionMock.mockImplementation(() => makeSession({ status }));
+    const retryEngine = { run: vi.fn(async () => ({ result: "retry", sessionId: "claude-thread-1" }) as EngineResult) };
+    const opts = {
+      ...makeOpts(vi.fn()),
+      config: {
+        sessions: { rateLimitStrategy: "wait" },
+        engines: { claude: { bin: "claude", model: "opus" } },
+      } as unknown as RateLimitHandlerOpts["config"],
+      engine: retryEngine as unknown as RateLimitHandlerOpts["engine"],
+      hooks: {
+        onWaitingStart: () => {
+          setTimeout(() => { status = "idle"; }, 1000);
+        },
+      },
+    } satisfies RateLimitHandlerOpts;
+
+    const outcomePromise = handleRateLimit(opts);
+    await vi.advanceTimersByTimeAsync(5000);
+    const outcome = await outcomePromise;
+
+    expect(outcome.kind).toBe("cancelled");
+    expect(retryEngine.run).not.toHaveBeenCalled();
+  });
+});

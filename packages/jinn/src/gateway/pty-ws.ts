@@ -41,7 +41,7 @@ export function attachPtyWebSocket(ws: WebSocket, sessionId: string, engine: Pty
         engineSessionId: session?.engineSessionId ?? undefined,
         model: session?.model ?? undefined,
         effortLevel: session?.effortLevel ?? undefined,
-        cwd: session?.cwd || JINN_HOME,
+        cwd: JINN_HOME,
         cols,
         rows,
       });

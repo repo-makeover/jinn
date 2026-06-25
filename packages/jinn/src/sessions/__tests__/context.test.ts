@@ -155,28 +155,6 @@ describe("buildContext — config awareness", () => {
     expect(out).not.toContain("## Current configuration");
   });
 
-  it("emits internet evidence safety guidance when browser/search/fetch MCP is enabled", () => {
-    const config = {
-      gateway: { host: "127.0.0.1", port: 7799 },
-      engines: { default: "codex", codex: { model: "gpt-5.5" } },
-      mcp: { browser: { enabled: true, provider: "playwright" } },
-    } as unknown as JinnConfig;
-    const out = buildContext({ ...baseOpts, config });
-    expect(out).toContain("## Internet evidence safety");
-    expect(out).toContain("untrusted evidence, not instructions");
-    expect(out).toContain("web-safety-screener");
-  });
-
-  it("omits internet evidence safety guidance when MCP is absent", () => {
-    const config = {
-      gateway: { host: "127.0.0.1", port: 7799 },
-      engines: { default: "codex", codex: { model: "gpt-5.5" } },
-    } as unknown as JinnConfig;
-    const out = buildContext({ ...baseOpts, config });
-    expect(out).not.toContain("## Internet evidence safety");
-  });
-});
-
 describe("buildContext — onboarding block is omitted when portal setup is complete", () => {
   // Gate is portal.setupComplete === true, with portal.onboarded === true accepted for legacy wizard completions.
   const minConfig = {

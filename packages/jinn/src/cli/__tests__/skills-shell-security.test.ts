@@ -14,7 +14,7 @@ describe("skills CLI process spawning", () => {
 
     expect(spawnSync).toHaveBeenCalledWith(
       "npx",
-      ["--yes", "skills@1.5.12", "add", "owner/repo; touch /tmp/pwned", "-g", "-y"],
+      ["skills", "add", "owner/repo; touch /tmp/pwned", "-g", "-y"],
       { stdio: "pipe", shell: false },
     );
   });

@@ -77,6 +77,13 @@ interface AntigravitySpawnParams {
   bin?: string;
 }
 
+interface AntigravitySpawnParams {
+  resumeSessionId?: string;
+  cwd?: string;
+  model?: string;
+  bin?: string;
+}
+
 export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
   name = "antigravity" as const;
   private active = new Map<string, ActiveTurn>();
@@ -246,8 +253,8 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
       this.lifecycle.turnStarted(jinnSessionId);
       this.injectPrompt(warm, opts);
     } else {
-      const handle = await this.spawn(jinnSessionId, opts, cwd, convId);
-      turn.boundProc = (handle as any)._proc as IPty | undefined;
+      const handle = this.spawn(jinnSessionId, opts, cwd, convId);
+      turn.boundProc = (handle as any)._proc as pty.IPty | undefined;
       this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
       this.lifecycle.turnStarted(jinnSessionId);
     }
@@ -291,7 +298,7 @@ export class AntigravityEngine implements InterruptibleEngine, PtyViewEngine {
     if (prev && !prev.resumeSessionId) this.spawnParams.set(jinnSessionId, { ...prev, resumeSessionId });
   }
 
-  private async spawn(jinnSessionId: string, opts: EngineRunOpts, cwd: string, resumeConvId: string | undefined): Promise<PtyHandle> {
+  private spawn(jinnSessionId: string, opts: EngineRunOpts, cwd: string, resumeConvId: string | undefined): PtyHandle {
     const bin = resolveBin("agy", opts.bin);
     const args = this.buildArgs(resumeConvId, opts.model);
     const geom = this.lastGeom.get(jinnSessionId);

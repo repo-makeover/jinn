@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Employee, JinnConfig } from "../shared/types.js";
 import { JINN_HOME, ORG_DIR, CRON_JOBS, DOCS_DIR } from "../shared/paths.js";
-import { getAllParents } from "../gateway/org-hierarchy.js";
+import { gatewayBaseUrl } from "../gateway/gateway-info.js";
 
 /**
  * Token budget strategy:
@@ -100,7 +100,7 @@ export function buildContext(opts: {
 
   // Compute gateway URL once — used by multiple sections
   const gatewayUrl = opts.config
-    ? `http://${opts.config.gateway.host || "127.0.0.1"}:${opts.config.gateway.port || 7777}`
+    ? gatewayBaseUrl({ port: opts.config.gateway.port || 7777, host: opts.config.gateway.host })
     : "http://127.0.0.1:7777";
 
   // Resolve personalized names from config
@@ -738,10 +738,11 @@ export function buildOnboardingContext(opts: {
  */
 function buildApiReference(gatewayUrl: string, portalName: string, employee?: Employee, directReportCount = 0): string {
   const header = `## ${portalName} Gateway API (base URL: ${gatewayUrl})`;
+  const authLine = `Privileged endpoints require local gateway auth; the web UI and built-in delegation tools handle this automatically.`;
   const attachmentsLine =
     `- Push a file/image into this chat (web view): \`curl -X POST ${gatewayUrl}/api/sessions/<your-session-id>/attachments -H 'Content-Type: application/json' -d '{"path":"/abs/path","text":"caption"}'\``;
   if (!employee) {
-    return `${header}\nThe full endpoint reference is in CLAUDE.md / AGENTS.md (auto-loaded). Substitute the base URL above.\n${attachmentsLine}`;
+    return `${header}\n${authLine}\nThe full endpoint reference is in CLAUDE.md / AGENTS.md (auto-loaded). Substitute the base URL above.\n${attachmentsLine}`;
   }
   // Anyone who supervises reports needs the delegation endpoints. The caller
   // passes a count of ALL reportsTo edges (primary + secondary), so a reviewer's
@@ -750,6 +751,7 @@ function buildApiReference(gatewayUrl: string, portalName: string, employee?: Em
   if (employee.rank === "manager" || employee.rank === "executive" || directReportCount > 0) {
     return [
       header,
+      authLine,
       `- Delegate to another employee: \`POST ${gatewayUrl}/api/sessions\` with \`{prompt, employee, parentSessionId}\``,
       `- Follow up on a child session: \`POST ${gatewayUrl}/api/sessions/:id/message\` with \`{message}\``,
       `- Read a child's latest replies: \`GET ${gatewayUrl}/api/sessions/:id?last=N\``,
@@ -758,7 +760,7 @@ function buildApiReference(gatewayUrl: string, portalName: string, employee?: Em
       `Full endpoint table: CLAUDE.md / AGENTS.md.`,
     ].join("\n");
   }
-  return [header, attachmentsLine, `Full endpoint table: CLAUDE.md / AGENTS.md.`].join("\n");
+  return [header, authLine, attachmentsLine, `Full endpoint table: CLAUDE.md / AGENTS.md.`].join("\n");
 }
 
 /**

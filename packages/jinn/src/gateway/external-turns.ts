@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import { logger } from "../shared/logger.js";
-import { getSession, getMessages, insertMessage, updateMessageContent, updateSession, patchSessionTransportMeta, initDb, type SessionMessage } from "../sessions/registry.js";
-import { findTranscriptForSession, isPersistableClaudeTranscriptEntry, transcriptEntryText } from "../engines/claude-transcript.js";
-export { isPersistableClaudeTranscriptEntry, transcriptEntryText } from "../engines/claude-transcript.js";
+import { getSession, getMessages, insertMessage, updateMessageContent, updateSession, initDb, type SessionMessage } from "../sessions/registry.js";
+import { findTranscriptForSession } from "../engines/claude-interactive.js";
 import type { HookPayload } from "./hook-registry.js";
 
 /**
@@ -74,6 +73,34 @@ function isInternalNotificationPrompt(content: string): boolean {
   );
 }
 
+export function isPersistableClaudeTranscriptEntry(obj: any): boolean {
+  if (!obj || typeof obj !== "object") return false;
+  const type = obj?.type;
+  if (type !== "user" && type !== "assistant") return false;
+  if (obj.isSidechain === true || obj.isMeta === true) return false;
+  if (obj.sourceToolAssistantUUID || obj.toolUseResult) return false;
+  if (obj.promptSource === "system") return false;
+  if (obj?.origin?.kind === "task-notification") return false;
+  if (obj?.message?.model === "<synthetic>") return false;
+  const raw = obj?.message?.content;
+  if (typeof raw === "string" && isControlText(raw)) return false;
+  return true;
+}
+
+export function transcriptEntryText(obj: any): { role: "user" | "assistant"; content: string } | null {
+  if (!isPersistableClaudeTranscriptEntry(obj)) return null;
+  let content = obj?.message?.content;
+  if (Array.isArray(content)) {
+    content = content
+      .filter((b: Record<string, unknown>) => b?.type === "text")
+      .map((b: Record<string, unknown>) => String(b.text ?? ""))
+      .join("");
+  }
+  if (typeof content !== "string" || !content.trim()) return null;
+  if (isControlText(content)) return null;
+  return { role: obj.type, content: content.trim() };
+}
+
 /**
  * Parse the user/assistant text entries of a Claude transcript newer than
  * `sinceMs`. Sidechain (sub-agent) and meta entries are skipped; array content
@@ -121,6 +148,69 @@ function anchorMsFor(session: { transportMeta: unknown }, sessionId: string): nu
 function setAnchor(sessionId: string, anchorIso: string): void {
   const updated = patchSessionTransportMeta(sessionId, { [TRANSCRIPT_SYNC_META_KEY]: anchorIso });
   if (updated) updateSession(sessionId, { lastActivity: new Date().toISOString() });
+}
+
+function latestTranscriptTimestampIso(transcriptPath: string): string | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return undefined;
+  }
+  let latestMs = 0;
+  let latestIso: string | undefined;
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let obj: any;
+    try { obj = JSON.parse(t); } catch { continue; }
+    const iso = obj?.timestamp;
+    if (typeof iso !== "string") continue;
+    const ms = new Date(iso).getTime();
+    if (!Number.isFinite(ms) || ms <= latestMs) continue;
+    latestMs = ms;
+    latestIso = iso;
+  }
+  return latestIso;
+}
+
+/** Mark a Claude transcript as already owned by the gateway completion path. */
+export function markTranscriptSyncedThrough(sessionId: string, engineSessionId?: string, transcriptPathOverride?: string): void {
+  const session = getSession(sessionId);
+  if (!session || session.engine !== "claude") return;
+  const sid = engineSessionId || session.engineSessionId || undefined;
+  const transcriptPath = transcriptPathOverride || (sid ? findTranscriptForSession(sid) : undefined);
+  const anchorIso = transcriptPath ? latestTranscriptTimestampIso(transcriptPath) : undefined;
+  setAnchor(sessionId, anchorIso ?? new Date().toISOString());
+}
+
+function contentCompatible(persisted: string, transcript: string): boolean {
+  return persisted === transcript || persisted.startsWith(transcript) || transcript.startsWith(persisted);
+}
+
+function rolesCompatible(message: SessionMessage, entry: TranscriptTailEntry): boolean {
+  if (message.role === entry.role) return true;
+  return message.role === "notification" && entry.role === "user" && isInternalNotificationPrompt(entry.content);
+}
+
+function findPersistedSequence(existing: SessionMessage[], entries: TranscriptTailEntry[]): SessionMessage[] | null {
+  const recent = existing.filter((m) => !m.partial).slice(-Math.max(50, entries.length * 4));
+  const matched: SessionMessage[] = [];
+  let cursor = 0;
+  for (const entry of entries) {
+    let found: SessionMessage | undefined;
+    for (; cursor < recent.length; cursor += 1) {
+      const candidate = recent[cursor];
+      if (rolesCompatible(candidate, entry) && contentCompatible(candidate.content, entry.content)) {
+        found = candidate;
+        cursor += 1;
+        break;
+      }
+    }
+    if (!found) return null;
+    matched.push(found);
+  }
+  return matched;
 }
 
 function latestTranscriptTimestampIso(transcriptPath: string): string | undefined {

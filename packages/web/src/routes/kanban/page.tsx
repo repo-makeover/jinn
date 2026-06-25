@@ -160,7 +160,6 @@ function DeleteConfirmDialog({
 
 export default function KanbanPage() {
   useBreadcrumbs([{ label: 'Kanban' }])
-  const { subscribe } = useGateway()
   const [tickets, setTickets] = useState<KanbanStore>({})
   const [employees, setEmployees] = useState<Employee[]>([])
   const [departments, setDepartments] = useState<string[]>([])

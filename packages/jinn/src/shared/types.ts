@@ -1,4 +1,24 @@
-export type StreamDeltaType = "text" | "text_snapshot" | "tool_use" | "tool_result" | "status" | "error" | "context";
+export type StreamDeltaType = "text" | "text_snapshot" | "tool_use" | "tool_result" | "status" | "error" | "context" | "block";
+
+export type ChatBlockType = "task-list";
+export type ChatBlockStatus = "queued" | "running" | "done" | "error";
+export type ChatBlockOp = "put" | "patch" | "remove";
+
+export interface ChatBlock {
+  id: string;
+  type: ChatBlockType;
+  version: number;
+  status?: ChatBlockStatus;
+  sourceEngine?: string;
+  title?: string;
+  summary?: string;
+  payload: JsonObject;
+}
+
+export interface ChatBlockEnvelope {
+  op: ChatBlockOp;
+  block: ChatBlock;
+}
 
 export interface StreamDelta {
   type: StreamDeltaType;
@@ -6,6 +26,8 @@ export interface StreamDelta {
   toolName?: string;
   toolId?: string;
   input?: string;
+  /** Structured chat-view UI update. CLI and connector transports may ignore it. */
+  block?: ChatBlockEnvelope;
 }
 
 export interface Engine {
@@ -17,6 +39,11 @@ export interface InterruptibleEngine extends Engine {
   kill(sessionId: string, reason?: string): void;
   isAlive(sessionId: string): boolean;
   killAll(): void;
+  /** Recycle only IDLE warm PTYs (no in-flight turn), leaving active turns
+   *  untouched. Used on org-reload so the next turn cold-respawns with the fresh
+   *  persona without interrupting a turn that is currently running. Engines with
+   *  no warm-PTY reuse (batch engines spawn fresh per turn) implement this as a
+   *  no-op — there is nothing idle to recycle and live processes are active turns. */
   killIdle(): void;
 }
 
@@ -531,7 +558,7 @@ export interface PortalConfig {
  */
 
 /** How an engine conveys reasoning-effort to its CLI. */
-export type EffortMechanism = "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "kiro-flag" | "none";
+export type EffortMechanism = "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "none";
 
 /** A single model and its capabilities, as exposed to the UI / validation. */
 export interface ModelInfo {
@@ -586,7 +613,6 @@ export interface EngineLimitCredits {
   remainingPercent?: number;
   resetsAt?: number;
   resetsAtIso?: string;
-  estimated?: boolean;
 }
 
 export interface EngineLimitBucket {
@@ -639,6 +665,7 @@ export interface EngineModelsConfig {
   models: ModelConfigEntry[];
 }
 
+/** `models:` block keyed by engine name (claude | codex | antigravity | grok | pi). */
 export type ModelsConfig = Record<string, EngineModelsConfig>;
 
 export interface BoardWorkerScheduleWindow {
@@ -681,18 +708,25 @@ export interface JinnConfig {
     port: number;
     host: string;
     streaming?: boolean;
-    turnStallInactivityMs?: number;
-    turnStallCeilingMs?: number;
-    turnStallRetries?: number;
+    /** Opt-in unsafe local convenience: allow POST /api/files to write a custom managed path. Default false. */
     allowFileCustomPaths?: boolean;
+    /** Opt-in unsafe local convenience: allow POST /api/files {open:true} to open uploaded files. Default false. */
     allowFileOpen?: boolean;
-    fileReadRoots?: string[];
-    allowArbitraryFileRead?: boolean;
-    exposeResolvedFilePaths?: boolean;
+    /** Require token/cookie auth even on loopback. Network binds require auth by default. */
+    authRequired?: boolean;
+    /** Disable gateway auth. Refused on network binds unless insecureAllowUnauthenticatedNetwork is true. */
+    authDisabled?: boolean;
+    /** Explicit escape hatch for unauthenticated 0.0.0.0/LAN/Tailscale binds. */
+    insecureAllowUnauthenticatedNetwork?: boolean;
+    /** Opt-in: when set, POST /api/sessions reads the forwarded SSO identity
+     *  from this request header (set by an auth proxy such as oauth2-proxy,
+     *  Traefik forward-auth, or IAP) and persists it on the session. Accepts a
+     *  single header name or a priority-ordered list. Unset = single-user
+     *  no-op (sessions default to "web-user", header never read). */
     userHeader?: string | string[];
   };
   engines: {
-    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro" | "hermes";
+    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "hermes";
     claude: {
       bin: string;
       model: string;
@@ -704,14 +738,7 @@ export interface JinnConfig {
     antigravity?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     grok?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     pi?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
-    kiro?: {
-      bin?: string;
-      model?: string;
-      effortLevel?: string;
-      childEffortOverride?: string;
-      creditBudget?: number;
-      billingAnchorDay?: number;
-    };
+    /** Hermes (`hermes` CLI) engine. `bin` optional — PATH-resolved. No effort. */
     hermes?: { bin?: string; model?: string };
   };
   models?: ModelsConfig;

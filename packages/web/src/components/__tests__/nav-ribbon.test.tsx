@@ -47,15 +47,6 @@ describe("NavRibbon", () => {
     }
   })
 
-  it("pins Talk at the bottom of the rail above the theme toggle", () => {
-    const { container } = renderRibbon({ listOpen: true, path: "/org" })
-    const labels = Array.from(container.querySelectorAll("nav a[aria-label], nav button[aria-label]"))
-      .map((el) => el.getAttribute("aria-label"))
-
-    expect(labels.slice(-2)).toEqual(["Talk", "Theme: dark"])
-    expect(labels.indexOf("Talk")).toBeGreaterThan(labels.indexOf("Settings"))
-  })
-
   it("marks the active route with aria-current and a non-accent fill", () => {
     renderRibbon({ listOpen: true, path: "/org" })
     const active = screen.getByLabelText("Organization")

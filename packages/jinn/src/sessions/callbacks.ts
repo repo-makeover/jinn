@@ -3,6 +3,8 @@ import { loadConfig } from "../shared/config.js";
 import { assertFetchOk, jsonApiHeaders } from "../gateway/internal-auth.js";
 import { logger } from "../shared/logger.js";
 import type { Session } from "../shared/types.js";
+import { GATEWAY_INFO_FILE } from "../shared/paths.js";
+import { gatewayBaseUrl, readGatewayInfo } from "../gateway/gateway-info.js";
 import { hydrateAllAttachments, talkSessionsAttachedTo } from "../talk/attachments.js";
 import type { SessionNotificationOptions, SessionNotificationSink } from "./notification-sink.js";
 
@@ -217,18 +219,13 @@ export function notifyDiscordChannel(message: string, options?: SessionNotificat
   });
 }
 
-async function _sendDiscordNotification(message: string, sink?: SessionNotificationSink): Promise<void> {
-  if (sink) {
-    await sink.sendConnectorNotification(message);
-    return;
-  }
-  let port = 7777;
+async function _sendDiscordNotification(message: string): Promise<void> {
   let connector = "discord";
   let channel: string | undefined;
+  const gateway = internalGatewayConnection();
 
   try {
     const config = loadConfig();
-    port = config.gateway?.port || 7777;
     connector = config.notifications?.connector || "discord";
     channel = config.notifications?.channel;
   } catch {
@@ -240,12 +237,12 @@ async function _sendDiscordNotification(message: string, sink?: SessionNotificat
     return;
   }
 
-  const response = await fetch(`http://127.0.0.1:${port}/api/connectors/${connector}/send`, {
+  const response = await fetch(`${gateway.baseUrl}/api/connectors/${connector}/send`, {
     method: "POST",
-    headers: jsonApiHeaders(),
+    headers: internalGatewayHeaders(gateway),
     body: JSON.stringify({ channel, text: message }),
   });
-  await assertFetchOk(response, `Discord notification via ${connector}`);
+  if (!response.ok) throw new Error(`connector notification failed (${response.status})`);
 }
 
 async function _sendRaw(
@@ -254,27 +251,41 @@ async function _sendRaw(
   displayMessage?: string,
   sink?: SessionNotificationSink,
 ): Promise<void> {
-  if (sink) {
-    await sink.sendSessionNotification(parentSessionId, message, displayMessage);
-    return;
-  }
+  const gateway = internalGatewayConnection();
 
-  let port = 7777;
-  try {
-    const config = loadConfig();
-    port = config.gateway?.port || 7777;
-  } catch {
-    // Use default port if config is unavailable
-  }
-
-  const response = await fetch(`http://127.0.0.1:${port}/api/sessions/${parentSessionId}/message`, {
+  const response = await fetch(`${gateway.baseUrl}/api/sessions/${parentSessionId}/message`, {
     method: "POST",
-    headers: jsonApiHeaders(),
+    headers: internalGatewayHeaders(gateway),
     body: JSON.stringify({
       message,
       role: "notification",
       ...(displayMessage ? { displayMessage } : {}),
     }),
   });
-  await assertFetchOk(response, `parent notification to session ${parentSessionId}`);
+  if (!response.ok) throw new Error(`parent notification failed (${response.status})`);
+}
+
+function internalGatewayConnection(): { baseUrl: string; token?: string } {
+  const info = readGatewayInfo(GATEWAY_INFO_FILE);
+  let fallbackHost: string | undefined;
+  let fallbackPort = 7777;
+  try {
+    const config = loadConfig();
+    fallbackHost = config.gateway?.host;
+    fallbackPort = config.gateway?.port || 7777;
+  } catch {
+    // Use gateway.json/defaults if config is unavailable.
+  }
+  const port = info?.port ?? fallbackPort;
+  return {
+    baseUrl: gatewayBaseUrl({ port, host: info?.host }, fallbackHost),
+    token: info?.token,
+  };
+}
+
+function internalGatewayHeaders(gateway: { token?: string }): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...(gateway.token ? { authorization: `Bearer ${gateway.token}` } : {}),
+  };
 }

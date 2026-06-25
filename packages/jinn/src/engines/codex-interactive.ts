@@ -43,10 +43,9 @@ interface CodexSpawnParams {
   cwd?: string;
   bin?: string;
   cliFlags?: string[];
-  mcpConfigPath?: string;
 }
 
-function pasteAndSubmit(proc: IPty, text: string): void {
+function pasteAndSubmit(proc: pty.IPty, text: string): void {
   const payload = neutralizeForPaste(text);
   proc.write(`\x1b[200~${payload}\x1b[201~\r`);
 }
@@ -356,7 +355,7 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
       else turn.interrupt("Interrupted: codex PTY unavailable");
     } else {
       const handle = this.spawn(jinnSessionId, opts, prompt, codexSessionId);
-      turn.boundProc = (handle as any)._proc as IPty | undefined;
+      turn.boundProc = (handle as any)._proc as pty.IPty | undefined;
       this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
       this.lifecycle.turnStarted(jinnSessionId);
     }
@@ -410,7 +409,6 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
       || norm(prev.resumeSessionId) !== norm(opts.resumeSessionId)
       || norm(prev.cwd) !== norm(opts.cwd)
       || norm(prev.bin) !== norm(opts.bin)
-      || norm(prev.mcpConfigPath) !== norm(opts.mcpConfigPath)
       || !sameFlags(prev.cliFlags, opts.cliFlags);
   }
 
@@ -438,7 +436,6 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
       cwd: opts.cwd,
       bin: opts.bin,
       cliFlags: opts.cliFlags,
-      mcpConfigPath: opts.mcpConfigPath,
     });
     return this.wireProcToStream(jinnSessionId, proc);
   }

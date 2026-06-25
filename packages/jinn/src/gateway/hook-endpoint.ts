@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { HookRegistry, HookPayload } from "./hook-registry.js";
+import { evaluateCommandPolicy } from "../shared/command-policy.js";
 
 export interface HookEndpointCtx {
   reg: HookRegistry;
@@ -54,19 +55,16 @@ export function handleHookPost(
   if (!body.jinnSessionId || !body.hook?.hook_event_name) {
     return { status: 400, body: "bad request" };
   }
-  const now = ctx.now?.() ?? Date.now();
-  if (!body.nonce || typeof body.nonce !== "string" || body.nonce.length < 12 || typeof body.timestamp !== "number") {
-    return { status: 400, body: "missing replay guard" };
+  if (body.hook.hook_event_name === "PreToolUse" && body.hook.tool_name === "Bash") {
+    const input = body.hook.tool_input;
+    const command = input && typeof input === "object" && "command" in input
+      ? String((input as { command?: unknown }).command ?? "")
+      : "";
+    const decision = evaluateCommandPolicy(command);
+    if (decision.action === "block") {
+      return { status: 451, body: decision.reason || "Command blocked by Jinn security policy" };
+    }
   }
-  if (!Number.isFinite(body.timestamp) || Math.abs(now - body.timestamp) > HOOK_REPLAY_WINDOW_MS) {
-    return { status: 400, body: "stale hook" };
-  }
-  pruneSeenNonces(now);
-  const nonceKey = `${body.jinnSessionId}:${body.nonce}`;
-  if (seenHookNonces.has(nonceKey)) {
-    return { status: 409, body: "replay" };
-  }
-  seenHookNonces.set(nonceKey, now + HOOK_REPLAY_WINDOW_MS);
   ctx.reg.deliver(body.jinnSessionId, body.hook);
   return { status: 200, body: "ok" };
 }

@@ -25,47 +25,29 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
-import { groupSessionsByDepartment, roomSelectionId } from "@/lib/rooms/grouping"
-import type { DepartmentRoom, RoomEmployee, RoomSession } from "@/lib/rooms/types"
-import type { Session, SidebarOrder, FlatItem, ViewMode } from "./sidebar-types"
-import {
-  loadExpandedRooms, saveExpandedRooms, getReadSessions, markSessionRead, markAllReadForEmployee,
-  getPinnedSessions, savePinnedSessions, loadCollapsedState, saveCollapsedState,
-  loadExpandedState, saveExpandedState,
-} from "./sidebar-storage"
-import {
-  formatTime, isCronSession, hasBackgroundActivity, isRecentError,
-} from "./sidebar-session-helpers"
-import { ArchiveDialog, type ArchiveDialogTarget } from "./archive-dialog"
-import {
-  ContactRow,
-  EmployeeRow,
-  FlatSessionRow,
-  SectionLabel,
-  SECTION_COUNT_CLASS,
-  SECTION_LABEL_CLASS,
-  SessionRow,
-  type SidebarDeleteTarget,
-  type SidebarSharedRowProps,
-} from "./sidebar-row-components"
-import {
-  buildContactableEmployees,
-  buildManagerEmployees,
-  buildSidebarCollections,
-  buildSidebarOrder,
-  buildVirtualItems,
-  buildVisibleSessions,
-  CRON_GROUP,
-  formatOlderLineLabel,
-  type VirtualItem,
-  VIRTUALIZE_THRESHOLD,
-} from "./sidebar-view-model"
+import { mergeSidebarEmployees, bucketByDay, summarizeOlder, isFocusedSession } from "@/components/chat/chat-route-helpers"
 
-// Compatibility facade: these moved to ./sidebar-types and ./sidebar-session-helpers
-// (AS-001 modularization) — re-exported so existing importers of this module
-// (chat/page.tsx, chat-sidebar-helpers.test.ts) keep working.
-export type { SidebarOrder }
-export { hasBackgroundActivity, isDirectSession, isRecentError, resolveRowIdentity } from "./sidebar-session-helpers"
+interface Session {
+  id: string
+  connector?: string | null
+  employee?: string
+  title?: string
+  status?: string
+  source?: string
+  sourceRef?: string
+  sessionKey?: string
+  /** Set on delegated/spawned child sessions; null/empty for top-level chats. */
+  parentSessionId?: string | null
+  transportState?: string
+  queueDepth?: number
+  lastActivity?: string
+  createdAt?: string
+  /** Background work (subagents/background tasks) still running while the
+   *  session is officially idle. null/absent = none. Kept live via the
+   *  session:background WS event (cache patch in useQueryInvalidation). */
+  backgroundActivity?: BackgroundActivity | null
+  [key: string]: unknown
+}
 
 const OLDER_EXPANDED_STORAGE_KEY = "jinn-sidebar-older-expanded"
 const FOCUS_MODE_STORAGE_KEY = "jinn-sidebar-focus-mode"
@@ -84,6 +66,824 @@ interface ChatSidebarProps {
   /** Open a department project-room's merged timeline (Rooms view-mode). */
   onSelectRoom?: (roomId: string) => void
 }
+
+interface FlatItem {
+  type: "employee" | "direct"
+  employeeName?: string
+  employeeData?: Employee
+  sessions?: Session[]
+  session?: Session
+  sortKey: string
+  pinKey: string
+  /** Server group key for "load more" (employee slug, or a sentinel). */
+  groupKey?: string
+  /** True total in this group (may exceed loaded `sessions.length`). */
+  total?: number
+}
+
+// One flat session row (Today / Yesterday / search results), carrying the
+// resolved employee identity so the row can render without re-deriving it.
+interface FlatRow {
+  session: Session
+  avatarName: string
+  displayName: string
+}
+
+// Server-side group sentinels — must match CRON_GROUP/DIRECT_GROUP in the
+// backend registry (sessions are bounded per group; "load more" fetches the rest).
+const DIRECT_GROUP = "__direct__"
+const CRON_GROUP = "__cron__"
+const BACKGROUND_ACTIVITY_STALE_MS = 5 * 60 * 1000
+// A red error dot is only worth surfacing while the failure is fresh; older
+// errored sessions fall back to the normal idle/unread treatment so the list
+// isn't littered with stale red dots.
+const RECENT_ERROR_WINDOW_MS = 24 * 60 * 60 * 1000
+
+const COLLAPSE_STORAGE_KEY = "jinn-sidebar-collapsed"
+const EXPANDED_STORAGE_KEY = "jinn-sidebar-expanded"
+const PINNED_STORAGE_KEY = "jinn-pinned-sessions"
+const OLDER_EXPANDED_STORAGE_KEY = "jinn-sidebar-older-expanded"
+const FOCUS_MODE_STORAGE_KEY = "jinn-sidebar-focus-mode"
+
+type FocusMode = "focused" | "all"
+
+const formatTimeCache = new Map<string, string>()
+const FORMAT_TIME_CACHE_MAX = 200
+
+function formatTime(dateStr?: string): string {
+  if (!dateStr) return ""
+  const cached = formatTimeCache.get(dateStr)
+  if (cached !== undefined) return cached
+  const d = new Date(dateStr)
+  const now = Date.now()
+  const diff = now - d.getTime()
+  let result: string
+  if (diff < 60_000) result = "now"
+  else if (diff < 3_600_000) result = `${Math.floor(diff / 60_000)}m`
+  else if (diff < 86_400_000) {
+    result = new Date(dateStr).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+  } else if (diff < 172_800_000) result = "yesterday"
+  else result = new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+  if (formatTimeCache.size >= FORMAT_TIME_CACHE_MAX) {
+    const oldest = formatTimeCache.keys().next().value
+    if (oldest !== undefined) formatTimeCache.delete(oldest)
+  }
+  formatTimeCache.set(dateStr, result)
+  return result
+}
+
+function getReadSessions(): Set<string> {
+  try {
+    const raw = localStorage.getItem("jinn-read-sessions")
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function markSessionRead(id: string) {
+  const read = getReadSessions()
+  read.add(id)
+  const arr = Array.from(read)
+  if (arr.length > 500) arr.splice(0, arr.length - 500)
+  localStorage.setItem("jinn-read-sessions", JSON.stringify(arr))
+}
+
+function markAllReadForEmployee(sessions: Session[]) {
+  const read = getReadSessions()
+  for (const s of sessions) read.add(s.id)
+  const arr = Array.from(read)
+  if (arr.length > 500) arr.splice(0, arr.length - 500)
+  localStorage.setItem("jinn-read-sessions", JSON.stringify(arr))
+}
+
+function getPinnedSessions(): Set<string> {
+  try {
+    const raw = localStorage.getItem(PINNED_STORAGE_KEY)
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function savePinnedSessions(pinned: Set<string>) {
+  try {
+    localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify(Array.from(pinned)))
+  } catch {}
+}
+
+function loadCollapsedState(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_STORAGE_KEY)
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function saveCollapsedState(collapsed: Set<string>) {
+  try {
+    localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(Array.from(collapsed)))
+  } catch {}
+}
+
+function loadExpandedState(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveExpandedState(expanded: Record<string, boolean>) {
+  try {
+    localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(expanded))
+  } catch {}
+}
+
+function titleCase(slug: string | null | undefined): string {
+  if (!slug) return ""
+  return slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+}
+
+/** Resolve the avatar slug + human label for a flat session row. Direct/COO
+ *  sessions borrow the portal identity; cron/employee-less sessions fall back to
+ *  it too — they have no org employee, so search (which flattens cron rows that
+ *  the grouped view renders separately) must not `.split()` a null employee.
+ *  The rest use their employee's org profile. */
+export function resolveRowIdentity(
+  s: Pick<Session, "source" | "sourceRef" | "employee">,
+  opts: { portalSlug: string; portalName: string; employeeData: Map<string, Employee> },
+): { avatarName: string; displayName: string } {
+  const { portalSlug, portalName, employeeData } = opts
+  if (isDirectSession(s, portalSlug) || !s.employee) {
+    return { avatarName: portalSlug, displayName: portalName }
+  }
+  const emp = s.employee
+  return { avatarName: emp, displayName: employeeData.get(emp)?.displayName || titleCase(emp) }
+}
+
+function isCronSession(session: Pick<Session, "source" | "sourceRef">): boolean {
+  return session.source === "cron" || (session.sourceRef || "").startsWith("cron:")
+}
+
+export function isDirectSession(
+  session: Pick<Session, "source" | "sourceRef" | "employee">,
+  portalSlug?: string,
+): boolean {
+  if (isCronSession(session)) return false
+  if (!session.employee) return true
+  // A session tagged with the portal slug is a direct/COO session, not a
+  // pseudo-employee — fold it into the direct group rather than a phantom one
+  // that renders with the portal's own title.
+  return !!portalSlug && session.employee.toLowerCase() === portalSlug
+}
+
+// Sources the sidebar renders (others, e.g. slack/telegram, are shown elsewhere).
+function isVisibleSource(s: Session): boolean {
+  return s.source === "web" || s.source === "cron" || s.source === "whatsapp" || s.source === "discord" || !s.source
+}
+
+function getSessionActivity(session: Session): string {
+  return session.lastActivity || session.createdAt || ""
+}
+
+function sortSessionsByActivity(sessions: Session[]): Session[] {
+  return [...sessions].sort((a, b) => getSessionActivity(b).localeCompare(getSessionActivity(a)))
+}
+
+/** Idle-but-busy: the session's turn ended but subagents/background tasks are
+ *  still making API calls. Running/error status always wins over this. */
+export function hasBackgroundActivity(session: Pick<Session, "status" | "backgroundActivity">): boolean {
+  const activity = session.backgroundActivity
+  const lastActivityAt = activity?.lastActivityAt ? new Date(activity.lastActivityAt).getTime() : 0
+  const stale = lastActivityAt > 0 && Date.now() - lastActivityAt > BACKGROUND_ACTIVITY_STALE_MS
+  return (
+    session.status !== "running" &&
+    session.status !== "error" &&
+    !stale &&
+    (activity?.activeStreams ?? 0) > 0
+  )
+}
+
+interface StatusDotState {
+  color: string
+  label: string
+  pulse: boolean
+}
+
+/** A red error dot fires only for a *recently* errored session — `status` is
+ *  "error" AND its last activity is inside the recency window. `nowMs` is passed
+ *  in (rather than read at module load) so the window is evaluated at call time
+ *  and the helper stays pure/testable. A missing or unparseable timestamp is
+ *  treated as not-recent so the row falls through to the quiet treatment. */
+export function isRecentError(
+  status: string | undefined,
+  lastActivityISO: string,
+  nowMs: number,
+): boolean {
+  if (status !== "error") return false
+  if (!lastActivityISO) return false
+  const ts = new Date(lastActivityISO).getTime()
+  if (Number.isNaN(ts)) return false
+  return nowMs - ts < RECENT_ERROR_WINDOW_MS
+}
+
+// Resolve the attention-state dot for a session. Returns null for the resting
+// "read" state so no dot is painted (quiet at rest). Optionally treat the row
+// as unread even when this session is read (e.g. a grouped employee row whose
+// other chats are unread).
+function getStatusDot(
+  session: Session,
+  readSet: Set<string>,
+  forceUnread = false,
+): StatusDotState | null {
+  if (session.status === "running") return { color: "var(--system-blue)", label: "running", pulse: true }
+  if (isRecentError(session.status, getSessionActivity(session), Date.now())) {
+    return { color: "var(--system-red)", label: "error", pulse: false }
+  }
+  if (hasBackgroundActivity(session)) return { color: "var(--system-orange)", label: "background work running", pulse: true }
+  // Unread uses a NEUTRAL dot (not --accent): accent is user-set and may be red,
+  // which would read like an error. Calm grey stays visible without alarming.
+  if (forceUnread || !readSet.has(session.id)) return { color: "var(--text-secondary)", label: "unread", pulse: false }
+  return null
+}
+
+function StatusDot({
+  color,
+  pulse = false,
+  className,
+  title,
+}: {
+  color: string
+  pulse?: boolean
+  className?: string
+  title?: string
+}) {
+  return (
+    <span
+      className={cn("shrink-0 rounded-full", className)}
+      title={title}
+      role={title ? "img" : undefined}
+      aria-label={title}
+      style={{
+        background: color,
+        animation: pulse ? "sidebar-pulse 2s ease-in-out infinite" : "none",
+        boxShadow: pulse ? `0 0 8px ${color}` : "none",
+      }}
+    />
+  )
+}
+
+// One quiet, unified treatment for every sidebar section header
+// (Today/Yesterday, Older, Scheduled, Team): muted medium label with light
+// tracking and the count as a plain trailing number — no shouty uppercase, no
+// filled chip. Keep these constants the single source so the headers can't drift.
+const SECTION_LABEL_CLASS =
+  "text-[11px] font-[var(--weight-medium)] tracking-[0.06em] text-[var(--text-tertiary)]"
+const SECTION_COUNT_CLASS = "text-[10px] tabular-nums text-[var(--text-quaternary)]"
+
+function SectionLabel({
+  label,
+  count,
+}: {
+  label: string
+  count?: number
+}) {
+  return (
+    <div className="flex items-center gap-2 px-4 py-2">
+      <span className={SECTION_LABEL_CLASS}>{label}</span>
+      {typeof count === "number" && (
+        <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{count}</span>
+      )}
+    </div>
+  )
+}
+
+interface SessionRowProps {
+  session: Session
+  parentSessions?: Session[]
+  selectedId: string | null
+  readSessions: Set<string>
+  pinnedSessions: Set<string>
+  renamingSessionId: string | null
+  renameCancelledRef: React.MutableRefObject<boolean>
+  fixTitle: (title: string | undefined, employee: string | undefined) => string
+  onSelect: (id: string) => void
+  onEmployeeSessionsAvailable?: (sessions: Session[]) => void
+  togglePin: (pinKey: string) => void
+  handleDuplicate: (sessionId: string) => void
+  setDeleteTarget: (target: { type: "session" | "employee"; id: string; label: string; sessions?: Session[] } | null) => void
+  setRenamingSessionId: (id: string | null) => void
+  updateSessionTitle: (id: string, title: string) => void
+}
+
+const SessionRow = React.memo(function SessionRow({
+  session,
+  parentSessions,
+  selectedId,
+  readSessions,
+  pinnedSessions,
+  renamingSessionId,
+  renameCancelledRef,
+  fixTitle,
+  onSelect,
+  onEmployeeSessionsAvailable,
+  togglePin,
+  handleDuplicate,
+  setDeleteTarget,
+  setRenamingSessionId,
+  updateSessionTitle,
+}: SessionRowProps) {
+  const sessionIsActive = session.id === selectedId
+  const sessionDot = getStatusDot(session, readSessions)
+  const sessionTitle = fixTitle(session.title, session.employee)
+  const displayTitle = cleanPreview(sessionTitle) || sessionTitle
+  const sessionTime = formatTime(getSessionActivity(session))
+  const isPinned = pinnedSessions.has(session.id)
+  const isRenaming = renamingSessionId === session.id
+  const RowTag = isRenaming ? "div" : "button"
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <RowTag
+          {...(!isRenaming && { onClick: () => {
+            onSelect(session.id)
+            onEmployeeSessionsAvailable?.(parentSessions ?? [session])
+          }})}
+          className={cn(
+            "group/session relative flex w-full items-center gap-2.5 border-l-2 px-4 py-2 text-left transition-colors",
+            parentSessions
+              ? "pl-11"
+              : "pl-6",
+            sessionIsActive
+              ? "border-l-[var(--text-tertiary)] bg-[var(--fill-secondary)]"
+              : "border-l-transparent hover:bg-[var(--fill-tertiary)]"
+          )}
+        >
+          {sessionDot ? (
+            <StatusDot
+              color={sessionDot.color}
+              pulse={sessionDot.pulse}
+              title={sessionDot.label}
+              className="size-1.5"
+            />
+          ) : null}
+          {isRenaming ? (
+            <input
+              autoFocus
+              maxLength={200}
+              defaultValue={displayTitle}
+              className={cn(
+                "min-w-0 flex-1 truncate border-none bg-transparent text-xs outline-none ring-1 ring-[var(--text-quaternary)] rounded px-0.5",
+                sessionIsActive ? "font-semibold text-foreground" : "text-[var(--text-secondary)]"
+              )}
+              onFocus={(e) => e.target.select()}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.currentTarget.blur()
+                } else if (e.key === "Escape") {
+                  renameCancelledRef.current = true
+                  setRenamingSessionId(null)
+                }
+              }}
+              onBlur={(e) => {
+                if (renameCancelledRef.current) {
+                  renameCancelledRef.current = false
+                  return
+                }
+                const val = e.target.value.trim()
+                if (val && val !== displayTitle) {
+                  updateSessionTitle(session.id, val)
+                }
+                setRenamingSessionId(null)
+              }}
+            />
+          ) : (
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-xs",
+                sessionIsActive ? "font-semibold text-foreground" : "text-[var(--text-secondary)]"
+              )}
+            >
+              {cleanPreview(sessionTitle) || "Untitled"}
+            </span>
+          )}
+          {isPinned ? (
+            <Pin className="size-3 shrink-0 text-[var(--text-tertiary)] group-hover/session:lg:hidden group-has-[[data-state=open]]/session:lg:hidden" />
+          ) : null}
+          <span className="shrink-0 text-[10px] text-[var(--text-quaternary)] group-hover/session:lg:hidden group-has-[[data-state=open]]/session:lg:hidden">{sessionTime}</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Session actions"
+                className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/session:lg:flex group-has-[[data-state=open]]/session:lg:flex"
+              >
+                <EllipsisVertical className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => { renameCancelledRef.current = false; setRenamingSessionId(session.id) }}>
+                Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => togglePin(session.id)}>
+                {isPinned ? "Unpin" : "Pin"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleDuplicate(session.id)}>
+                Duplicate...
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: cleanPreview(sessionTitle) || "Untitled" })}>
+                Delete session
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </RowTag>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={() => { renameCancelledRef.current = false; setRenamingSessionId(session.id) }}>
+          Rename
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => togglePin(session.id)}>
+          {isPinned ? "Unpin" : "Pin"}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => handleDuplicate(session.id)}>
+          Duplicate...
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: cleanPreview(sessionTitle) || "Untitled" })}>
+          <span className="flex-1">Delete session</span>
+          <kbd className="ml-auto pl-3 font-mono text-[10px] text-[var(--text-quaternary)]">⌫</kbd>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+})
+
+interface FlatSessionRowProps {
+  session: Session
+  /** Avatar/identity slug — employee name, or the portal slug for direct chats. */
+  avatarName: string
+  /** Human label shown on line 1 (employee display name or portal name). */
+  displayName: string
+  selectedId: string | null
+  readSessions: Set<string>
+  pinnedSessions: Set<string>
+  renamingSessionId: string | null
+  renameCancelledRef: React.MutableRefObject<boolean>
+  fixTitle: (title: string | undefined, employee: string | undefined) => string
+  onSelect: (id: string) => void
+  onEmployeeSessionsAvailable?: (sessions: Session[]) => void
+  togglePin: (pinKey: string) => void
+  handleDuplicate: (sessionId: string) => void
+  setDeleteTarget: (target: { type: "session" | "employee"; id: string; label: string; sessions?: Session[] } | null) => void
+  setRenamingSessionId: (id: string | null) => void
+  updateSessionTitle: (id: string, title: string) => void
+}
+
+// One CHAT per row (focused Today/Yesterday view): employee avatar + name + time
+// on the first line, the chat title on the second. Distinct from SessionRow
+// (single-line, used for cron + the Older drawer's per-employee children).
+const FlatSessionRow = React.memo(function FlatSessionRow({
+  session,
+  avatarName,
+  displayName,
+  selectedId,
+  readSessions,
+  pinnedSessions,
+  renamingSessionId,
+  renameCancelledRef,
+  fixTitle,
+  onSelect,
+  onEmployeeSessionsAvailable,
+  togglePin,
+  handleDuplicate,
+  setDeleteTarget,
+  setRenamingSessionId,
+  updateSessionTitle,
+}: FlatSessionRowProps) {
+  const isActive = session.id === selectedId
+  const dot = getStatusDot(session, readSessions)
+  const rawTitle = fixTitle(session.title, session.employee)
+  const displayTitle = cleanPreview(rawTitle) || "Untitled"
+  const time = formatTime(getSessionActivity(session))
+  const isPinned = pinnedSessions.has(session.id)
+  const isRenaming = renamingSessionId === session.id
+  const isUnread =
+    !readSessions.has(session.id) && session.status !== "running" && session.status !== "error"
+
+  const menuItems = (
+    <>
+      <DropdownMenuItem onClick={() => { renameCancelledRef.current = false; setRenamingSessionId(session.id) }}>
+        Rename
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => togglePin(session.id)}>
+        {isPinned ? "Unpin" : "Pin"}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => handleDuplicate(session.id)}>
+        Duplicate...
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}>
+        Delete session
+      </DropdownMenuItem>
+    </>
+  )
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          className={cn(
+            "group/flat relative flex w-full items-center gap-3 border-l-2 px-4 py-2 text-left transition-colors",
+            isActive
+              ? "border-l-[var(--text-tertiary)] bg-[var(--fill-secondary)]"
+              : "border-l-transparent hover:bg-[var(--fill-tertiary)]"
+          )}
+        >
+          <button
+            onClick={() => {
+              onSelect(session.id)
+              onEmployeeSessionsAvailable?.([session])
+            }}
+            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          >
+            <div className="relative flex size-9 shrink-0 items-center justify-center">
+              <EmployeeAvatar name={avatarName} size={36} />
+              {dot ? (
+                <StatusDot
+                  color={dot.color}
+                  pulse={dot.pulse}
+                  title={dot.label}
+                  className="absolute -bottom-0.5 -right-0 size-2.5 border-2 border-[var(--sidebar-bg)]"
+                />
+              ) : null}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="mb-0.5 flex items-baseline gap-2">
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-[13px] tracking-[-0.2px] text-foreground",
+                    isUnread || isActive ? "font-semibold" : "font-medium"
+                  )}
+                >
+                  {displayName}
+                </span>
+                <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">{time}</span>
+              </div>
+              {isRenaming ? (
+                <input
+                  autoFocus
+                  maxLength={200}
+                  defaultValue={displayTitle}
+                  className="min-w-0 w-full truncate rounded border-none bg-transparent px-0.5 text-[11px] text-[var(--text-secondary)] outline-none ring-1 ring-[var(--text-quaternary)]"
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => { e.stopPropagation(); e.preventDefault() }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur()
+                    else if (e.key === "Escape") { renameCancelledRef.current = true; setRenamingSessionId(null) }
+                  }}
+                  onBlur={(e) => {
+                    if (renameCancelledRef.current) { renameCancelledRef.current = false; return }
+                    const val = e.target.value.trim()
+                    if (val && val !== displayTitle) updateSessionTitle(session.id, val)
+                    setRenamingSessionId(null)
+                  }}
+                />
+              ) : (
+                <div className="truncate text-[11px] text-[var(--text-tertiary)]">{displayTitle}</div>
+              )}
+            </div>
+          </button>
+
+          {isPinned ? (
+            <Pin className="size-3 shrink-0 text-[var(--text-tertiary)] group-hover/flat:lg:hidden group-has-[[data-state=open]]/flat:lg:hidden" />
+          ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Chat actions"
+                className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/flat:lg:flex group-has-[[data-state=open]]/flat:lg:flex"
+              >
+                <EllipsisVertical className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">{menuItems}</DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={() => { renameCancelledRef.current = false; setRenamingSessionId(session.id) }}>
+          Rename
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => togglePin(session.id)}>
+          {isPinned ? "Unpin" : "Pin"}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => handleDuplicate(session.id)}>
+          Duplicate...
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}>
+          <span className="flex-1">Delete session</span>
+          <kbd className="ml-auto pl-3 font-mono text-[10px] text-[var(--text-quaternary)]">⌫</kbd>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+})
+
+interface EmployeeRowProps {
+  item: FlatItem
+  selectedId: string | null
+  readSessions: Set<string>
+  pinnedSessions: Set<string>
+  expanded: Record<string, boolean>
+  renamingSessionId: string | null
+  renameCancelledRef: React.MutableRefObject<boolean>
+  fixTitle: (title: string | undefined, employee: string | undefined) => string
+  onSelect: (id: string) => void
+  onEmployeeSessionsAvailable?: (sessions: Session[]) => void
+  togglePin: (pinKey: string) => void
+  handleMarkAllRead: (sessions: Session[]) => void
+  handleEmployeeClick: (item: FlatItem) => void
+  setDeleteTarget: (target: { type: "session" | "employee"; id: string; label: string; sessions?: Session[] } | null) => void
+  onLoadMore: (groupKey: string, offset: number) => void
+  loadingMore: Set<string>
+  setRenamingSessionId: (id: string | null) => void
+  updateSessionTitle: (id: string, title: string) => void
+  handleDuplicate: (sessionId: string) => void
+}
+
+const EmployeeRow = React.memo(function EmployeeRow({
+  item,
+  selectedId,
+  readSessions,
+  pinnedSessions,
+  expanded,
+  renamingSessionId,
+  renameCancelledRef,
+  fixTitle,
+  onSelect,
+  onEmployeeSessionsAvailable,
+  togglePin,
+  handleMarkAllRead,
+  handleEmployeeClick,
+  setDeleteTarget,
+  onLoadMore,
+  loadingMore,
+  setRenamingSessionId,
+  updateSessionTitle,
+  handleDuplicate,
+}: EmployeeRowProps) {
+  const empName = item.employeeName!
+  const empSessions = item.sessions!
+  const latestSession = empSessions[0]
+  const empInfo = item.employeeData
+  const displayName = empInfo?.displayName || titleCase(empName)
+  const department = empInfo?.department || ""
+  const timeLabel = formatTime(getSessionActivity(latestSession))
+  const isActive = empSessions.some((s) => s.id === selectedId)
+  const isPinned = pinnedSessions.has(item.pinKey)
+  const loadedCount = empSessions.length
+  // True total from the server; may exceed what's loaded so far.
+  const sessionCount = item.total ?? loadedCount
+  const groupKey = item.groupKey ?? empName
+  const isLoadingMore = loadingMore.has(groupKey)
+  const isExpanded = expanded[empName] || false
+  const hasUnread = empSessions.some(
+    (s) => !readSessions.has(s.id) && s.status !== "running" && s.status !== "error"
+  )
+  // The group dot reflects the latest session's live state, but escalates to an
+  // "unread" accent dot when any chat in the group is unread.
+  const empDot = getStatusDot(latestSession, readSessions, hasUnread)
+
+  const sessionRowProps = {
+    selectedId,
+    readSessions,
+    pinnedSessions,
+    renamingSessionId,
+    renameCancelledRef,
+    fixTitle,
+    onSelect,
+    onEmployeeSessionsAvailable,
+    togglePin,
+    handleDuplicate,
+    setDeleteTarget,
+    setRenamingSessionId,
+    updateSessionTitle,
+  }
+
+  return (
+    <div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            onClick={() => handleEmployeeClick(item)}
+            className={cn(
+              "group/emp relative flex w-full items-center gap-3 border-l-2 px-4 py-3 text-left transition-colors",
+              isActive
+                ? "border-l-[var(--text-tertiary)] bg-[var(--fill-secondary)]"
+                : "border-l-transparent hover:bg-[var(--fill-tertiary)]"
+            )}
+          >
+            <div className="relative flex size-9 shrink-0 items-center justify-center">
+              <EmployeeAvatar name={empName} size={36} />
+              {empDot ? (
+                <StatusDot
+                  color={empDot.color}
+                  pulse={empDot.pulse}
+                  title={empDot.label}
+                  className="absolute -bottom-0.5 -right-0 size-2.5 border-2 border-[var(--sidebar-bg)]"
+                />
+              ) : null}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="mb-0.5 flex items-baseline gap-2 pr-9 lg:pr-0">
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-[13px] tracking-[-0.2px] text-foreground",
+                    hasUnread || isActive ? "font-semibold" : "font-medium"
+                  )}
+                >
+                  {displayName}
+                </span>
+                <span className="shrink-0 text-[10px] text-[var(--text-tertiary)] group-hover/emp:lg:hidden group-has-[[data-state=open]]/emp:lg:hidden">{timeLabel}</span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label="Employee chat actions"
+                      className="absolute right-1 top-1/2 flex size-9 shrink-0 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:static lg:size-7 lg:translate-y-0 lg:hidden group-hover/emp:lg:flex group-has-[[data-state=open]]/emp:lg:flex"
+                    >
+                      <EllipsisVertical className="size-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => togglePin(item.pinKey)}>
+                      {isPinned ? "Unpin" : "Pin"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleMarkAllRead(empSessions)}>
+                      Mark all as read
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "employee", id: empName, label: displayName, sessions: empSessions })}>
+                      Delete all chats
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="flex items-center gap-1.5 overflow-hidden text-[11px] text-[var(--text-tertiary)]">
+                {department ? <span className="truncate">{department}</span> : null}
+                {sessionCount > 1 ? (
+                  <span className="shrink-0 rounded bg-[var(--fill-tertiary)] px-1.5 py-0.5 text-[10px]">
+                    {sessionCount} chats
+                  </span>
+                ) : null}
+                {isPinned ? (
+                  <Pin className="size-3 shrink-0 text-[var(--text-tertiary)]" />
+                ) : null}
+              </div>
+            </div>
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={() => togglePin(item.pinKey)}>
+            {isPinned ? "Unpin" : "Pin"}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => handleMarkAllRead(empSessions)}>
+            Mark all as read
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "employee", id: empName, label: displayName, sessions: empSessions })}>
+            Delete all chats
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+
+      {isExpanded && loadedCount > 1 ? (
+        empSessions.map((session) => (
+          <SessionRow key={session.id} session={session} parentSessions={empSessions} {...sessionRowProps} />
+        ))
+      ) : null}
+      {isExpanded && loadedCount < sessionCount ? (
+        <button
+          onClick={() => onLoadMore(groupKey, loadedCount)}
+          disabled={isLoadingMore}
+          className="w-full cursor-pointer px-4 pb-2 pl-11 text-left text-[10px] text-[var(--text-quaternary)] transition-colors hover:text-[var(--text-secondary)] disabled:opacity-50"
+        >
+          {isLoadingMore ? "Loading…" : `+${sessionCount - loadedCount} more`}
+        </button>
+      ) : null}
+    </div>
+  )
+})
 
 export function ChatSidebar({
   selectedId,
@@ -134,8 +934,7 @@ export function ChatSidebar({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [olderExpanded, setOlderExpanded] = useState(false)
-  const [viewMode, setViewMode] = useState<ViewMode>("rooms")
-  const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set())
+  const [focusMode, setFocusMode] = useState<FocusMode>("all")
   const [loadingMore, setLoadingMore] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<SidebarDeleteTarget | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<ArchiveDialogTarget | null>(null)
@@ -171,8 +970,7 @@ export function ChatSidebar({
     try {
       setOlderExpanded(localStorage.getItem(OLDER_EXPANDED_STORAGE_KEY) === "true")
       const stored = localStorage.getItem(FOCUS_MODE_STORAGE_KEY)
-      if (stored === "rooms" || stored === "focused" || stored === "all") setViewMode(stored)
-      setExpandedRooms(loadExpandedRooms())
+      if (stored === "focused" || stored === "all") setFocusMode(stored)
     } catch {}
   }, [])
 
@@ -193,19 +991,9 @@ export function ChatSidebar({
     if (searchOpen) searchInputRef.current?.focus()
   }, [searchOpen])
 
-  const selectViewMode = useCallback((mode: ViewMode) => {
-    setViewMode(mode)
+  const selectFocusMode = useCallback((mode: FocusMode) => {
+    setFocusMode(mode)
     try { localStorage.setItem(FOCUS_MODE_STORAGE_KEY, mode) } catch {}
-  }, [])
-
-  const toggleRoomExpanded = useCallback((roomId: string) => {
-    setExpandedRooms((prev) => {
-      const next = new Set(prev)
-      if (next.has(roomId)) next.delete(roomId)
-      else next.add(roomId)
-      saveExpandedRooms(next)
-      return next
-    })
   }, [])
 
   const toggleOlderExpanded = useCallback(() => {
@@ -335,30 +1123,6 @@ export function ChatSidebar({
     }
   }
 
-  const handleArchiveComplete = useCallback((sessionIds: string[]) => {
-    setPinnedSessions((prev) => {
-      let changed = false
-      const next = new Set(prev)
-      for (const id of sessionIds) {
-        if (next.delete(id)) changed = true
-      }
-      if (archiveTarget?.kind === "room" && archiveTarget.sourceRef) {
-        if (next.delete(`room:${archiveTarget.sourceRef}`)) changed = true
-      }
-      if (changed) savePinnedSessions(next)
-      return changed ? next : prev
-    })
-
-    startTransition(() => {
-      const archivedSelectedSession = !!selectedId && sessionIds.includes(selectedId)
-      const archivedSelectedRoom =
-        archiveTarget?.kind === "room" &&
-        !!archiveTarget.sourceRef &&
-        selectedId === roomSelectionId(archiveTarget.sourceRef)
-      if (archivedSelectedSession || archivedSelectedRoom) onNewChat()
-    })
-  }, [archiveTarget, selectedId, onNewChat])
-
   const {
     searching,
     searchRows,
@@ -374,26 +1138,191 @@ export function ChatSidebar({
     sortedCron,
     cronSessions,
     cronTotal,
-  } = useMemo(() => buildSidebarCollections({
-    sessions,
-    search,
-    searchResults: searchResults as Session[] | undefined,
-    employeeData,
-    portalSlug,
-    portalName,
-    pinnedSessions,
-    counts,
-    viewMode,
-  }), [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, viewMode])
+  } = useMemo(() => {
+    // When searching, use server results (spans all sessions); "load more" is
+    // disabled in this mode since totals reflect the search, not each group.
+    const searching = search.trim().length > 0
+    const displayed = searching
+      ? ((searchResults as Session[] | undefined) ?? []).filter(isVisibleSource)
+      : sessions
 
-  // Rooms view-mode: group the loaded non-cron sessions into department
-  // project-rooms (pure layer in lib/rooms). Derived independently of the flat
-  // pipeline above so it stays simple and the existing modes are untouched.
-  const rooms = useMemo<DepartmentRoom[]>(() => {
-    if (viewMode !== "rooms") return []
-    const employees = (orgData?.employees ?? []) as RoomEmployee[]
-    return groupSessionsByDepartment(sessions as unknown as RoomSession[], employees)
-  }, [viewMode, sessions, orgData])
+    // Resolve the avatar slug + human label for a flat row (see resolveRowIdentity).
+    const toRow = (s: Session): FlatRow => ({
+      session: s,
+      ...resolveRowIdentity(s, { portalSlug, portalName, employeeData }),
+    })
+
+    // ---- Search mode: one flat list spanning everything matched. ----
+    if (searching) {
+      const searchRows = sortSessionsByActivity(displayed).map(toRow)
+      return {
+        searching,
+        searchRows,
+        todayRows: [] as FlatRow[],
+        yesterdayRows: [] as FlatRow[],
+        olderSummary: { chats: 0, employees: 0 },
+        olderFocusedRows: [] as FlatRow[],
+        hiddenAutomated: 0,
+        olderPinned: [] as FlatItem[],
+        olderUnpinned: [] as FlatItem[],
+        pinnedFlat: [] as FlatItem[],
+        unpinnedFlat: [] as FlatItem[],
+        sortedCron: [] as Session[],
+        cronSessions: [] as Session[],
+        cronTotal: 0,
+      }
+      if (archiveTarget?.kind === "room" && archiveTarget.sourceRef) {
+        if (next.delete(`room:${archiveTarget.sourceRef}`)) changed = true
+      }
+      if (changed) savePinnedSessions(next)
+      return changed ? next : prev
+    })
+
+    // ---- Default mode: recency buckets + per-employee Older drawer. ----
+    // In "focused" mode the Today/Yesterday/Older buckets only contain the
+    // operator's own top-level chats (isFocusedSession); delegated children and
+    // other automated sessions are hidden until "All" is selected. The
+    // per-employee groups (drawer in All mode + keyboard cycling + contactable
+    // roster) are always built from every non-cron session so they stay stable.
+    const focused = focusMode === "focused"
+    const now = new Date()
+    const cronSessions: Session[] = []
+    const directSessions: Session[] = []
+    const employeeSessionMap = new Map<string, Session[]>()
+    const todayRows: FlatRow[] = []
+    const yesterdayRows: FlatRow[] = []
+    // Focused-mode Older = older user-initiated chats, as flat rows (computed
+    // from loaded sessions; the deep tail beyond the per-group window is reachable
+    // via search). All-mode Older uses the authoritative `counts` instead.
+    const olderFocusedRows: FlatRow[] = []
+    let hiddenAutomated = 0
+    // today+yesterday sessions surfaced per group — drives the All-mode Older math.
+    const recentByGroup: Record<string, number> = {}
+
+    for (const s of displayed) {
+      if (isCronSession(s)) {
+        cronSessions.push(s)
+        continue
+      }
+      const isDirect = isDirectSession(s, portalSlug)
+      const groupKey = isDirect ? DIRECT_GROUP : s.employee!
+      if (isDirect) directSessions.push(s)
+      else {
+        if (!employeeSessionMap.has(groupKey)) employeeSessionMap.set(groupKey, [])
+        employeeSessionMap.get(groupKey)!.push(s)
+      }
+      // Focused filter gates only the recency buckets, not the employee groups.
+      if (focused && !isFocusedSession(s)) {
+        hiddenAutomated += 1
+        continue
+      }
+      const bucket = bucketByDay(getSessionActivity(s), now)
+      if (bucket === "today") {
+        todayRows.push(toRow(s))
+        recentByGroup[groupKey] = (recentByGroup[groupKey] ?? 0) + 1
+      } else if (bucket === "yesterday") {
+        yesterdayRows.push(toRow(s))
+        recentByGroup[groupKey] = (recentByGroup[groupKey] ?? 0) + 1
+      } else if (focused) {
+        olderFocusedRows.push(toRow(s))
+      }
+    }
+
+    todayRows.sort((a, b) => getSessionActivity(b.session).localeCompare(getSessionActivity(a.session)))
+    yesterdayRows.sort((a, b) => getSessionActivity(b.session).localeCompare(getSessionActivity(a.session)))
+    olderFocusedRows.sort((a, b) => getSessionActivity(b.session).localeCompare(getSessionActivity(a.session)))
+
+    // Per-employee groups (full history) — used by the Older drawer + keyboard nav.
+    const flatItems: FlatItem[] = []
+    for (const [empName, empSessions] of employeeSessionMap) {
+      const sorted = sortSessionsByActivity(empSessions)
+      flatItems.push({
+        type: "employee",
+        employeeName: empName,
+        employeeData: employeeData.get(empName),
+        sessions: sorted,
+        sortKey: getSessionActivity(sorted[0]),
+        pinKey: `emp:${empName}`,
+        groupKey: empName,
+        total: counts[empName] ?? sorted.length,
+      })
+    }
+    if (directSessions.length > 0) {
+      const sorted = sortSessionsByActivity(directSessions)
+      flatItems.push({
+        type: "employee",
+        employeeName: portalSlug,
+        employeeData: {
+          name: portalSlug,
+          displayName: portalName,
+          emoji: "\u{1F4AC}",
+          department: "direct",
+          role: "",
+          rank: "manager",
+          engine: "",
+          model: "",
+          persona: "",
+        } as Employee,
+        sessions: sorted,
+        sortKey: getSessionActivity(sorted[0]),
+        pinKey: `emp:${portalSlug}`,
+        groupKey: DIRECT_GROUP,
+        total: counts[DIRECT_GROUP] ?? sorted.length,
+      })
+    }
+
+    const pinnedFlat = flatItems
+      .filter((item) => pinnedSessions.has(item.pinKey))
+      .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
+    const unpinnedFlat = flatItems
+      .filter((item) => !pinnedSessions.has(item.pinKey))
+      .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
+
+    // Older drawer = only groups that actually have sessions beyond yesterday.
+    const hasOlder = (item: FlatItem) =>
+      (item.total ?? item.sessions!.length) - (recentByGroup[item.groupKey ?? item.employeeName!] ?? 0) > 0
+    const olderPinned = pinnedFlat.filter(hasOlder)
+    const olderUnpinned = unpinnedFlat.filter(hasOlder)
+
+    // Older summary. Focused: count the loaded older user-initiated chats +
+    // their distinct employees (direct/COO excluded from the employee tally).
+    // All: authoritative — every non-cron group total minus what's already shown
+    // in Today/Yesterday.
+    let olderSummary: { chats: number; employees: number }
+    if (focused) {
+      const emps = new Set<string>()
+      for (const r of olderFocusedRows) {
+        if (!isDirectSession(r.session, portalSlug) && r.session.employee) emps.add(r.session.employee)
+      }
+      olderSummary = { chats: olderFocusedRows.length, employees: emps.size }
+    } else {
+      const nonCronTotals: Record<string, number> = {}
+      for (const [k, v] of Object.entries(counts)) {
+        if (k !== CRON_GROUP) nonCronTotals[k] = v
+      }
+      olderSummary = summarizeOlder(nonCronTotals, recentByGroup, new Set([DIRECT_GROUP]))
+    }
+
+    const sortedCron = sortSessionsByActivity(cronSessions)
+    const cronTotal = counts[CRON_GROUP] ?? cronSessions.length
+
+    return {
+      searching,
+      searchRows: [] as FlatRow[],
+      todayRows,
+      yesterdayRows,
+      olderSummary,
+      olderFocusedRows,
+      hiddenAutomated,
+      olderPinned,
+      olderUnpinned,
+      pinnedFlat,
+      unpinnedFlat,
+      sortedCron,
+      cronSessions,
+      cronTotal,
+    }
+  }, [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, focusMode])
 
   const cronCollapsed = collapsed.has("cron")
 
@@ -413,38 +1342,46 @@ export function ChatSidebar({
     })
   }, [search, pinnedFlat, unpinnedFlat, orgData, employeeData, portalSlug])
 
-  // Managers + executives — a quick-access roster rendered ABOVE Team. Shown
-  // regardless of whether they already have sessions (so all leadership is one
-  // tap away); they may also appear in Team. Executives first, then by name.
-  // Hidden during search (the flat results span everything already).
-  const managerEmployees = useMemo(() => {
-    return buildManagerEmployees({
-      search,
-      orgEmployees: orgData?.employees ?? [],
-      portalSlug,
-    })
-  }, [search, orgData, portalSlug])
-
   // Emit flat session order for keyboard navigation (J/K/E shortcuts).
   // Visual order: Today → Yesterday → (Older drawer, if open) → Scheduled.
   // De-duped — an employee's older sessions can overlap their Today/Yesterday rows.
   const orderRef = useRef<string>('')
-  const allFlatIds = useMemo(() => buildSidebarOrder({
-    searching,
-    searchRows,
-    viewMode,
-    rooms,
-    sortedCron,
-    pinnedFlat,
-    unpinnedFlat,
-    todayRows,
-    yesterdayRows,
-    olderExpanded,
-    olderFocusedRows,
-    olderPinned,
-    olderUnpinned,
-    expanded,
-  }), [searching, searchRows, viewMode, rooms, sortedCron, pinnedFlat, unpinnedFlat, todayRows, yesterdayRows, olderExpanded, olderFocusedRows, olderPinned, olderUnpinned, expanded])
+  const allFlatIds = useMemo(() => {
+    const ids: string[] = []
+    const seen = new Set<string>()
+    const push = (id: string) => { if (!seen.has(id)) { seen.add(id); ids.push(id) } }
+
+    if (searching) {
+      for (const r of searchRows) push(r.session.id)
+      return { sessionIds: ids, employeeNames: [] as string[], employeeSessionMap: {} as Record<string, string[]> }
+    }
+
+    for (const r of todayRows) push(r.session.id)
+    for (const r of yesterdayRows) push(r.session.id)
+    if (olderExpanded) {
+      if (focusMode === "focused") {
+        for (const r of olderFocusedRows) push(r.session.id)
+      } else {
+        for (const item of [...olderPinned, ...olderUnpinned]) {
+          const sessionIds = item.sessions!.map((s) => s.id)
+          // Collapsed employee row reaches only its latest session; expanded reaches all.
+          if (expanded[item.employeeName!]) sessionIds.forEach(push)
+          else if (sessionIds.length) push(sessionIds[0])
+        }
+      }
+    }
+    for (const s of sortedCron) push(s.id)
+
+    // E-shortcut cycles every employee with sessions, regardless of Older state.
+    const empNames: string[] = []
+    const empMap: Record<string, string[]> = {}
+    for (const item of [...pinnedFlat, ...unpinnedFlat]) {
+      const name = item.employeeName!
+      empNames.push(name)
+      empMap[name] = item.sessions!.map((s) => s.id)
+    }
+    return { sessionIds: ids, employeeNames: empNames, employeeSessionMap: empMap }
+  }, [searching, searchRows, todayRows, yesterdayRows, olderExpanded, focusMode, olderFocusedRows, olderPinned, olderUnpinned, expanded, sortedCron, pinnedFlat, unpinnedFlat])
 
   useEffect(() => {
     const key = allFlatIds.sessionIds.join(',')
@@ -527,28 +1464,54 @@ export function ChatSidebar({
   // Build one flat list for the (optional) virtualizer. The focused layout is a
   // sequence of section labels, flat session rows (Today/Yesterday/search), the
   // collapsible Older summary + its per-employee drawer, and the cron section.
-  const virtualItems = useMemo<VirtualItem[]>(() => buildVirtualItems({
-    searching,
-    searchRows,
-    viewMode,
-    rooms,
-    expandedRooms,
-    cronSessions,
-    cronCollapsed,
-    sortedCron,
-    cronTotal,
-    todayRows,
-    yesterdayRows,
-    olderSummary,
-    olderExpanded,
-    olderFocusedRows,
-    olderPinned,
-    olderUnpinned,
-    portalSlug,
-    portalName,
-    employeeData,
-  }), [searching, searchRows, viewMode, rooms, expandedRooms, cronSessions, cronCollapsed, sortedCron, cronTotal, todayRows, yesterdayRows, olderSummary, olderExpanded, olderFocusedRows, olderPinned, olderUnpinned, portalSlug, portalName, employeeData])
+  type VirtualItem =
+    | { kind: "section"; id: string; label: string; count?: number }
+    | { kind: "flat"; row: FlatRow }
+    | { kind: "older-line" }
+    | { kind: "older-header" }
+    | { kind: "employee"; item: FlatItem }
+    | { kind: "cron-header" }
+    | { kind: "cron-session"; session: Session }
+    | { kind: "cron-more" }
 
+  const virtualItems = useMemo<VirtualItem[]>(() => {
+    const list: VirtualItem[] = []
+    if (searching) {
+      for (const row of searchRows) list.push({ kind: "flat", row })
+      return list
+    }
+    if (todayRows.length > 0) {
+      list.push({ kind: "section", id: "today", label: "Today", count: todayRows.length })
+      for (const row of todayRows) list.push({ kind: "flat", row })
+    }
+    if (yesterdayRows.length > 0) {
+      list.push({ kind: "section", id: "yesterday", label: "Yesterday", count: yesterdayRows.length })
+      for (const row of yesterdayRows) list.push({ kind: "flat", row })
+    }
+    if (olderSummary.chats > 0) {
+      if (!olderExpanded) {
+        list.push({ kind: "older-line" })
+      } else if (focusMode === "focused") {
+        // Focused Older = flat older user-initiated chats (no per-employee drawer).
+        list.push({ kind: "older-header" })
+        for (const row of olderFocusedRows) list.push({ kind: "flat", row })
+      } else {
+        list.push({ kind: "older-header" })
+        for (const item of olderPinned) list.push({ kind: "employee", item })
+        for (const item of olderUnpinned) list.push({ kind: "employee", item })
+      }
+    }
+    if (cronSessions.length > 0) {
+      list.push({ kind: "cron-header" })
+      if (!cronCollapsed) {
+        for (const s of sortedCron) list.push({ kind: "cron-session", session: s })
+        if (cronSessions.length < cronTotal) list.push({ kind: "cron-more" })
+      }
+    }
+    return list
+  }, [searching, searchRows, todayRows, yesterdayRows, olderSummary.chats, olderExpanded, focusMode, olderFocusedRows, olderPinned, olderUnpinned, cronSessions.length, cronCollapsed, sortedCron, cronTotal])
+
+  const VIRTUALIZE_THRESHOLD = 50
   const shouldVirtualize = virtualItems.length >= VIRTUALIZE_THRESHOLD
 
   const rowVirtualizer = useVirtualizer({
@@ -565,7 +1528,6 @@ export function ChatSidebar({
         case "cron-session": return 36
         case "cron-more": return 28
         case "flat": return 52
-        case "room-header": return 56
         default: return 64 // employee row (dynamic — measured)
       }
     },
@@ -573,44 +1535,23 @@ export function ChatSidebar({
     enabled: shouldVirtualize,
   })
 
-  const olderLineLabel = useMemo(() => formatOlderLineLabel(olderSummary), [olderSummary])
+  const olderLineLabel = useMemo(() => {
+    const { chats, employees } = olderSummary
+    const chatWord = chats === 1 ? "chat" : "chats"
+    if (employees <= 0) return `Older · ${chats} ${chatWord}`
+    const empWord = employees === 1 ? "employee" : "employees"
+    return `Older · ${chats} ${chatWord} across ${employees} ${empWord}`
+  }, [olderSummary])
 
   const cronHeader = (
-    <div className="group/cron flex w-full items-center transition-colors hover:bg-[var(--fill-tertiary)]">
-      <button
-        onClick={toggleCronCollapsed}
-        className="flex min-w-0 flex-1 items-center gap-2 px-4 py-2 pr-1 text-left"
-      >
-        <span className={SECTION_LABEL_CLASS}>Scheduled</span>
-        <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{cronTotal}</span>
-        <ChevronDown className={cn("size-3.5 shrink-0 text-[var(--text-quaternary)] transition-transform", cronCollapsed && "-rotate-90")} />
-      </button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            onClick={(event) => event.stopPropagation()}
-            aria-label="Scheduled actions"
-            className="mr-1 flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/cron:lg:flex group-has-[[data-state=open]]/cron:lg:flex"
-          >
-            <EllipsisVertical className="size-3.5" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            onClick={() => setArchiveTarget({
-              kind: "scheduled",
-              title: "Scheduled",
-              sessionIds: cronSessions.map((session) => session.id),
-              sourceRef: "scheduled",
-              sessions: cronSessions,
-            })}
-          >
-            <ArchiveIcon />
-            Archive past runs...
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+    <button
+      onClick={toggleCronCollapsed}
+      className="flex w-full items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-[var(--fill-tertiary)]"
+    >
+      <span className={SECTION_LABEL_CLASS}>Scheduled</span>
+      <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{cronTotal}</span>
+      <ChevronDown className={cn("size-3.5 shrink-0 text-[var(--text-quaternary)] transition-transform", cronCollapsed && "-rotate-90")} />
+    </button>
   )
 
   // Single source of truth for rendering a VirtualItem — shared by the
@@ -635,84 +1576,6 @@ export function ChatSidebar({
             {...sharedRowProps}
           />
         )
-      case "room-header": {
-        const room = vi.room
-        const isActive = selectedId === roomSelectionId(room.id)
-        const isExpanded = expandedRooms.has(room.id)
-        const lastActive = formatTime(room.lastActivity)
-        return (
-          <div
-            className={cn(
-              "group/room relative flex w-full items-center border-l-2 transition-colors",
-              isActive
-                ? "border-l-[var(--accent)] bg-[var(--fill-secondary)]"
-                : "border-l-transparent hover:bg-[var(--fill-tertiary)]",
-            )}
-          >
-            <button
-              onClick={() => toggleRoomExpanded(room.id)}
-              aria-label={isExpanded ? `Collapse ${room.name} agents` : `Show ${room.name} agents`}
-              aria-expanded={isExpanded}
-              className="ml-1 flex size-7 shrink-0 items-center justify-center rounded text-[var(--text-quaternary)] transition-colors hover:text-[var(--text-secondary)]"
-            >
-              <ChevronDown className={cn("size-3.5 transition-transform", !isExpanded && "-rotate-90")} />
-            </button>
-            <button
-              onClick={() => onSelectRoom?.(room.id)}
-              title={`Open ${room.name} room`}
-              aria-current={isActive ? "true" : undefined}
-              className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 text-left"
-            >
-              <Layers className="size-4 shrink-0 text-[var(--text-tertiary)]" />
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      "truncate text-[13px] font-semibold tracking-[-0.2px]",
-                      isActive ? "text-foreground" : "text-[var(--text-secondary)]",
-                    )}
-                  >
-                    {room.name}
-                  </span>
-                  {room.status === "active" && (
-                    <span className="size-1.5 shrink-0 rounded-full bg-[var(--accent)]" aria-label="active" />
-                  )}
-                </span>
-                <span className="block truncate text-[11px] text-[var(--text-tertiary)]">
-                  {room.participantCount} {room.participantCount === 1 ? "agent" : "agents"}
-                  {lastActive ? ` · ${lastActive}` : ""}
-                </span>
-              </span>
-              <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-quaternary)]">{room.sessionCount}</span>
-            </button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  onClick={(event) => event.stopPropagation()}
-                  aria-label={`${room.name} actions`}
-                  className="mr-1 flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/room:lg:flex group-has-[[data-state=open]]/room:lg:flex"
-                >
-                  <EllipsisVertical className="size-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onClick={() => setArchiveTarget({
-                    kind: "room",
-                    title: room.name,
-                    sessionIds: room.sessions.map((session) => session.id),
-                    sourceRef: room.id,
-                    sessions: room.sessions as unknown as Session[],
-                  })}
-                >
-                  <ArchiveIcon />
-                  Archive room...
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )
-      }
       case "older-line":
         return (
           <button
@@ -791,26 +1654,19 @@ export function ChatSidebar({
             )}
             aria-hidden={searchOpen}
           >
-            {/* Rooms (default) groups chats into department project-rooms;
-                Focused shows only the operator's own top-level chats; All reveals
-                delegated/automated sessions too. Persisted; search spans
-                everything regardless of mode. */}
+            {/* Focused (default) shows only the operator's own top-level chats;
+                All reveals delegated/automated sessions too. Persisted; search
+                spans everything regardless. */}
             <div className="flex items-center gap-0.5 rounded-full bg-[var(--fill-tertiary)] p-0.5 text-[11px] font-medium">
-              {(["rooms", "focused", "all"] as const).map((mode) => (
+              {(["focused", "all"] as const).map((mode) => (
                 <button
                   key={mode}
-                  onClick={() => selectViewMode(mode)}
-                  aria-pressed={viewMode === mode}
-                  title={
-                    mode === "rooms"
-                      ? "Group chats by department project-room"
-                      : mode === "focused"
-                        ? "Only chats you started"
-                        : "Include automated & delegated sessions"
-                  }
+                  onClick={() => selectFocusMode(mode)}
+                  aria-pressed={focusMode === mode}
+                  title={mode === "focused" ? "Only chats you started" : "Include automated & delegated sessions"}
                   className={cn(
                     "rounded-full px-2.5 py-1 capitalize transition-all",
-                    viewMode === mode
+                    focusMode === mode
                       ? "bg-[var(--bg-secondary)] text-foreground shadow-[var(--shadow-subtle)]"
                       : "text-muted-foreground hover:text-foreground"
                   )}
@@ -870,11 +1726,6 @@ export function ChatSidebar({
       </div>
 
       <div className="relative min-h-0 flex-1">
-        {deleteError ? (
-          <div role="alert" className="mx-3 mt-2 rounded-md border border-[color-mix(in_srgb,var(--system-red)_35%,transparent)] bg-[color-mix(in_srgb,var(--system-red)_10%,transparent)] px-3 py-2 text-xs text-[var(--system-red)]">
-            Delete failed: {deleteError}
-          </div>
-        ) : null}
         {/* C10: short top scrim so rows dissolve under the header instead of
             clipping at a hard seam (the header border is gone). Theme-aware. */}
         <div
@@ -891,10 +1742,10 @@ export function ChatSidebar({
           <div className="px-4 py-8 text-center text-xs text-[var(--text-quaternary)]">
             {search.trim() ? (
               "No matching chats"
-            ) : viewMode === "focused" && hiddenAutomated > 0 ? (
+            ) : focusMode === "focused" && hiddenAutomated > 0 ? (
               <>
                 No personal chats here.{" "}
-                <button onClick={() => selectViewMode("all")} className="text-[var(--accent)] hover:underline">
+                <button onClick={() => selectFocusMode("all")} className="text-[var(--accent)] hover:underline">
                   View all ({hiddenAutomated} automated)
                 </button>
               </>
@@ -926,7 +1777,6 @@ export function ChatSidebar({
                 : vi.kind === "employee" ? vi.item.pinKey
                 : vi.kind === "cron-session" ? vi.session.id
                 : vi.kind === "section" ? `section:${vi.id}`
-                : vi.kind === "room-header" ? `room:${vi.room.id}`
                 : `${vi.kind}:${i}`
               }>
                 {renderItem(vi)}
@@ -935,23 +1785,29 @@ export function ChatSidebar({
           </>
         )}
 
-        {/* Managers — quick access to leadership ABOVE Team. A manager may also
-            appear in Team below (intentional dup); this section is always present
-            regardless of whether they have sessions. */}
-        {!loading && onContactEmployee && managerEmployees.length > 0 ? (
-          <div className="mt-3 pt-1">
-            <SectionLabel label="Managers" count={managerEmployees.length} />
-            {managerEmployees.map((emp) => (
-              <ContactRow key={emp.name} emp={emp} onContact={onContactEmployee} />
-            ))}
-          </div>
-        ) : null}
-
         {!loading && onContactEmployee && contactableEmployees.length > 0 ? (
           <div className="mt-3 pt-1">
             <SectionLabel label="Team" count={contactableEmployees.length} />
             {contactableEmployees.map((emp) => (
-              <ContactRow key={emp.name} emp={emp} onContact={onContactEmployee} />
+              <button
+                key={emp.name}
+                onClick={() => onContactEmployee(emp.name)}
+                title={`Start a chat with ${emp.displayName || titleCase(emp.name)}`}
+                className="group/contact relative flex w-full items-center gap-3 border-l-2 border-l-transparent px-4 py-2.5 text-left transition-colors hover:bg-[var(--fill-tertiary)]"
+              >
+                <div className="relative flex size-9 shrink-0 items-center justify-center">
+                  <EmployeeAvatar name={emp.name} size={36} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <span className="block min-w-0 truncate text-[13px] font-medium tracking-[-0.2px] text-foreground">
+                    {emp.displayName || titleCase(emp.name)}
+                  </span>
+                  {emp.department ? (
+                    <span className="block truncate text-[11px] text-[var(--text-tertiary)]">{emp.department}</span>
+                  ) : null}
+                </div>
+                <Plus className="size-3.5 shrink-0 text-[var(--text-quaternary)] transition-colors group-hover/contact:text-[var(--accent)]" />
+              </button>
             ))}
           </div>
         ) : null}

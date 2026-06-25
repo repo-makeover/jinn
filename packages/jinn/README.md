@@ -44,18 +44,6 @@ jinn setup && jinn start
 
 > Sign in to your engines once before `jinn start` — run `claude` and use `/login` (and `codex` if installed).
 
-## 🔁 Start automatically on login (Linux)
-
-```bash
-jinn startup enable
-jinn startup status
-```
-
-This installs and enables a per-user systemd service for the current Jinn
-instance. For a non-default instance, run `jinn -i <name> startup enable`. If
-you want it to start even before you log in, enable lingering once with
-`loginctl enable-linger $USER`.
-
 ## ✨ Features
 
 - **Multi-engine** — Claude Code, Codex, Grok, and Antigravity behind one API; switch engine and model per task or per employee.
@@ -65,14 +53,6 @@ you want it to start even before you log in, enable lingering once with
 - **Web dashboard + voice** — chat UI, live org chart, kanban board, logs, usage limits, and a hands-free talk mode.
 - **Skills** — reusable Markdown playbooks your agents follow step by step.
 - **Subscription-friendly** — every Claude turn runs through the real interactive CLI inside a PTY, so your Max plan keeps working instead of silently draining API credits.
-
-## 📓 Changelog
-
-A versioned ledger of features, capability changes, and upgrades is kept in
-[CHANGELOG.md](https://github.com/hristo2612/jinn/blob/main/CHANGELOG.md). The
-latest release (**0.21.x**) adds the **Grok** engine, the **`jinn limits`**
-quota/rate-limit surface, a gamified onboarding wizard, and a redesigned web
-dashboard with universal Ribbon navigation.
 
 ## 📚 Documentation
 

@@ -19,19 +19,6 @@
   <img src="assets/jinn-showcase.gif" alt="Jinn web dashboard" width="820" />
 </p>
 
-> [!NOTE]
-> **This is a fork that underwent a significant rewrite.** It was forked from the
-> upstream project **[hristo2612/jinn](https://github.com/hristo2612/jinn)** and then
-> heavily reworked before being opened up. For the original, unmodified project,
-> see that upstream repository.
->
-> **What changed in this fork:**
->
-> - Reworked the agent/governance docs (`AGENTS.md`, `governance/`, `control/`) to
->   drop those tool dependencies while keeping the governance framework.
-> - Moved activity logs, audits, and session logs out of version control (now
->   `.gitignore`d as local-only artifacts).
-
 > **You bring the engines. Jinn runs the company.**
 
 ---
@@ -40,7 +27,7 @@
 
 You've already installed the best agent CLIs. Jinn turns that pile of terminals into a coordinated team.
 
-- **🎼 Conducts your agents - doesn't replace them.** Claude Code, Codex, Grok, Antigravity, Pi, Kiro, Hermes - whatever's on your `PATH` becomes a Jinn engine. Jinn adds **zero** AI logic of its own ("bus, not brain"); all the intelligence is your engines'. When they get better, Jinn gets better, for free.
+- **🎼 Conducts your agents - doesn't replace them.** Claude Code, Codex, Grok, Antigravity, Pi, Hermes - whatever's on your `PATH` becomes a Jinn engine. Jinn adds **zero** AI logic of its own ("bus, not brain"); all the intelligence is your engines'. When they get better, Jinn gets better, for free.
 - **🏢 An AI org you design in YAML.** Named employees with personas, ranks, and departments - and a reporting hierarchy of any depth. A COO delegates work to managers, managers to their reports. Real chain of command, not a flat pool of anonymous agents.
 - **💸 Runs on your subscription, not a token meter.** Jinn drives the *official* Claude Code CLI inside a real terminal, so Claude turns bill against your flat-rate Max/Pro subscription - a whole org grinding all day is a fixed monthly cost, not a surprise API invoice.
 - **⏰ Works while you sleep.** Hot-reloadable cron schedules background research, content, monitoring, and support - output routed through your COO for review, then to you on Slack.
@@ -142,7 +129,6 @@ Jinn detects whichever agent CLIs are on your `PATH` and makes them interchangea
 | **grok** | xAI Grok CLI | `npm install -g @xai-official/grok` (run `grok` once to auth) | Chat · CLI (xterm) | low / medium / high / xhigh / max |
 | **antigravity** | Antigravity CLI (`agy`) | see Antigravity docs | CLI (xterm) | - |
 | **pi** | Pi coding agent CLI | see Pi CLI docs | Chat | - |
-| **kiro** | Kiro headless coding agent | `npm install -g kiro-cli` then authenticate or set `KIRO_API_KEY` | Chat | low / medium / high |
 | **hermes** | NousResearch Hermes - open-source, model-agnostic agent | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` | Chat (ACP streaming) · CLI (xterm view) | - |
 
 The picker shows real model names out of the box (Opus 4.8, GPT-5.5, Gemini 3.x…). Those labels live in your `config.yaml`, so a fresh install looks polished day one - while Grok, Pi, and Hermes report their model lists live at session start.
@@ -198,7 +184,7 @@ Every department also has a **board**. Assign tickets to employees, watch work m
 
 ## Features
 
-- **🔌 Seven engines, one picker** - Claude Code, Codex, Grok, Antigravity, Pi, Kiro, Hermes; pick engine + model + effort per session or per employee, switchable mid-chat.
+- **🔌 Six engines, one picker** - Claude Code, Codex, Grok, Antigravity, Pi, Hermes; pick engine + model + effort per session or per employee, switchable mid-chat.
 - **🏢 AI org system** - employees, departments, ranks, managers, and a reporting hierarchy of any depth, all in editable YAML.
 - **🧩 Real delegation** - parent/child sessions with completion callbacks and a COO-review pattern that filters noise before it reaches you.
 - **⏰ Cron scheduling** - hot-reloadable background jobs with run history and optional failure alerts.
@@ -209,7 +195,7 @@ Every department also has a **board**. Assign tickets to employees, watch work m
 - **📎 Attachments** - drag, drop, or paste files and images into chat; passed through to the engine and rendered inline.
 - **🎙️ Voice** - push-to-talk dictation (local Whisper) and a hands-free "Talk" mission-control mode with streaming TTS.
 - **💰 Cost governance** - per-employee monthly budgets and per-session cost/time caps.
-- **🔄 Hot-reload & self-modification** - edit config, cron, org, or skills and the daemon reloads live; orchestration runtime settings now swap on config reload, and disabling orchestration drains existing work while rejecting new runs.
+- **🔄 Hot-reload & self-modification** - edit config, cron, org, or skills and the daemon reloads live; agents can edit those files too.
 - **🔗 MCP support** - connect engines to any MCP server, with per-employee allow-lists.
 
 ---
@@ -239,7 +225,7 @@ gateway:
   allowArbitraryFileRead: false
 
 engines:
-  default: claude        # claude | codex | grok | antigravity | pi | kiro | hermes
+  default: claude        # claude | codex | grok | antigravity | pi | hermes
   claude:
     bin: claude          # binary on your PATH (override to point elsewhere)
     model: opus
@@ -247,11 +233,6 @@ engines:
   codex:
     bin: codex
     model: gpt-5.5
-
-sessions:
-  # Opt in to replaying pending web queue items on gateway startup.
-  # Default false avoids silently re-running expensive or side-effectful jobs.
-  autoResumeOnBoot: false
 
 connectors:
   slack:
@@ -270,7 +251,7 @@ Everything is human-readable files you own - `cat` it, edit it, commit it.
 
 ## Roadmap
 
-Jinn is in active development. Shipped recently: seven-engine support, file attachments, in-app file viewer, agent-to-agent messaging, shared memory, mobile UI, live streaming. On deck:
+Jinn is in active development. Shipped recently: six-engine support, file attachments, in-app file viewer, agent-to-agent messaging, shared memory, mobile UI, live streaming. On deck:
 
 - **Engines** - local models (Ollama / llama.cpp), engine fallback chains.
 - **Connectors** - iMessage, email (IMAP/SMTP), generic webhooks.
@@ -296,12 +277,6 @@ Open **[http://localhost:5173](http://localhost:5173)** - Vite proxies `/api` an
 
 > **Prerequisites:** Node.js **24.13.0** (the repo pins it via `.nvmrc` + `engine-strict` - native modules like `better-sqlite3` are ABI-locked), pnpm 10+, and at least one engine CLI. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the full setup.
 
-If you rebuild the machine or reinstall dependencies and the native modules are missing, rerun:
-
-```bash
-pnpm rebuild better-sqlite3 node-pty classic-level @swc/core
-```
-
 ---
 
 ## License
@@ -311,8 +286,3 @@ pnpm rebuild better-sqlite3 node-pty classic-level @swc/core
 ## Contributing
 
 See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for setting up your environment and submitting pull requests.
-
-This repo is governed by an agent/contributor execution contract in
-[AGENTS.md](AGENTS.md) (the single source of truth), with governance and control
-rules under `governance/` and `control/`. Run the authoritative checks
-(`pnpm typecheck`, `pnpm test`, `pnpm lint`, `pnpm build`) before opening a PR.

@@ -69,7 +69,6 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { PiEngine } from "../pi.js";
-import { __resetPiThrottleForTests } from "../../shared/pi-throttle.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -81,14 +80,13 @@ const agentEnd = (text: string) => JSON.stringify({
   }],
 });
 
-async function startRun(overrides: Partial<Parameters<PiEngine["run"]>[0]> = {}): Promise<{ engine: PiEngine; promise: Promise<EngineResult>; call: SpawnCall }> {
+async function startRun(): Promise<{ engine: PiEngine; promise: Promise<EngineResult>; call: SpawnCall }> {
   const engine = new PiEngine();
   const promise = engine.run({
     prompt: "hello",
     cwd: "/tmp",
     sessionId: "jinn-pi-1",
     model: "ollama/gemma4:12b",
-    ...overrides,
   });
   await flush();
   const call = spawnCalls[spawnCalls.length - 1]!;
@@ -98,57 +96,9 @@ async function startRun(overrides: Partial<Parameters<PiEngine["run"]>[0]> = {})
 
 beforeEach(() => {
   spawnCalls.length = 0;
-  // The Pi throttle is a module-level singleton enforcing a minimum gap
-  // between messages; reset it so prior runs don't delay this test's spawn.
-  __resetPiThrottleForTests();
 });
 
-function envFrom(call: SpawnCall): Record<string, string> {
-  return (call.opts as { env: Record<string, string> }).env;
-}
-
 describe("PiEngine lifecycle", () => {
-  it("strips host secrets and engine loop variables from spawned env", async () => {
-    const prevOpenAi = process.env.OPENAI_API_KEY;
-    const prevClaude = process.env.CLAUDE_CODE_SESSION;
-    const prevCodex = process.env.CODEX_SESSION;
-    try {
-      process.env.OPENAI_API_KEY = "host-secret";
-      process.env.CLAUDE_CODE_SESSION = "hook";
-      process.env.CODEX_SESSION = "loop";
-
-      const { promise, call } = await startRun();
-      call.proc.emitStdout(agentEnd("ok") + "\n");
-      call.proc.close(0);
-      await promise;
-
-      const env = envFrom(call);
-      expect(env.OPENAI_API_KEY).toBeUndefined();
-      expect(env.CLAUDE_CODE_SESSION).toBeUndefined();
-      expect(env.CODEX_SESSION).toBeUndefined();
-    } finally {
-      if (prevOpenAi === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = prevOpenAi;
-      if (prevClaude === undefined) delete process.env.CLAUDE_CODE_SESSION;
-      else process.env.CLAUDE_CODE_SESSION = prevClaude;
-      if (prevCodex === undefined) delete process.env.CODEX_SESSION;
-      else process.env.CODEX_SESSION = prevCodex;
-    }
-  });
-
-  it("passes Jinn context as Pi's system prompt instead of prepending it to the user prompt", async () => {
-    const { promise, call } = await startRun({ systemPrompt: "SYSTEM RULES" });
-    const systemPromptIndex = call.args.indexOf("--system-prompt");
-
-    expect(systemPromptIndex).toBeGreaterThan(-1);
-    expect(call.args[systemPromptIndex + 1]).toBe("SYSTEM RULES");
-    expect(call.args[call.args.length - 1]).toBe("hello");
-
-    call.proc.emitStdout(agentEnd("ok") + "\n");
-    call.proc.close(0);
-    await promise;
-  });
-
   it("records agent_end output but resolves only after the process closes", async () => {
     const { promise, call } = await startRun();
     let settled = false;

@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.23.3] - 2026-06-25
+
+### 🐛 Fixes
+- **Completed chats refresh from the final transcript.** Returning to a long-running session now replaces cached mid-turn progress and tool rows with the gateway's completed history instead of requiring a browser refresh.
+- **New-chat sends stay visually continuous.** The optimistic first user message now survives the newly-created session hydration handoff, removing the brief loading flash after pressing send.
+- **Chat header fade no longer covers message text.** The title keeps its soft scrim while the message list starts below the fade, balancing title legibility with readable chat content.
+
+## [0.23.2] - 2026-06-25
+
+### ⚡ Performance
+- **Chat switching feels instant for recently opened sessions.** The web UI now reuses a bounded in-memory session snapshot cache so already-opened chats render immediately while still revalidating from the gateway, with automatic cleanup to avoid unbounded growth.
+
+### 🐛 Fixes
+- **Route navigation no longer blanks the app on stale or transient chunks.** Lazy route loads now show a lightweight spinner, retry once with a refresh on recoverable chunk failures, and fall back to a refresh prompt instead of leaving an empty page.
+- **New-chat engine switching opens the real new-chat flow.** The existing-chat engine picker now routes to the employee picker instead of a blank starter surface, and cold chat switches show a loading spinner instead of flashing the new-chat template.
+
+## [0.23.1] - 2026-06-25
+
+### 🐛 Fixes
+- **Completed chat turns collapse live noise immediately.** Chat Mode now removes mid-turn progress, tool rows, and task-list blocks from the visible transcript as soon as the turn completes, matching the cleaned final history without requiring a page refresh.
+
+## [0.23.0] - 2026-06-25
+
+> Chat Mode gets a lean structured activity layer while keeping durable history clean.
+
+### ✨ Features
+- **Lean Chat Mode BlockKit.** Chat sessions can now render validated structured task-list blocks from engine streams, with refresh-safe partial persistence during active turns and scoped block ids so later turns cannot rewrite older transcript rows.
+- **Compact tool-call history UI.** Tool activity now groups into quiet, expandable inline rows instead of noisy side panels or speculative cards, keeping the chat transcript minimal while still making tool activity inspectable.
+
+### 🐛 Fixes
+- **Final chat history stays final.** Mid-turn text/tool rows are refresh-only again: after a turn completes, SQLite history collapses to the final assistant message instead of preserving every streamed tool call and partial text block.
+- **Remote access pairing polish.** The pairing flow accordion now toggles correctly, avoiding a stuck expanded/collapsed state during browser pairing.
+- **Employee session defaults.** New employee sessions now honor the configured default engine/model/effort instead of drifting from the selected employee defaults.
+- **Engine streaming correctness.** Codex adjacent text blocks are separated without corrupting the final result, Grok transcript tests are race-hardened, and active Claude subagent StopFailure handling no longer reports premature turn failures.
+
 ## [0.22.0] - 2026-06-23
 
 > Hermes joins the engine lineup, and the README is rebuilt to actually sell what Jinn is.
@@ -10,25 +45,6 @@
 ### 🪄 Docs
 - **Value-first README.** Rewritten to lead with what Jinn is and does — an orchestration layer that runs any agent CLI as a company of AI employees — with a corrected quickstart, an all-six-engines table, a persona example, and fresh dashboard screenshots (org map, kanban, chat). Removed the competitor comparison in favor of the value story.
 
-## [Unreleased]
-
-### 💥 Breaking
-- **Node.js 24 is now required** (`engines.node` raised from `>=22` to `>=24`; `.nvmrc` pins `24.13.0`). The bundled native modules (`better-sqlite3`, `node-pty`) are built against the Node 24 ABI, so running on Node 22 fails. README and CONTRIBUTING prerequisites updated to match.
-
-### ✨ Features
-- **Previous Projects archive.** Chat rooms, individual chats, and past Scheduled run sessions can be snapshotted into read-only dated archives and removed from the active sidebar; cron job definitions keep running unchanged.
-- **Opt-in board worker poller + manual Run now dispatch.** Department kanban tickets can now carry a `complexity` field, a disabled-by-default overnight board worker can dispatch one eligible `todo` ticket per tick to the department manager when chat is idle and usage allows, and the kanban detail panel exposes a manual `Run now` override for assigned tickets.
-- **Kanban live session inspector.** In-progress ticket detail panels can now resolve the backing gateway session, show session status/engine/model/cost/heartbeat, render the latest 8 transcript messages inline, and link straight to the full live chat.
-- **Kiro headless engine.** Added first-class `kiro` engine registration using `kiro-cli chat --no-interactive --trust-all-tools`, with model/effort/resume-id flags, process-aliveness tracking, ANSI-stripped final-answer extraction, `KIRO_API_KEY` child-env forwarding, and bounded session-id recovery from `kiro-cli chat --list-sessions --format json`.
-- **Estimated Kiro credit gauge.** Kiro turn footers (`Credits: X.XX - Time: ...` / `Credits: X.XX • Time: ...`) now feed a local monthly estimate ledger at `~/.jinn/usage/kiro-credits.json`. `engines.kiro.creditBudget` and `engines.kiro.billingAnchorDay` drive remaining-percent/state/reset calculations. The API shape marks the credits as estimated, and actual Kiro credit-exhaustion failures still trigger the normal usage-limit recovery path.
-
-### ⚡ Performance / Reliability
-- **Engine lifecycle & queue hardening.** Another pass on interactive-engine teardown and per-session work queues to further reduce leaked process state and stuck turns.
-
-### 🪄 Docs
-- Refreshed the README showcase GIF and added a **showcase video-capture** skill playbook (mock/sandbox instance recording, Playwright capture, WebM→MP4/GIF conversion).
-- Documented Kiro fidelity gaps: credit usage is footer-derived, no stable local quota endpoint is wired, and no scheduler/provider-map surface exists in this source tree for a Kiro-to-AWS mapping.
-
 ## [0.21.3] - 2026-06-22
 
 ### 🐛 Fixes
@@ -38,37 +54,6 @@
 
 ### 🐛 Fixes
 - **Connector-backed replies no longer hang after Homebrew/npm installs.** The npm publish manifest now includes `assets/hook-relay.mjs`, so gateway boot can restore `~/.jinn/hook-relay.mjs` and Claude Stop hooks can report completed Slack/Discord/Telegram turns.
-
-## [0.21.1] - 2026-06-17
-
-### 🪄 Docs
-- **npm discoverability.** Added a dedicated `jinn-cli` package README plus `keywords`, `homepage`, and `repository` metadata so the package surfaces in npm search.
-
-### 🐛 Fixes
-- Typed the `applyEngineChoice` test inputs so `tsc --noEmit` passes cleanly.
-
-## [0.21.0] - 2026-06-17
-
-> Engines and onboarding grow up: the **Grok** interactive-PTY engine lands end-to-end, a new **engine limits** surface (CLI + web page + backend telemetry) shows rate limits and quota windows for Claude and Codex, a **gamified onboarding wizard** seeds your first employee/delegation/cron, and the web dashboard gets a universal **Ribbon** nav plus a Claude-app chat redesign. Rounded out with per-message read-aloud, security hardening, and a Node version pin.
-
-### ✨ Features
-- **Grok engine (`grok`).** New interactive-PTY engine driven like Claude (subscription-billed, so every turn runs the real interactive `grok` binary inside a PTY). Model + effort support is discovered from the CLI; mid-turn **progress** is surfaced (not raw reasoning/thoughts), the answer is emitted exactly once, and turns settle reliably via reconcile + terminal-event gating.
-- **Engine limits surface.** New `jinn limits` CLI, a redesigned **Limits** web page, and backend telemetry expose engine rate limits, quota windows, and model capabilities for Claude and Codex. Codex limits are read from the session rollout (no spawn race); the page reports honest data freshness.
-- **Gamified onboarding wizard.** A multi-beat setup flow with a genie mascot walks a fresh install through hatching its first employee, demoing delegation, and creating a first cron job. The wizard includes an **engine / model / effort picker** (driven by the config registry, no clobbering of a non-Claude default engine) and auto-launches the COO setup chat; `completeOnboarding` persists the chosen engine/model/effort as the global default. Setup state is tracked separately from wizard state (`portal.setupComplete` vs `onboarded`).
-- **Universal Ribbon navigation.** A global desktop **Ribbon** is now the single left nav across every page; the legacy left rail and per-page header bars were retired in favor of a shared **PillNav** system. The Ribbon's Chat icon opens a foldable Chat List, breadcrumb/page titles render in the pill, and mobile gets an icons-only tab bar.
-- **Per-message read-aloud.** Any chat message can be played back (play/pause) using **Kokoro** neural TTS with a **Web Speech** fallback. Audio is streamed per sentence, cutting time-to-first-audio from ~11s to ~1s.
-- **Chat redesign (Claude-app aesthetic).** Borderless frosted composer + model selector, rebuilt scroll-to-bottom (`useStickToBottom`, fixes streaming detach), a focused Today/Yesterday sidebar with a user-initiated default filter and an **All** toggle, collapsible long user messages (Show more/less), in-place engine switching from the model menu, and a "+New employee" picker.
-
-### ⚡ Performance / Reliability
-- **Engine lifecycle & queue hardening** across interactive engines; **org-reload now recycles only idle PTYs** so writing to `org/` never kills an in-flight web session.
-- **Codex** batch turns settle on a terminal event with a timeout backstop (same hang class fixed for Grok); **Claude** transcript duplicate-sync fixed and `/usage` / `/limits` no longer duplicate the previous assistant message.
-
-### 🔒 Security / Privacy
-- **Local gateway security surfaces hardened** and public privacy leaks scrubbed from shipped source.
-- **Same-origin gateway access over Tailscale/LAN** is now allowed (so the dashboard works across your tailnet) without opening cross-origin holes.
-
-### 🛠️ Build / CI
-- **Pinned dev Node to 24.13.0** (`.nvmrc` tracked) to stop the `better-sqlite3` ABI mismatch; CI runs on the pinned Node and the lockfile syncs `@vitest/coverage-v8`. Added vitest coverage and wired in previously-untracked test files.
 
 ## [0.20.0] - 2026-06-11
 

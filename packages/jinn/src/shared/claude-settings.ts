@@ -22,10 +22,6 @@ export interface ClaudeSettings {
   appendSystemPrompt?: string;
 }
 
-export const CLAUDE_BYPASS_PERMISSIONS_CONSENT_SETTINGS = {
-  skipDangerousModePermissionPrompt: true,
-} as const;
-
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -94,11 +90,14 @@ export function cleanupSessionSettings(dir: string, sessionId: string): void {
  * blocks on a one-time consent dialog.
  *
  * Recent Claude Code versions gate the interactive TUI behind blocking first-run
- * prompts. seedTrust handles global onboarding, project trust, and the Chrome
- * intro; buildSessionSettings handles the Bypass Permissions consent by writing
- * skipDangerousModePermissionPrompt into the per-session --settings file. The
- * InteractiveClaudeEngine never sends a keystroke to dismiss dialogs, so both
- * layers must be pre-answered before spawning the PTY. See upstream issue #66.
+ * prompts: the "Bypass Permissions mode" consent (triggered by
+ * --dangerously-skip-permissions) and the "Claude in Chrome (beta)" intro
+ * (triggered by --chrome). The InteractiveClaudeEngine launches `claude`
+ * interactively with both flags and never sends a keystroke to dismiss the
+ * dialogs, so on any install where onboarding is not already complete (fresh,
+ * headless/CI, or after a Claude Code upgrade resets onboarding for a new
+ * version) every work turn hangs forever before reaching the API. Pre-seeding
+ * these flags at gateway boot answers the dialogs up front. See upstream issue #66.
  */
 export function seedTrust(claudeJsonPath: string, projectDir: string): void {
   const realDir = fs.realpathSync(projectDir);

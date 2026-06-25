@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { IPty } from "node-pty";
+import * as pty from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { neutralizeForPaste } from "../shared/skill-commands.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
-import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
+import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
 import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
 import {
@@ -33,10 +33,10 @@ interface ActiveTurn {
   tuiOutput?: { dispose: () => void };
   doneTimer?: NodeJS.Timeout;
   hardTimeout?: NodeJS.Timeout;
-  boundProc?: IPty;
+  boundProc?: pty.IPty;
 }
 
-function pasteAndSubmit(proc: IPty, text: string): void {
+function pasteAndSubmit(proc: pty.IPty, text: string): void {
   const payload = neutralizeForPaste(text);
   // Grok's TUI line editor does not currently accept Codex/Claude-style
   // bracketed-paste submission from node-pty; write a normal terminal line.
@@ -193,7 +193,7 @@ export class GrokInteractiveEngine implements InterruptibleEngine, PtyViewEngine
       }, delayMs);
       promptSubmitTimer.unref?.();
     };
-    const watchTuiOutput = (proc: IPty) => {
+    const watchTuiOutput = (proc: pty.IPty) => {
       let buffer = "";
       let acceptedProjectPicker = false;
       turn.tuiOutput = proc.onData((data) => {
@@ -319,13 +319,13 @@ export class GrokInteractiveEngine implements InterruptibleEngine, PtyViewEngine
     }
 
     if (warm) {
-      turn.boundProc = (warm as any)._proc as IPty | undefined;
+      turn.boundProc = (warm as any)._proc as pty.IPty | undefined;
       this.lifecycle.turnStarted(jinnSessionId);
       if (turn.boundProc) schedulePromptSubmit(0);
       else turn.interrupt("Interrupted: grok PTY unavailable");
     } else {
       const handle = this.spawn(jinnSessionId, opts, grokSessionId, systemPromptOverride);
-      turn.boundProc = (handle as any)._proc as IPty | undefined;
+      turn.boundProc = (handle as any)._proc as pty.IPty | undefined;
       if (turn.boundProc) watchTuiOutput(turn.boundProc);
       this.lifecycle.adopt(jinnSessionId, handle, { turnRunning: true });
       this.lifecycle.turnStarted(jinnSessionId);
@@ -368,7 +368,7 @@ export class GrokInteractiveEngine implements InterruptibleEngine, PtyViewEngine
     const args = buildGrokInteractiveArgs(opts, grokSessionId, systemPromptOverride);
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`GrokInteractiveEngine spawning ${bin} (session: ${grokSessionId ?? "new"}, geom: ${geom ? `${geom.cols}x${geom.rows}` : "default"})`);
-    const proc = spawnPty(bin, args, {
+    const proc = pty.spawn(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,
@@ -379,7 +379,7 @@ export class GrokInteractiveEngine implements InterruptibleEngine, PtyViewEngine
     return this.wireProcToStream(jinnSessionId, proc);
   }
 
-  private wireProcToStream(jinnSessionId: string, proc: IPty): PtyHandle {
+  private wireProcToStream(jinnSessionId: string, proc: pty.IPty): PtyHandle {
     const handle = createPtyHandle(proc);
     proc.onData((data) => {
       if (data.includes("\x1b[6n")) proc.write(CURSOR_POSITION_RESPONSE);
@@ -416,18 +416,18 @@ export class GrokInteractiveEngine implements InterruptibleEngine, PtyViewEngine
   }
 
   writeStdin(sessionId: string, text: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
     if (proc) pasteAndSubmit(proc, text);
   }
 
   writeRaw(sessionId: string, data: string): void {
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
     if (proc) proc.write(data);
   }
 
   resizePty(sessionId: string, cols: number, rows: number): void {
     setCapped(this.lastGeom, sessionId, { cols, rows });
-    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as IPty | undefined;
+    const proc = (this.lifecycle.getWarm(sessionId) as any)?._proc as pty.IPty | undefined;
     try { proc?.resize(cols, rows); } catch { /* gone */ }
   }
 

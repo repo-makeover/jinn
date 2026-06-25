@@ -254,6 +254,18 @@ describe("CodexEngine — final result assembly (last agent_message wins, NOT co
     expect(result.result).not.toContain("intermediate");
   });
 
+  it("separates adjacent live agent_message blocks without changing the final result", async () => {
+    const { result, deltas } = await runWith({}, [
+      threadStarted("t1"),
+      agentMessage("First block."),
+      agentMessage("Second block."),
+    ]);
+
+    const liveText = deltas.filter((d) => d.type === "text").map((d) => d.content).join("");
+    expect(liveText).toBe("First block.\n\nSecond block.");
+    expect(result.result).toBe("Second block.");
+  });
+
   it("flushes a trailing agent_message that arrives without a newline (close-time lineBuf)", async () => {
     const { result } = await runWith(
       {},
@@ -476,6 +488,52 @@ describe("CodexEngine — process lifecycle", () => {
     await promise;
     expect(engine.isAlive("sess-1")).toBe(false);
   }, 20_000);
+
+  it("settles on the terminal turn.completed event even if the process never closes", async () => {
+    // Regression (same hang class as grok 94a50cc): a bash/shell tool call can leave
+    // a grandchild that inherits codex's stdout pipe, so proc.on("close") never fires
+    // even after codex itself exits. The turn must still settle from the parsed
+    // terminal event (turn.completed) — never hang.
+    const engine = new CodexEngine({
+      codexSessionsDir: fs.mkdtempSync(path.join(os.tmpdir(), "codex-hang-")),
+    });
+    const deltas: StreamDelta[] = [];
+    const promise = engine.run({
+      prompt: "run a bash command",
+      cwd: "/tmp",
+      sessionId: "codex-session-hang",
+      onStream: (d: StreamDelta) => deltas.push(d),
+    } as any);
+
+    await flush();
+    const call = spawnCalls[spawnCalls.length - 1];
+    expect(call).toBeDefined();
+
+    // Stream thread id + answer + the terminal turn.completed. Crucially we NEVER
+    // call call.proc.close(...) — the pipe is "held open" by a grandchild.
+    call.proc.emitStdout(
+      [
+        threadStarted("thread-hang"),
+        agentMessage("Done — the command ran."),
+        turnCompleted({ last_token_usage: { input_tokens: 1234 } }),
+        "",
+      ].join("\n"),
+    );
+
+    // Resolves promptly from the terminal event (no close). A 1s race guard proves
+    // we do not depend on `close` (which would hang here, failing pre-fix).
+    const raced = await Promise.race([promise, sleep(1000).then(() => "TIMED_OUT" as const)]);
+    expect(raced).not.toBe("TIMED_OUT");
+    const result = raced as EngineResult;
+    expect(result).toMatchObject({
+      sessionId: "thread-hang",
+      result: "Done — the command ran.",
+      numTurns: 1,
+      contextTokens: 1234,
+    });
+    expect(result.error).toBeUndefined();
+    expect(engine.isAlive("codex-session-hang")).toBe(false);
+  });
 
   it("settles on the terminal turn.completed event even if the process never closes", async () => {
     // Regression (same hang class as grok 94a50cc): a bash/shell tool call can leave

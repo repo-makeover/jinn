@@ -13,8 +13,6 @@ import type {
 import { CLAUDE_LIMITS_DIR } from "./paths.js";
 import { getModelRegistry } from "./models.js";
 import { resolveBin } from "./resolve-bin.js";
-import { DEFAULT_PI_MESSAGES_PER_MINUTE, getPiThrottleSnapshot } from "./pi-throttle.js";
-import { nextKiroCreditResetAt, readKiroCreditLedger } from "./usage-status.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -428,70 +426,6 @@ function collectUnsupported(config: JinnConfig, engine: string, reason: string):
   };
 }
 
-function collectPiLimits(config: JinnConfig): EngineLimitEngineSnapshot {
-  const snap = baseSnapshot(config, "pi");
-  if (!snap.available) {
-    return collectUnsupported(config, "pi", "Pi CLI is not installed or no Pi models are configured.");
-  }
-
-  const throttle = getPiThrottleSnapshot({ messagesPerMinute: DEFAULT_PI_MESSAGES_PER_MINUTE });
-  const resetsAt = throttle.resetsAtMs ? Math.floor(throttle.resetsAtMs / 1000) : undefined;
-  return {
-    ...snap,
-    status: "snapshot",
-    source: "local Jinn throttle for Purdue GenAI / Pi",
-    accountPlan: `Conservative local cap: ${DEFAULT_PI_MESSAGES_PER_MINUTE} messages/minute`,
-    windows: [{
-      name: "1m local throttle",
-      usedPercent: throttle.usedPercent,
-      windowDurationMins: 1,
-      resetsAt,
-      resetsAtIso: isoFromSeconds(resetsAt),
-    }],
-    unsupportedReason: "Purdue GenAI / Pi has short-window message limits; Jinn conservatively spaces Pi starts at 10 messages/minute. No aggregate account quota endpoint is available.",
-  };
-}
-
-function collectKiroLimits(config: JinnConfig): EngineLimitEngineSnapshot {
-  const snap = baseSnapshot(config, "kiro");
-  if (!snap.available) {
-    return collectUnsupported(config, "kiro", "Kiro CLI is not installed.");
-  }
-
-  const ledger = readKiroCreditLedger(config);
-  const budget = config.engines.kiro?.creditBudget;
-  const resetsAt = nextKiroCreditResetAt(config);
-  const hasBudget = typeof budget === "number" && Number.isFinite(budget) && budget > 0;
-  const usedPercent = hasBudget ? Math.min(100, Math.max(0, (ledger.consumed / budget) * 100)) : undefined;
-  const remainingPercent = usedPercent === undefined ? undefined : Math.max(0, 100 - usedPercent);
-
-  return {
-    ...snap,
-    status: "snapshot",
-    source: "local Kiro credit estimate",
-    accountPlan: "Estimated Kiro credits",
-    windows: hasBudget
-      ? [{
-          name: "monthly credits (estimated)",
-          usedPercent,
-          resetsAt,
-          resetsAtIso: isoFromSeconds(resetsAt),
-        }]
-      : undefined,
-    credits: {
-      used: ledger.consumed,
-      ...(hasBudget ? { limit: budget, remainingPercent } : {}),
-      balance: hasBudget
-        ? `${ledger.consumed.toFixed(2)} used of ${budget.toFixed(2)} (estimated)`
-        : `${ledger.consumed.toFixed(2)} used (estimated; no budget configured)`,
-      resetsAt,
-      resetsAtIso: isoFromSeconds(resetsAt),
-      estimated: true,
-    },
-    unsupportedReason: "Kiro does not expose a stable local quota endpoint here; Jinn parses per-turn CLI credit footers and keeps an estimated monthly ledger.",
-  };
-}
-
 export async function collectEngineLimits(
   config: JinnConfig,
   opts: CollectEngineLimitsOptions = {},
@@ -529,9 +463,11 @@ export async function collectEngineLimits(
         unsupportedReason: "Antigravity exposes plan windows and G1 credit controls through the interactive `/credits` and `/settings` UI, but no stable non-interactive JSON quota endpoint was found.",
       };
     } else if (name === "pi") {
-      engines[name] = collectPiLimits(config);
-    } else if (name === "kiro") {
-      engines[name] = collectKiroLimits(config);
+      engines[name] = collectUnsupported(
+        config,
+        name,
+        "Pi exposes model capabilities and per-session usage, but no aggregate account quota endpoint.",
+      );
     } else if (name === "grok") {
       engines[name] = collectUnsupported(
         config,

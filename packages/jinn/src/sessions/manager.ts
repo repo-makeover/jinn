@@ -137,10 +137,6 @@ export class SessionManager {
     this.connectorProvider = provider;
   }
 
-  setNotificationSink(sink: SessionNotificationSink): void {
-    this.notificationSink = sink;
-  }
-
   setConfig(config: JinnConfig): void {
     this.config = config;
   }
@@ -173,6 +169,7 @@ export class SessionManager {
         transportMeta: msg.transportMeta,
         employee: opts.employee?.name ?? undefined,
         model: opts.model ?? opts.employee?.model ?? undefined,
+        effortLevel: opts.employee?.effortLevel ?? undefined,
         title: opts.title,
         prompt: msg.text,
         portalName: this.config.portal?.portalName,
@@ -761,7 +758,7 @@ export class SessionManager {
         `Session: ${session.id}`,
         `Engine: ${session.engine}`,
         `Connector: ${session.connector || session.source}`,
-        `Model: ${session.model || this.config.engines[session.engine as "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro"]?.model || "default"}`,
+        `Model: ${session.model || this.config.engines[session.engine as "claude" | "codex" | "antigravity" | "grok" | "pi"]?.model || "default"}`,
         `State: ${transportState}`,
         `Queue depth: ${queueDepth}`,
         `Created: ${session.createdAt}`,

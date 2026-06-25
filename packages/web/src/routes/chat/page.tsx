@@ -698,9 +698,7 @@ function ChatPage() {
 
   // The conversation title — slim inline title (desktop) / centered nav-bar title
   // (mobile thread). "New chat" on a fresh composer, else nothing until meta loads.
-  const headerTitle = selectedRoom
-    ? selectedRoom.name
-    : sessionMeta?.title?.trim() || (selectedId ? '' : 'New chat')
+  const headerTitle = sessionMeta?.title?.trim() || (selectedId ? '' : 'New chat')
 
   const onMobileList = mobileView === 'sidebar'
 
@@ -728,7 +726,7 @@ function ChatPage() {
           >
             <div className="h-full w-[280px]">
               <ChatSidebar
-                selectedId={selectedRoomId ? roomSelectionId(selectedRoomId) : selectedId}
+                selectedId={selectedId}
                 onSelect={handleSelect}
                 onNewChat={handleNewChat}
                 onDelete={handleDeleteSession}
@@ -737,7 +735,6 @@ function ChatPage() {
                 onEmployeeSessionsAvailable={handleEmployeeSessionsAvailable}
                 onOrderComputed={handleOrderComputed}
                 onContactEmployee={contactEmployee}
-                onSelectRoom={handleSelectRoom}
               />
             </div>
           </div>
@@ -745,16 +742,15 @@ function ChatPage() {
 
         <div className="chat-pills-layout relative min-w-0 flex-1 flex-col overflow-hidden bg-background flex">
           {/* Soft top scrim (gradient, not a border) — content scrolls under it.
-              D3: hold it near-opaque through the pill band (~44px) so bright content
-              (tool chips, text) can't read through under/between the two pills, then
-              fade. Theme-aware via var(--bg). */}
+              Hold a real cloud behind the floating header, then fade before the
+              message list's top padding ends. Theme-aware via var(--bg). */}
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 z-[5] h-[104px]",
+              "pointer-events-none absolute inset-x-0 top-0 z-[5] h-[88px]",
               onMobileList && "hidden lg:block",
             )}
-            style={{ background: 'linear-gradient(to bottom, var(--bg) 0, var(--bg) 44px, color-mix(in srgb, var(--bg) 70%, transparent) 72px, transparent 100%)' }}
+            style={{ background: 'linear-gradient(to bottom, var(--bg) 0, var(--bg) 52px, color-mix(in srgb, var(--bg) 68%, transparent) 68px, transparent 100%)' }}
           />
 
           {/* Frosted corner pills replace the solid header. Hidden over the mobile
@@ -824,6 +820,7 @@ function ChatPage() {
                 isActive={true}
                 onFocus={() => {}}
                 onSessionCreated={handleSessionCreated}
+                onNewChat={handleNewChat}
                 onSessionMetaChange={handleSessionMetaChange}
                 onRefresh={handleRefresh}
                 portalName={portalName}

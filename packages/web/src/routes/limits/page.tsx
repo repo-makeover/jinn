@@ -6,7 +6,7 @@ import type {
   EngineLimitsResponse,
   EngineLimitWindow,
 } from "@/lib/api"
-import { PageLayout } from "@/components/page-layout"
+import { PageLayout, ToolbarActions } from "@/components/page-layout"
 import { useBreadcrumbs } from "@/context/breadcrumb-context"
 import { Skeleton } from "@/components/ui/skeleton"
 
@@ -94,26 +94,7 @@ function WindowBar({ window }: { window: EngineLimitWindow }) {
   )
 }
 
-function sortEngines(engines: Record<string, EngineLimitEngineSnapshot> | undefined) {
-  if (!engines) return []
-  const priority = new Map(FEATURED_ENGINES.map((name, index) => [name, index]))
-  return Object.values(engines).sort((a, b) => {
-    const pa = priority.get(a.name) ?? Number.MAX_SAFE_INTEGER
-    const pb = priority.get(b.name) ?? Number.MAX_SAFE_INTEGER
-    if (pa !== pb) return pa - pb
-    return a.name.localeCompare(b.name)
-  })
-}
-
-function EngineCard({
-  engine,
-  refreshing,
-  onRefresh,
-}: {
-  engine: EngineLimitEngineSnapshot
-  refreshing: boolean
-  onRefresh: (engineName: string) => void
-}) {
+function EngineCard({ engine }: { engine: EngineLimitEngineSnapshot }) {
   const windows = engine.windows || []
   const tone = freshness(engine)
   const credits = engine.credits
@@ -137,22 +118,10 @@ function EngineCard({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-[var(--space-2)]">
-          <span className="flex items-center gap-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--text-secondary)] whitespace-nowrap">
-            <span className="w-2 h-2 rounded-full" style={{ background: tone.color }} />
-            {tone.label}
-          </span>
-          <button
-            type="button"
-            onClick={() => onRefresh(engine.name)}
-            disabled={refreshing}
-            title={`Refresh ${engine.name} limits`}
-            aria-label={`Refresh ${engine.name} limits`}
-            className="focus-ring w-8 h-8 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-transparent text-[var(--text-tertiary)] cursor-pointer transition-colors duration-150 ease-[var(--ease-smooth)] hover:bg-[var(--fill-tertiary)] hover:text-[var(--text-primary)] disabled:cursor-default disabled:opacity-60"
-          >
-            <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
-          </button>
-        </div>
+        <span className="flex items-center gap-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--text-secondary)] whitespace-nowrap">
+          <span className="w-2 h-2 rounded-full" style={{ background: tone.color }} />
+          {tone.label}
+        </span>
       </div>
 
       {windows.length > 0 ? (
@@ -187,53 +156,28 @@ export default function LimitsPage() {
   useBreadcrumbs([{ label: 'Limits' }])
   const [data, setData] = useState<EngineLimitsResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [refreshingEngines, setRefreshingEngines] = useState<Set<string>>(() => new Set())
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const loadLimits = useCallback(() => {
+  const refresh = useCallback(() => {
+    setRefreshing(true)
     setError(null)
     api
-      .getEngineLimits()
+      .refreshEngineLimits()
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load engine limits"))
       .finally(() => {
         setLoading(false)
+        setRefreshing(false)
       })
   }, [])
 
   useEffect(() => {
-    loadLimits()
-  }, [loadLimits])
-
-  const refreshEngine = useCallback((engineName: string) => {
-    setRefreshingEngines((current) => new Set(current).add(engineName))
-    setError(null)
-    api
-      .refreshEngineLimits(engineName)
-      .then((fresh) => {
-        setData((current) => {
-          if (!current) return fresh
-          return {
-            ...current,
-            generatedAt: fresh.generatedAt,
-            default: fresh.default,
-            engines: { ...current.engines, ...fresh.engines },
-          }
-        })
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : `Failed to refresh ${engineName} limits`))
-      .finally(() => {
-        setLoading(false)
-        setRefreshingEngines((current) => {
-          const next = new Set(current)
-          next.delete(engineName)
-          return next
-        })
-      })
-  }, [])
+    refresh()
+  }, [refresh])
 
   const engines = useMemo(
-    () => sortEngines(data?.engines),
+    () => FEATURED_ENGINES.map((name) => data?.engines[name]).filter(Boolean) as EngineLimitEngineSnapshot[],
     [data],
   )
 
@@ -251,6 +195,15 @@ export default function LimitsPage() {
             <h1 className="text-[length:var(--text-subheadline)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
               Limits
             </h1>
+            <ToolbarActions>
+              <button
+                onClick={refresh}
+                className="focus-ring w-8 h-8 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-transparent text-[var(--text-tertiary)] cursor-pointer transition-colors duration-150 ease-[var(--ease-smooth)]"
+                aria-label="Refresh engine limits"
+              >
+                <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+              </button>
+            </ToolbarActions>
           </div>
         </header>
 
@@ -270,12 +223,7 @@ export default function LimitsPage() {
             ) : (
               <div className="grid gap-[var(--space-4)] md:grid-cols-2 items-start">
                 {engines.map((engine) => (
-                  <EngineCard
-                    key={engine.name}
-                    engine={engine}
-                    refreshing={refreshingEngines.has(engine.name)}
-                    onRefresh={refreshEngine}
-                  />
+                  <EngineCard key={engine.name} engine={engine} />
                 ))}
               </div>
             )}

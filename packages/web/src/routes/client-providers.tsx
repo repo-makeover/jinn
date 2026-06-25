@@ -9,7 +9,7 @@ import { BreadcrumbProvider } from '@/context/breadcrumb-context'
 import { EmojiFavicon } from '@/components/emoji-favicon'
 import { GatewayProvider } from '@/hooks/use-gateway'
 import { TalkProvider } from '@/routes/talk/talk-provider'
-import { AuthGate } from '@/components/auth-gate'
+import { AuthGate, AuthProvider } from "@/routes/auth-provider"
 
 function QueryInvalidationBridge() {
   useQueryInvalidation()
@@ -20,23 +20,25 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <AuthGate>
-          <BreadcrumbProvider>
-            <SettingsProvider>
-              <GatewayProvider>
-                {/* TalkProvider lifts the voice-loop state above the router so it
-                    survives / ↔ /talk navigation. It stays dormant until a page
-                    calls activate() (TalkPage does, on mount). */}
-                <TalkProvider>
-                  {children}
-                  <DocumentTitle />
-                  <EmojiFavicon />
-                  <QueryInvalidationBridge />
-                </TalkProvider>
-              </GatewayProvider>
-            </SettingsProvider>
-          </BreadcrumbProvider>
-        </AuthGate>
+        <BreadcrumbProvider>
+          <AuthProvider>
+            <AuthGate>
+              <SettingsProvider>
+                <GatewayProvider>
+                  {/* TalkProvider lifts the voice-loop state above the router so it
+                      survives / ↔ /talk navigation. It stays dormant until a page
+                      calls activate() (TalkPage does, on mount). */}
+                  <TalkProvider>
+                    {children}
+                    <DocumentTitle />
+                    <EmojiFavicon />
+                    <QueryInvalidationBridge />
+                  </TalkProvider>
+                </GatewayProvider>
+              </SettingsProvider>
+            </AuthGate>
+          </AuthProvider>
+        </BreadcrumbProvider>
       </ThemeProvider>
     </QueryClientProvider>
   )
