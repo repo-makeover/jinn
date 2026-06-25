@@ -1043,10 +1043,6 @@ export async function startGateway(
 
     // API routes
     if (url.startsWith("/api/")) {
-      if (!isAuthenticatedRequest(req, gatewayInfo.token)) {
-        unauthorized(res);
-        return;
-      }
       if (pathname.startsWith("/api/orchestration/")) {
         const handled = await handleOrchestrationRoutes(req.method || "GET", pathname, res, apiContext, req);
         if (handled) return;
