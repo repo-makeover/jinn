@@ -18,7 +18,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import type { ArchiveDialogTarget } from "./archive-dialog"
 import {
   formatTime,
   getSessionActivity,
@@ -45,10 +44,18 @@ export interface SidebarSharedRowProps {
   onEmployeeSessionsAvailable?: (sessions: Session[]) => void
   togglePin: (pinKey: string) => void
   handleDuplicate: (sessionId: string) => void
-  setArchiveTarget: (target: ArchiveDialogTarget | null) => void
   setDeleteTarget: (target: SidebarDeleteTarget | null) => void
   setRenamingSessionId: (id: string | null) => void
   updateSessionTitle: (id: string, title: string) => void
+}
+
+export interface SidebarEmployeeRowProps extends SidebarSharedRowProps {
+  item: FlatItem
+  expanded: Record<string, boolean>
+  handleMarkAllRead: (sessions: Session[]) => void
+  handleEmployeeClick: (item: FlatItem) => void
+  onLoadMore: (groupKey: string, offset: number) => void
+  loadingMore: Set<string>
 }
 
 export function StatusDot({
@@ -91,9 +98,9 @@ export function SectionLabel({
   return (
     <div className="flex items-center gap-2 px-4 py-2">
       <span className={SECTION_LABEL_CLASS}>{label}</span>
-      {typeof count === "number" && (
+      {typeof count === "number" ? (
         <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{count}</span>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -116,7 +123,6 @@ export const SessionRow = React.memo(function SessionRow({
   onEmployeeSessionsAvailable,
   togglePin,
   handleDuplicate,
-  setArchiveTarget,
   setDeleteTarget,
   setRenamingSessionId,
   updateSessionTitle,
@@ -223,11 +229,6 @@ export const SessionRow = React.memo(function SessionRow({
               <DropdownMenuItem onClick={() => handleDuplicate(session.id)}>
                 Duplicate...
               </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => setArchiveTarget({ kind: "chat", title: cleanPreview(sessionTitle) || "Untitled", sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}
-              >
-                Archive...
-              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
@@ -248,11 +249,6 @@ export const SessionRow = React.memo(function SessionRow({
         </ContextMenuItem>
         <ContextMenuItem onClick={() => handleDuplicate(session.id)}>
           Duplicate...
-        </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => setArchiveTarget({ kind: "chat", title: cleanPreview(sessionTitle) || "Untitled", sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}
-        >
-          Archive...
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -287,7 +283,6 @@ export const FlatSessionRow = React.memo(function FlatSessionRow({
   onEmployeeSessionsAvailable,
   togglePin,
   handleDuplicate,
-  setArchiveTarget,
   setDeleteTarget,
   setRenamingSessionId,
   updateSessionTitle,
@@ -301,29 +296,6 @@ export const FlatSessionRow = React.memo(function FlatSessionRow({
   const isRenaming = renamingSessionId === session.id
   const isUnread =
     !readSessions.has(session.id) && session.status !== "running" && session.status !== "error"
-
-  const menuItems = (
-    <>
-      <DropdownMenuItem onClick={() => { renameCancelledRef.current = false; setRenamingSessionId(session.id) }}>
-        Rename
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => togglePin(session.id)}>
-        {isPinned ? "Unpin" : "Pin"}
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => handleDuplicate(session.id)}>
-        Duplicate...
-      </DropdownMenuItem>
-      <DropdownMenuItem
-        onClick={() => setArchiveTarget({ kind: "chat", title: displayTitle, sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}
-      >
-        Archive...
-      </DropdownMenuItem>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}>
-        Delete session
-      </DropdownMenuItem>
-    </>
-  )
 
   return (
     <ContextMenu>
@@ -414,7 +386,24 @@ export const FlatSessionRow = React.memo(function FlatSessionRow({
                 <EllipsisVertical className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">{menuItems}</DropdownMenuContent>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => { renameCancelledRef.current = false; setRenamingSessionId(session.id) }}>
+                Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => togglePin(session.id)}>
+                {isPinned ? "Unpin" : "Pin"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleDuplicate(session.id)}>
+                Duplicate...
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}
+              >
+                Delete session
+              </DropdownMenuItem>
+            </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </ContextMenuTrigger>
@@ -428,13 +417,11 @@ export const FlatSessionRow = React.memo(function FlatSessionRow({
         <ContextMenuItem onClick={() => handleDuplicate(session.id)}>
           Duplicate...
         </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => setArchiveTarget({ kind: "chat", title: displayTitle, sessionIds: [session.id], sourceRef: session.id, sessions: [session] })}
-        >
-          Archive...
-        </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}>
+        <ContextMenuItem
+          variant="destructive"
+          onClick={() => setDeleteTarget({ type: "session", id: session.id, label: displayTitle })}
+        >
           <span className="flex-1">Delete session</span>
           <kbd className="ml-auto pl-3 font-mono text-[10px] text-[var(--text-quaternary)]">⌫</kbd>
         </ContextMenuItem>
@@ -442,15 +429,6 @@ export const FlatSessionRow = React.memo(function FlatSessionRow({
     </ContextMenu>
   )
 })
-
-interface EmployeeRowProps extends SidebarSharedRowProps {
-  item: FlatItem
-  expanded: Record<string, boolean>
-  handleMarkAllRead: (sessions: Session[]) => void
-  handleEmployeeClick: (item: FlatItem) => void
-  onLoadMore: (groupKey: string, offset: number) => void
-  loadingMore: Set<string>
-}
 
 export const EmployeeRow = React.memo(function EmployeeRow({
   item,
@@ -466,14 +444,13 @@ export const EmployeeRow = React.memo(function EmployeeRow({
   togglePin,
   handleMarkAllRead,
   handleEmployeeClick,
-  setArchiveTarget,
   setDeleteTarget,
   onLoadMore,
   loadingMore,
   setRenamingSessionId,
   updateSessionTitle,
   handleDuplicate,
-}: EmployeeRowProps) {
+}: SidebarEmployeeRowProps) {
   const empName = item.employeeName!
   const empSessions = item.sessions!
   const latestSession = empSessions[0]
@@ -481,7 +458,7 @@ export const EmployeeRow = React.memo(function EmployeeRow({
   const displayName = empInfo?.displayName || titleCase(empName)
   const department = empInfo?.department || ""
   const timeLabel = formatTime(getSessionActivity(latestSession))
-  const isActive = empSessions.some((s) => s.id === selectedId)
+  const isActive = empSessions.some((session) => session.id === selectedId)
   const isPinned = pinnedSessions.has(item.pinKey)
   const loadedCount = empSessions.length
   const sessionCount = item.total ?? loadedCount
@@ -489,7 +466,7 @@ export const EmployeeRow = React.memo(function EmployeeRow({
   const isLoadingMore = loadingMore.has(groupKey)
   const isExpanded = expanded[empName] || false
   const hasUnread = empSessions.some(
-    (s) => !readSessions.has(s.id) && s.status !== "running" && s.status !== "error",
+    (session) => !readSessions.has(session.id) && session.status !== "running" && session.status !== "error",
   )
   const empDot = getStatusDot(latestSession, readSessions, hasUnread)
 
@@ -504,7 +481,6 @@ export const EmployeeRow = React.memo(function EmployeeRow({
     onEmployeeSessionsAvailable,
     togglePin,
     handleDuplicate,
-    setArchiveTarget,
     setDeleteTarget,
     setRenamingSessionId,
     updateSessionTitle,
