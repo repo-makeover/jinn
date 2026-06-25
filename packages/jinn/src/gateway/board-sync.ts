@@ -52,7 +52,7 @@ function shorten(s: string, n: number): string {
 
 /** Drop the oldest auto (source:"session") terminal tickets beyond the cap. */
 function pruneSessionTickets(tickets: BoardTicket[]): void {
-  const terminal = tickets.filter((t) => t?.source === "session" && t.status === "done");
+  const terminal = tickets.filter((t) => t?.source === "session" && (t.status === "done" || t.status === "blocked"));
   if (terminal.length <= MAX_SESSION_TERMINAL_TICKETS) return;
   terminal.sort((a, b) => Date.parse(a.updatedAt || "") - Date.parse(b.updatedAt || "")); // oldest first
   const drop = new Set(terminal.slice(0, terminal.length - MAX_SESSION_TERMINAL_TICKETS));

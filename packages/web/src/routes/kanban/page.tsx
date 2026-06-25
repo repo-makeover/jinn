@@ -110,6 +110,75 @@ const BOARD_STATUS_BY_KANBAN_STATUS: Record<KanbanTicket['status'], DepartmentBo
   blocked: 'blocked',
 }
 
+export interface DepartmentBoardSaveTarget {
+  department: string
+  deletedIds?: string[]
+  deletedVersions?: Record<string, string>
+  retentionDays?: number | null
+}
+
+export function buildDepartmentBoardSaveRequests(
+  store: KanbanStore,
+  targets: DepartmentBoardSaveTarget[],
+  departmentRetentionDays: Record<string, number>,
+): Array<{ department: string; payload: import('@/lib/api').UpdateDepartmentBoardPayload }> {
+  const mergedTargets = new Map<string, Required<Omit<DepartmentBoardSaveTarget, 'retentionDays'>> & { retentionDays: number | null }>()
+  for (const target of targets) {
+    if (!target.department) continue
+    const existing = mergedTargets.get(target.department) ?? {
+      department: target.department,
+      deletedIds: [],
+      deletedVersions: {},
+      retentionDays: null,
+    }
+    existing.deletedIds = [...new Set([...existing.deletedIds, ...(target.deletedIds ?? [])])]
+    existing.deletedVersions = { ...existing.deletedVersions, ...(target.deletedVersions ?? {}) }
+    if (target.retentionDays != null) existing.retentionDays = target.retentionDays
+    mergedTargets.set(target.department, existing)
+  }
+
+  return [...mergedTargets.values()].map((target) => {
+    const boardData: DepartmentBoardTicket[] = Object.values(store)
+      .filter((ticket) => ticket.departmentId === target.department)
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        status: BOARD_STATUS_BY_KANBAN_STATUS[t.status],
+        priority: t.priority,
+        complexity: t.complexity,
+        assignee: t.assigneeId ?? undefined,
+        source: t.source,
+        sessionId: t.sessionId,
+        createdAt: new Date(t.createdAt).toISOString(),
+        updatedAt: new Date(t.updatedAt).toISOString(),
+        baseUpdatedAt: new Date(t.baseUpdatedAt ?? t.updatedAt).toISOString(),
+      }))
+    return {
+      department: target.department,
+      payload: {
+        tickets: boardData,
+        deletedIds: target.deletedIds,
+        deletedVersions: target.deletedVersions,
+        retentionDays: target.retentionDays ?? departmentRetentionDays[target.department],
+      },
+    }
+  })
+}
+
+export function buildAssigneeChangeUpdate(
+  assigneeId: string | null,
+  employees: Employee[],
+): Partial<Omit<KanbanTicket, 'id' | 'createdAt'>> {
+  const emp = assigneeId ? employees.find(e => e.name === assigneeId) : null
+  const updates: Partial<Omit<KanbanTicket, 'id' | 'createdAt'>> = { assigneeId }
+  if (emp?.department) {
+    updates.department = emp.department
+    updates.departmentId = emp.department
+  }
+  return updates
+}
+
 /** Delete confirmation dialog */
 function DeleteConfirmDialog({
   ticket,
@@ -251,71 +320,33 @@ export default function KanbanPage() {
   }, [tickets, loading])
 
   /**
-   * Persist the current ticket store back to each department's board via the
-   * gateway API. Tickets without a departmentId are silently skipped (they
-   * remain in localStorage only until a department can be assigned).
+   * Persist the current ticket store back to the affected department boards.
+   * Tickets without a departmentId are silently skipped until a department can
+   * be assigned.
    */
   const persistToApi = useCallback(
     async (
       store: KanbanStore,
-      deletedIds: string[] = [],
-      deletedVersions: Record<string, string> = {},
-      retentionDays: number | null = null,
+      targets: DepartmentBoardSaveTarget[],
     ) => {
-      // Group tickets by their department
-      const byDept: Record<string, KanbanTicket[]> = {}
-      for (const ticket of Object.values(store)) {
-        if (!ticket.departmentId) continue
-        if (!byDept[ticket.departmentId]) byDept[ticket.departmentId] = []
-        byDept[ticket.departmentId].push(ticket)
-      }
-
-      // Also PUT an empty array for any department that no longer has tickets
-      // so deleted tickets don't come back on the next reload
-      for (const dept of departments) {
-        if (!byDept[dept]) byDept[dept] = []
-      }
-
-      // Write each department board. Errors are surfaced to the UI and the
+      // Write affected department boards. Errors are surfaced to the UI and the
       // board is refetched from the gateway so optimistic local state does not
       // become the hidden source of truth.
       await Promise.all(
-        Object.entries(byDept).map(([dept, deptTickets]) => {
-          const boardData: DepartmentBoardTicket[] = deptTickets.map((t) => ({
-            id: t.id,
-            title: t.title,
-            description: t.description,
-            status: BOARD_STATUS_BY_KANBAN_STATUS[t.status],
-            priority: t.priority,
-            complexity: t.complexity,
-            assignee: t.assigneeId ?? undefined,
-            source: t.source,
-            sessionId: t.sessionId,
-            createdAt: new Date(t.createdAt).toISOString(),
-            updatedAt: new Date(t.updatedAt).toISOString(),
-            baseUpdatedAt: new Date(t.baseUpdatedAt ?? t.updatedAt).toISOString(),
-          }))
-          return api.updateDepartmentBoard(dept, {
-            tickets: boardData,
-            deletedIds,
-            deletedVersions,
-            retentionDays: retentionDays ?? departmentRetentionDays[dept],
-          })
-        }),
+        buildDepartmentBoardSaveRequests(store, targets, departmentRetentionDays)
+          .map(({ department, payload }) => api.updateDepartmentBoard(department, payload)),
       )
     },
-    [departments, departmentRetentionDays],
+    [departmentRetentionDays],
   )
 
   const persistBoardChange = useCallback(
     (
       store: KanbanStore,
-      deletedIds: string[] = [],
-      deletedVersions: Record<string, string> = {},
-      retentionDays: number | null = null,
+      targets: DepartmentBoardSaveTarget[],
     ) => {
       setSaveError(null)
-      void persistToApi(store, deletedIds, deletedVersions, retentionDays)
+      void persistToApi(store, targets)
         .then(() => {
           setTickets((current) => {
             let changed = false
@@ -334,8 +365,12 @@ export default function KanbanPage() {
           loadData()
         })
     },
-    [persistToApi, loadData, recycleBinRetentionDays],
+    [persistToApi, loadData],
   )
+
+  function targetForTicket(ticket: KanbanTicket | undefined): DepartmentBoardSaveTarget[] {
+    return ticket?.departmentId ? [{ department: ticket.departmentId }] : []
+  }
 
   // Keep selectedTicket in sync with store
   useEffect(() => {
@@ -365,7 +400,7 @@ export default function KanbanPage() {
         department: departmentId,
         departmentId,
       })
-      persistBoardChange(next)
+      persistBoardChange(next, departmentId ? [{ department: departmentId }] : [])
       return next
     })
   }
@@ -373,7 +408,7 @@ export default function KanbanPage() {
   function handleMoveTicket(ticketId: string, status: TicketStatus) {
     setTickets((prev) => {
       const next = moveTicket(prev, ticketId, status)
-      persistBoardChange(next)
+      persistBoardChange(next, targetForTicket(next[ticketId]))
       return next
     })
   }
@@ -385,7 +420,9 @@ export default function KanbanPage() {
       : {}
     setTickets((prev) => {
       const next = deleteTicket(prev, ticketId)
-      persistBoardChange(next, [ticketId], deletedVersions)
+      persistBoardChange(next, deletedTicket?.departmentId
+        ? [{ department: deletedTicket.departmentId, deletedIds: [ticketId], deletedVersions }]
+        : [])
       return next
     })
     if (deletedTicket && recycleBinRetentionDays > 0) {
@@ -414,7 +451,7 @@ export default function KanbanPage() {
         ...prev,
         [ticketId]: restoredTicket,
       }
-      persistBoardChange(next)
+      persistBoardChange(next, targetForTicket(restoredTicket))
       return next
     })
     setDeletedTickets((prev) => prev.filter((ticket) => ticket.id !== ticketId))
@@ -429,19 +466,27 @@ export default function KanbanPage() {
       const cutoff = Date.now() - (nextRetentionDays * DAY_MS)
       return prev.filter((ticket) => ticket.deletedAt >= cutoff)
     })
-    persistBoardChange(tickets, [], {}, nextRetentionDays)
+    persistBoardChange(tickets, departments.map((department) => ({ department, retentionDays: nextRetentionDays })))
   }
 
   function handleAssigneeChange(ticketId: string, assigneeId: string | null) {
-    // Update department when assignee changes
-    const emp = assigneeId ? employees.find(e => e.name === assigneeId) : null
-    const updates: Partial<Omit<KanbanTicket, 'id' | 'createdAt'>> = { assigneeId }
-    if (emp?.department) {
-      updates.department = emp.department
-    }
+    const updates = buildAssigneeChangeUpdate(assigneeId, employees)
     setTickets((prev) => {
+      const currentTicket = prev[ticketId]
+      const previousDepartmentId = currentTicket?.departmentId ?? null
       const next = updateTicket(prev, ticketId, updates)
-      persistBoardChange(next)
+      const updatedTicket = next[ticketId]
+      const nextDepartmentId = updatedTicket?.departmentId ?? null
+      const targets: DepartmentBoardSaveTarget[] = targetForTicket(updatedTicket)
+      if (previousDepartmentId && nextDepartmentId && previousDepartmentId !== nextDepartmentId) {
+        const baseUpdatedAt = currentTicket?.baseUpdatedAt ?? currentTicket?.updatedAt
+        targets.push({
+          department: previousDepartmentId,
+          deletedIds: [ticketId],
+          deletedVersions: baseUpdatedAt ? { [ticketId]: new Date(baseUpdatedAt).toISOString() } : {},
+        })
+      }
+      persistBoardChange(next, targets)
       return next
     })
   }
@@ -449,7 +494,7 @@ export default function KanbanPage() {
   function handleComplexityChange(ticketId: string, complexity: TicketComplexity) {
     setTickets((prev) => {
       const next = updateTicket(prev, ticketId, { complexity })
-      persistBoardChange(next)
+      persistBoardChange(next, targetForTicket(next[ticketId]))
       return next
     })
   }
@@ -457,7 +502,7 @@ export default function KanbanPage() {
   function handleSaveDetails(ticketId: string, updates: Pick<KanbanTicket, 'title' | 'description'>) {
     setTickets((prev) => {
       const next = updateTicket(prev, ticketId, updates)
-      persistBoardChange(next)
+      persistBoardChange(next, targetForTicket(next[ticketId]))
       return next
     })
   }
@@ -468,7 +513,7 @@ export default function KanbanPage() {
         title: updates.title,
         description: appendTicketNote(updates.description, updates.note),
       })
-      persistBoardChange(next)
+      persistBoardChange(next, targetForTicket(next[ticketId]))
       return next
     })
   }

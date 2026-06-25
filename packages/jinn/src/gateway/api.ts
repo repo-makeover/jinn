@@ -110,11 +110,29 @@ import { checkPublicUrl } from "../shared/ssrf-guard.js";
 import { getAllParents } from "./org-hierarchy.js";
 import { dispatchTicket } from "./ticket-dispatch.js";
 import { detectRateLimit } from "../shared/rateLimit.js";
+import { scanOrg } from "./org.js";
 
 /** Validate that all assignees in the board payload belong to the given department. Returns an error string or null. */
-function validateBoardAssigneesForDepartment(_department: string, _payload: unknown): string | null {
-  // Structural validation is handled by writeMergedBoard; this hook is reserved for
-  // cross-cutting checks (e.g. foreign-department assignee guards) added in the future.
+function validateBoardAssigneesForDepartment(department: string, payload: unknown): string | null {
+  const tickets = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object" && !Array.isArray(payload) && Array.isArray((payload as { tickets?: unknown }).tickets)
+      ? (payload as { tickets: unknown[] }).tickets
+      : null;
+  if (!tickets) return null;
+
+  const org = scanOrg();
+  for (const [index, ticket] of tickets.entries()) {
+    if (!ticket || typeof ticket !== "object" || Array.isArray(ticket)) continue;
+    const assignee = (ticket as { assignee?: unknown }).assignee;
+    if (typeof assignee !== "string" || !assignee.trim()) continue;
+    const employee = org.get(assignee);
+    if (!employee) continue;
+    if (employee.department !== department) {
+      const id = typeof (ticket as { id?: unknown }).id === "string" ? (ticket as { id: string }).id : `#${index}`;
+      return `ticket "${id}" is assigned to "${assignee}", who belongs to department "${employee.department}", not "${department}"`;
+    }
+  }
   return null;
 }
 
