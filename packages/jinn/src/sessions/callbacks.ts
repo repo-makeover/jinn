@@ -2,6 +2,8 @@ import { getSession, listSessionsBySource } from "./registry.js";
 import { loadConfig } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import type { Session } from "../shared/types.js";
+import { GATEWAY_INFO_FILE } from "../shared/paths.js";
+import { gatewayBaseUrl, readGatewayInfo } from "../gateway/gateway-info.js";
 import { hydrateAllAttachments, talkSessionsAttachedTo } from "../talk/attachments.js";
 
 /**
@@ -211,13 +213,12 @@ export function notifyDiscordChannel(message: string): void {
 }
 
 async function _sendDiscordNotification(message: string): Promise<void> {
-  let port = 7777;
   let connector = "discord";
   let channel: string | undefined;
+  const gateway = internalGatewayConnection();
 
   try {
     const config = loadConfig();
-    port = config.gateway?.port || 7777;
     connector = config.notifications?.connector || "discord";
     channel = config.notifications?.channel;
   } catch {
@@ -229,11 +230,12 @@ async function _sendDiscordNotification(message: string): Promise<void> {
     return;
   }
 
-  await fetch(`http://127.0.0.1:${port}/api/connectors/${connector}/send`, {
+  const response = await fetch(`${gateway.baseUrl}/api/connectors/${connector}/send`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: internalGatewayHeaders(gateway),
     body: JSON.stringify({ channel, text: message }),
   });
+  if (!response.ok) throw new Error(`connector notification failed (${response.status})`);
 }
 
 async function _sendRaw(
@@ -241,21 +243,41 @@ async function _sendRaw(
   message: string,
   displayMessage?: string,
 ): Promise<void> {
-  let port = 7777;
-  try {
-    const config = loadConfig();
-    port = config.gateway?.port || 7777;
-  } catch {
-    // Use default port if config is unavailable
-  }
+  const gateway = internalGatewayConnection();
 
-  await fetch(`http://127.0.0.1:${port}/api/sessions/${parentSessionId}/message`, {
+  const response = await fetch(`${gateway.baseUrl}/api/sessions/${parentSessionId}/message`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: internalGatewayHeaders(gateway),
     body: JSON.stringify({
       message,
       role: "notification",
       ...(displayMessage ? { displayMessage } : {}),
     }),
   });
+  if (!response.ok) throw new Error(`parent notification failed (${response.status})`);
+}
+
+function internalGatewayConnection(): { baseUrl: string; token?: string } {
+  const info = readGatewayInfo(GATEWAY_INFO_FILE);
+  let fallbackHost: string | undefined;
+  let fallbackPort = 7777;
+  try {
+    const config = loadConfig();
+    fallbackHost = config.gateway?.host;
+    fallbackPort = config.gateway?.port || 7777;
+  } catch {
+    // Use gateway.json/defaults if config is unavailable.
+  }
+  const port = info?.port ?? fallbackPort;
+  return {
+    baseUrl: gatewayBaseUrl({ port, host: info?.host }, fallbackHost),
+    token: info?.token,
+  };
+}
+
+function internalGatewayHeaders(gateway: { token?: string }): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...(gateway.token ? { authorization: `Bearer ${gateway.token}` } : {}),
+  };
 }

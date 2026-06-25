@@ -10,6 +10,8 @@ import type { ThemeId } from "@/lib/themes"
 import { api } from "@/lib/api"
 import { EmojiPicker } from "@/components/ui/emoji-picker"
 import { useModelRegistry } from "@/hooks/use-model-registry"
+import { RemoteAccessPanel } from "@/components/auth/remote-access-panel"
+import { useAuth } from "@/routes/auth-provider"
 
 // ---------------------------------------------------------------------------
 // Accent color presets
@@ -121,7 +123,7 @@ function Section({
         {title}
       </div>
       <div
-        className="bg-[var(--material-regular)] rounded-[var(--radius-md)] border border-[var(--separator)] p-[var(--space-4)]"
+        className="rounded-[var(--radius-lg)] bg-[var(--material-regular)] p-[var(--space-4)] shadow-[inset_0_0_0_1px_var(--separator)]"
       >
         {children}
       </div>
@@ -138,14 +140,14 @@ function FieldRow({
 }) {
   return (
     <div
-      className="flex items-center justify-between py-[var(--space-2)] gap-[var(--space-4)]"
+      className="flex flex-col items-stretch gap-[var(--space-2)] py-[var(--space-2)] sm:flex-row sm:items-center sm:justify-between sm:gap-[var(--space-4)]"
     >
       <label
-        className="text-[length:var(--text-subheadline)] text-[var(--text-secondary)] shrink-0"
+        className="shrink-0 text-[length:var(--text-subheadline)] text-[var(--text-secondary)]"
       >
         {label}
       </label>
-      <div className="w-[240px] shrink-0">{children}</div>
+      <div className="min-w-0 w-full sm:w-[240px] sm:shrink-0">{children}</div>
     </div>
   )
 }
@@ -441,6 +443,7 @@ export default function SettingsPage() {
     resetAll,
   } = useSettings()
   const { theme, setTheme } = useTheme()
+  const auth = useAuth()
 
   // Local branding inputs
   const [nameValue, setNameValue] = useState(settings.portalName ?? "")
@@ -864,6 +867,17 @@ export default function SettingsPage() {
                 </select>
               </div>
             </div>
+          </Section>
+
+          {/* -- Pairing -- */}
+          <Section title="Pairing">
+            <RemoteAccessPanel
+              authState={auth.authState}
+              devices={auth.devices}
+              onCreatePairingCode={auth.createPairingCode}
+              onLogout={auth.logout}
+              onUnpairDevice={auth.unpairDevice}
+            />
           </Section>
 
           {/* Gateway config feedback */}

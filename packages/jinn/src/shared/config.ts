@@ -45,6 +45,15 @@ export function validateConfigShape(config: unknown): string[] {
       if (c.gateway.allowFileOpen !== undefined && typeof c.gateway.allowFileOpen !== "boolean") {
         problems.push(`gateway.allowFileOpen must be a boolean (got ${typeof c.gateway.allowFileOpen})`);
       }
+      if (c.gateway.authRequired !== undefined && typeof c.gateway.authRequired !== "boolean") {
+        problems.push(`gateway.authRequired must be a boolean (got ${typeof c.gateway.authRequired})`);
+      }
+      if (c.gateway.authDisabled !== undefined && typeof c.gateway.authDisabled !== "boolean") {
+        problems.push(`gateway.authDisabled must be a boolean (got ${typeof c.gateway.authDisabled})`);
+      }
+      if (c.gateway.insecureAllowUnauthenticatedNetwork !== undefined && typeof c.gateway.insecureAllowUnauthenticatedNetwork !== "boolean") {
+        problems.push(`gateway.insecureAllowUnauthenticatedNetwork must be a boolean (got ${typeof c.gateway.insecureAllowUnauthenticatedNetwork})`);
+      }
     }
   }
 

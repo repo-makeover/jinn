@@ -1,4 +1,5 @@
 import type { TalkGraphNodeWire } from '@/routes/talk/protocol'
+import { authFetch } from "@/lib/auth"
 
 export interface TranscriptContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
@@ -74,11 +75,6 @@ export interface OrgData {
   hierarchy: OrgHierarchy;
 }
 
-const BASE =
-  typeof window !== "undefined"
-    ? window.location.origin
-    : "http://127.0.0.1:7777";
-
 async function extractErrorMessage(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -91,13 +87,13 @@ async function extractErrorMessage(res: Response): Promise<string> {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await authFetch(path);
   if (!res.ok) throw new Error(await extractErrorMessage(res));
   return res.json();
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await authFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
@@ -107,13 +103,13 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  const res = await authFetch(path, { method: "DELETE" });
   if (!res.ok) throw new Error(await extractErrorMessage(res));
   return res.json();
 }
 
 async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await authFetch(path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -123,7 +119,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function patch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await authFetch(path, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -358,7 +354,7 @@ export const api = {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5 * 60_000); // 5 min timeout
     try {
-      const res = await fetch(`${BASE}/api/stt/transcribe${params}`, {
+      const res = await authFetch(`/api/stt/transcribe${params}`, {
         method: "POST",
         headers: { "Content-Type": audioBlob.type || "audio/webm" },
         body: audioBlob,
@@ -478,7 +474,7 @@ export const api = {
     form.append('file', file)
     // When known, scope the upload to the session so it lands in the date-bucketed uploads dir.
     if (sessionId) form.append('sessionId', sessionId)
-    const res = await fetch(`${BASE}/api/files`, { method: 'POST', body: form })
+    const res = await authFetch("/api/files", { method: 'POST', body: form })
     if (!res.ok) throw new Error(await extractErrorMessage(res))
     return res.json()
   },
