@@ -301,6 +301,65 @@ describe("requeueRecoveredContinuation", () => {
     store.close();
   });
 
+  it("rejects recovery manifests outside the expected recovery directory", () => {
+    const outsideDir = path.join(tmpDir, "outside");
+    const corruptDbPath = path.join(quarantineDir, "orchestration.db.corrupt.2026-06-23T12-00-00-000Z");
+    buildQuarantinedDb(corruptDbPath, "task-outside", "coord-outside");
+    const manifestPath = writeRecoveryManifest(outsideDir, {
+      recoveredAt: fixedNow.toISOString(),
+      originalDbPath: dbPath,
+      corruptDbPath,
+      message: "orchestration state could not be trusted",
+      operatorGuidance: "Review the quarantined DB before re-queueing",
+    });
+    const store = OrchestrationStore.open(dbPath, { now: () => fixedNow });
+
+    const result = requeueRecoveredContinuation({
+      manifestPath,
+      taskId: "task-outside",
+      managerName: "operator",
+      store,
+      recoveryDir,
+      now: () => fixedNow,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("invalid_manifest");
+    store.close();
+  });
+
+  it("rolls back live-store writes when recovered holds are malformed", () => {
+    const corruptDbPath = path.join(quarantineDir, "orchestration.db.corrupt.2026-06-23T12-00-00-000Z");
+    buildQuarantinedDb(corruptDbPath, "task-bad-hold", "coord-bad-hold");
+    const db = new Database(corruptDbPath);
+    const futureExpiry = new Date(fixedNow.getTime() + 120_000).toISOString();
+    db.prepare(`
+      INSERT INTO orchestration_holds (hold_id, manager_name, state, roles_json, worker_ids_json,
+        task_id, coordinator_id, reason, created_at, updated_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("hold-bad", "manager", "active", "{not-json", JSON.stringify(["worker-1"]),
+      "task-bad-hold", "coord-bad-hold", "bad hold", fixedNow.toISOString(), fixedNow.toISOString(), futureExpiry);
+    db.close();
+    const manifestPath = buildManifestPath(corruptDbPath);
+    const store = OrchestrationStore.open(dbPath, { now: () => fixedNow });
+
+    const result = requeueRecoveredContinuation({
+      manifestPath,
+      taskId: "task-bad-hold",
+      managerName: "operator",
+      store,
+      now: () => fixedNow,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("invalid_record");
+    expect(store.getLiveContinuation("task-bad-hold", "coord-bad-hold")).toBeUndefined();
+    expect(store.listTaskPauses()).toEqual([]);
+    store.close();
+  });
+
   it("returns invalid_record when continuation state is not recoverable (completed)", () => {
     const corruptDbPath = path.join(quarantineDir, "orchestration.db.corrupt.2026-06-23T12-00-00-000Z");
     const db = new Database(corruptDbPath);

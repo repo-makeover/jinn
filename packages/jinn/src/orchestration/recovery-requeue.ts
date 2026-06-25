@@ -43,49 +43,58 @@ interface HoldRow {
 export function requeueRecoveredContinuation(opts: {
   manifestPath: string;
   taskId: string;
+  coordinatorId?: string;
   managerName: string;
   store: OrchestrationStore;
+  recoveryDir?: string;
   now?: () => Date;
 }): RecoveryRequeueResult {
-  const manifest = readRecoveryManifest(opts.manifestPath);
+  const manifest = readRecoveryManifest(opts.manifestPath, opts.recoveryDir);
   if (!manifest.ok) return manifest;
-  if (!fs.existsSync(manifest.manifest.corruptDbPath)) {
+  const corruptDbPath = resolveContainedCorruptDbPath(manifest.manifest.corruptDbPath, manifest.recoveryDir);
+  if (!corruptDbPath.ok) return corruptDbPath;
+  if (!fs.existsSync(corruptDbPath.path)) {
     return { ok: false, reason: "invalid_manifest", message: `corruptDbPath does not exist: ${manifest.manifest.corruptDbPath}` };
   }
-  const db = new Database(manifest.manifest.corruptDbPath, { readonly: true, fileMustExist: true });
+  const db = new Database(corruptDbPath.path, { readonly: true, fileMustExist: true });
   try {
     if (!hasTable(db, "live_run_continuations")) {
       return { ok: false, reason: "invalid_manifest", message: "quarantined DB has no live_run_continuations table" };
     }
-    const rows = db.prepare("SELECT * FROM live_run_continuations WHERE task_id = ?").all(opts.taskId) as LiveRunContinuationRow[];
+    const rows = opts.coordinatorId
+      ? db.prepare("SELECT * FROM live_run_continuations WHERE task_id = ? AND coordinator_id = ?").all(opts.taskId, opts.coordinatorId) as LiveRunContinuationRow[]
+      : db.prepare("SELECT * FROM live_run_continuations WHERE task_id = ?").all(opts.taskId) as LiveRunContinuationRow[];
     if (rows.length === 0) return { ok: false, reason: "continuation_not_found", message: `no recovered continuation for ${opts.taskId}` };
     if (rows.length > 1) {
-      return { ok: false, reason: "invalid_record", message: `multiple recovered continuations for ${opts.taskId}; specify a unique task` };
+      return { ok: false, reason: "invalid_record", message: `multiple recovered continuations for ${opts.taskId}; specify coordinatorId` };
     }
     const nowIso = (opts.now?.() ?? new Date()).toISOString();
     const continuation = rowToContinuation(rows[0], nowIso);
-    opts.store.upsertLiveContinuation(continuation);
-    opts.store.setTaskPause({
-      taskId: continuation.taskId,
-      coordinatorId: continuation.coordinatorId,
-      pausedAt: nowIso,
-      pauseReason: "Recovered from quarantined orchestration DB; explicit resume required",
-      managerName: opts.managerName,
+    const holds = stageRecoveredHolds(db, continuation.taskId, continuation.coordinatorId, nowIso);
+    opts.store.transaction(() => {
+      opts.store.upsertLiveContinuation(continuation);
+      opts.store.setTaskPause({
+        taskId: continuation.taskId,
+        coordinatorId: continuation.coordinatorId,
+        pausedAt: nowIso,
+        pauseReason: "Recovered from quarantined orchestration DB; explicit resume required",
+        managerName: opts.managerName,
+      });
+      for (const hold of holds) opts.store.upsertHold(hold);
     });
-    const holdsImported = importRecoveredHolds(db, opts.store, continuation.taskId, continuation.coordinatorId, nowIso);
     appendOrchestrationAudit("orchestration.recovery.requeue", {
       manifestPath: opts.manifestPath,
       taskId: continuation.taskId,
       coordinatorId: continuation.coordinatorId,
       managerName: opts.managerName,
-      holdsImported,
+      holdsImported: holds.length,
     }, manifest.manifest.originalDbPath);
     return {
       ok: true,
       taskId: continuation.taskId,
       coordinatorId: continuation.coordinatorId,
       continuation,
-      holdsImported,
+      holdsImported: holds.length,
       paused: true,
     };
   } catch (err) {
@@ -95,23 +104,22 @@ export function requeueRecoveredContinuation(opts: {
   }
 }
 
-function importRecoveredHolds(
+function stageRecoveredHolds(
   db: Database.Database,
-  store: OrchestrationStore,
   taskId: string,
   coordinatorId: string,
   nowIso: string,
-): number {
-  if (!hasTable(db, "orchestration_holds")) return 0;
+): HoldRecord[] {
+  if (!hasTable(db, "orchestration_holds")) return [];
   const rows = db.prepare(`
     SELECT * FROM orchestration_holds
     WHERE state = 'active' AND (task_id = ? OR (task_id IS NULL AND coordinator_id = ?))
   `).all(taskId, coordinatorId) as HoldRow[];
-  let imported = 0;
+  const holds: HoldRecord[] = [];
   for (const row of rows) {
     const expiresAt = Date.parse(row.expires_at);
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.parse(nowIso)) continue;
-    store.upsertHold({
+    holds.push({
       holdId: row.hold_id,
       managerName: row.manager_name,
       state: "active",
@@ -124,9 +132,8 @@ function importRecoveredHolds(
       updatedAt: nowIso,
       expiresAt: row.expires_at,
     });
-    imported++;
   }
-  return imported;
+  return holds;
 }
 
 function rowToContinuation(row: LiveRunContinuationRow, nowIso: string): LiveRunContinuationRecord {
@@ -152,14 +159,18 @@ function rowToContinuation(row: LiveRunContinuationRow, nowIso: string): LiveRun
   };
 }
 
-function readRecoveryManifest(manifestPath: string):
-  | { ok: true; manifest: OrchestrationRecoveryManifest }
+function readRecoveryManifest(manifestPath: string, expectedRecoveryDir?: string):
+  | { ok: true; manifest: OrchestrationRecoveryManifest; recoveryDir: string }
   | { ok: false; reason: "manifest_not_found" | "invalid_manifest"; message: string } {
   if (!fs.existsSync(manifestPath)) {
     return { ok: false, reason: "manifest_not_found", message: `recovery manifest not found: ${manifestPath}` };
   }
   try {
     const resolved = path.resolve(manifestPath);
+    const recoveryDir = path.resolve(expectedRecoveryDir ?? path.dirname(resolved));
+    if (!isPathWithin(resolved, recoveryDir)) {
+      return { ok: false, reason: "invalid_manifest", message: "recovery manifest path is outside the recovery directory" };
+    }
     const parsed = JSON.parse(fs.readFileSync(resolved, "utf-8")) as Partial<OrchestrationRecoveryManifest>;
     if (
       typeof parsed.recoveredAt !== "string"
@@ -170,10 +181,29 @@ function readRecoveryManifest(manifestPath: string):
     ) {
       return { ok: false, reason: "invalid_manifest", message: "recovery manifest is missing required fields" };
     }
-    return { ok: true, manifest: parsed as OrchestrationRecoveryManifest };
+    return { ok: true, manifest: parsed as OrchestrationRecoveryManifest, recoveryDir };
   } catch (err) {
     return { ok: false, reason: "invalid_manifest", message: err instanceof Error ? err.message : String(err) };
   }
+}
+
+function resolveContainedCorruptDbPath(corruptDbPath: string, recoveryDir: string):
+  | { ok: true; path: string }
+  | { ok: false; reason: "invalid_manifest"; message: string } {
+  const resolved = path.resolve(corruptDbPath);
+  const recoveryRoot = path.dirname(recoveryDir);
+  if (!isPathWithin(resolved, recoveryRoot)) {
+    return { ok: false, reason: "invalid_manifest", message: "corruptDbPath is outside the recovery root" };
+  }
+  if (!path.basename(resolved).includes(".corrupt.")) {
+    return { ok: false, reason: "invalid_manifest", message: "corruptDbPath does not look like a quarantined orchestration database" };
+  }
+  return { ok: true, path: resolved };
+}
+
+function isPathWithin(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function hasTable(db: Database.Database, name: string): boolean {

@@ -68,6 +68,10 @@ export class OrchestrationStore {
     replaceSnapshotInDb(this.db, snapshot);
   }
 
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   applySnapshotDelta(before: SchedulerSnapshot, after: SchedulerSnapshot): void {
     applySnapshotDeltaToDb(this.db, before, after);
   }
@@ -157,8 +161,8 @@ export class OrchestrationStore {
     addArtifactRecordInDb(this.db, record);
   }
 
-  listArtifactRecords(taskId: string, kind?: ArtifactKind): ArtifactRecord[] {
-    return listArtifactRecordsFromDb(this.db, taskId, kind);
+  listArtifactRecords(taskId: string, kind?: ArtifactKind, coordinatorId?: string): ArtifactRecord[] {
+    return listArtifactRecordsFromDb(this.db, taskId, kind, coordinatorId);
   }
 
   addPatchApplyAttempt(record: PatchApplyAttemptRecord): void {

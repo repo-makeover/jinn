@@ -133,6 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_orch_holds_state_expiry ON orchestration_holds (s
 CREATE TABLE IF NOT EXISTS artifact_records (
   artifact_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
+  coordinator_id TEXT,
   kind TEXT NOT NULL,
   lane TEXT,
   path TEXT NOT NULL,
@@ -141,6 +142,7 @@ CREATE TABLE IF NOT EXISTS artifact_records (
   note TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orch_artifacts_task_kind ON artifact_records (task_id, kind, lane);
+CREATE INDEX IF NOT EXISTS idx_orch_artifacts_run_kind ON artifact_records (task_id, coordinator_id, kind, lane);
 
 CREATE TABLE IF NOT EXISTS patch_apply_attempts (
   attempt_id TEXT PRIMARY KEY,
@@ -159,6 +161,9 @@ export function openStoreDatabase(dbPath: string, opts: StoreOpenOptions = {}): 
   try {
     return { db: openDatabase(dbPath) };
   } catch (err) {
+    if (!isSqliteCorruptionError(err)) {
+      throw err;
+    }
     if (opts.recoverCorrupt === false || dbPath === ":memory:" || !fs.existsSync(dbPath)) {
       throw err;
     }
@@ -192,6 +197,15 @@ export function openStoreDatabase(dbPath: string, opts: StoreOpenOptions = {}): 
   }
 }
 
+function isSqliteCorruptionError(err: unknown): boolean {
+  const code = typeof err === "object" && err && "code" in err ? String((err as { code?: unknown }).code) : "";
+  if (code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB") return true;
+  const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  return message.includes("database disk image is malformed")
+    || message.includes("file is not a database")
+    || message.includes("not a database");
+}
+
 function openDatabase(dbPath: string): Database.Database {
   if (dbPath !== ":memory:") {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -204,12 +218,20 @@ function openDatabase(dbPath: string): Database.Database {
     ensureLeaseDurationColumn(db);
     ensureAllocationUpdatedAtColumn(db);
     ensureQueueDiagnosticsColumns(db);
+    ensureArtifactCoordinatorColumn(db);
     setMeta(db, "schema_version", String(SCHEMA_VERSION));
     return db;
   } catch (err) {
     db.close();
     throw err;
   }
+}
+
+function ensureArtifactCoordinatorColumn(db: Database.Database): void {
+  const columns = db.pragma("table_info(artifact_records)") as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "coordinator_id")) return;
+  db.prepare("ALTER TABLE artifact_records ADD COLUMN coordinator_id TEXT").run();
+  db.prepare("CREATE INDEX IF NOT EXISTS idx_orch_artifacts_run_kind ON artifact_records (task_id, coordinator_id, kind, lane)").run();
 }
 
 function ensureLeaseDurationColumn(db: Database.Database): void {
