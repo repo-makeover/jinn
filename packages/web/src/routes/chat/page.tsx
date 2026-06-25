@@ -694,16 +694,15 @@ function ChatPage() {
 
         <div className="chat-pills-layout relative min-w-0 flex-1 flex-col overflow-hidden bg-background flex">
           {/* Soft top scrim (gradient, not a border) — content scrolls under it.
-              D3: hold it near-opaque through the pill band (~44px) so bright content
-              (tool chips, text) can't read through under/between the two pills, then
-              fade. Theme-aware via var(--bg). */}
+              Keep it light and short so it protects the floating header without
+              clouding the first visible message row. Theme-aware via var(--bg). */}
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 z-[5] h-[104px]",
+              "pointer-events-none absolute inset-x-0 top-0 z-[5] h-[72px]",
               onMobileList && "hidden lg:block",
             )}
-            style={{ background: 'linear-gradient(to bottom, var(--bg) 0, var(--bg) 44px, color-mix(in srgb, var(--bg) 70%, transparent) 72px, transparent 100%)' }}
+            style={{ background: 'linear-gradient(to bottom, var(--bg) 0, color-mix(in srgb, var(--bg) 82%, transparent) 32px, color-mix(in srgb, var(--bg) 32%, transparent) 52px, transparent 100%)' }}
           />
 
           {/* Frosted corner pills replace the solid header. Hidden over the mobile
