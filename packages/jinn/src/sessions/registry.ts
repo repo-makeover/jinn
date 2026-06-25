@@ -27,6 +27,15 @@ import {
   snapshotSessionsForArchive,
   type ArchiveRegistryDeps,
 } from './registry-archives.js';
+import {
+  clearApprovalRecordsForTestInRegistry,
+  createApprovalRecordInRegistry,
+  getApprovalRecordFromRegistry,
+  importApprovalsJsonIfNeededFromRegistry,
+  listApprovalRecordsFromRegistry,
+  resolveApprovalRecordInRegistry,
+  type ApprovalRegistryDeps,
+} from './registry-approvals.js';
 
 let db: Database.Database;
 
@@ -1518,104 +1527,23 @@ export function getEmployeeSpendSince(employee: string, sinceIsoDate: string): n
 }
 
 // ── Approvals ────────────────────────────────────────────────────────
-
-type ApprovalRow = {
-  id: string;
-  session_id: string;
-  type: Approval["type"];
-  payload: string;
-  state: Approval["state"];
-  created_at: string;
-  resolved_at: string | null;
-  actor: string | null;
+const approvalRegistryDeps: ApprovalRegistryDeps = {
+  getDb: initDb,
+  getMeta,
+  setMeta,
+  parseJsonObject,
 };
 
-function rowToApproval(row: ApprovalRow): Approval {
-  const payload = parseJsonObject(row.payload, "approvals.payload") ?? {};
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    type: row.type,
-    payload,
-    state: row.state,
-    createdAt: row.created_at,
-    resolvedAt: row.resolved_at,
-    actor: row.actor,
-  };
-}
-
 export function importApprovalsJsonIfNeeded(filePath: string): void {
-  const db = initDb();
-  const metaKey = `approvals_json_imported:${filePath}`;
-  if (getMeta(db, metaKey) === "1") return;
-  if (!existsSync(filePath)) {
-    setMeta(db, metaKey, "1");
-    return;
-  }
-
-  const raw = readFileSync(filePath, "utf-8");
-  const parsed = JSON.parse(raw) as unknown;
-  if (!Array.isArray(parsed)) throw new Error("legacy approvals store must be an array");
-
-  const insert = db.prepare(`
-    INSERT OR IGNORE INTO approvals
-      (id, session_id, type, payload, state, created_at, resolved_at, actor)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const txn = db.transaction((items: unknown[]) => {
-    for (const item of items) {
-      if (!item || typeof item !== "object") continue;
-      const approval = item as Partial<Approval>;
-      if (
-        typeof approval.id !== "string" ||
-        typeof approval.sessionId !== "string" ||
-        typeof approval.type !== "string" ||
-        typeof approval.state !== "string" ||
-        typeof approval.createdAt !== "string" ||
-        !approval.payload ||
-        typeof approval.payload !== "object" ||
-        Array.isArray(approval.payload)
-      ) {
-        continue;
-      }
-      insert.run(
-        approval.id,
-        approval.sessionId,
-        approval.type,
-        JSON.stringify(approval.payload),
-        approval.state,
-        approval.createdAt,
-        approval.resolvedAt ?? null,
-        approval.actor ?? null,
-      );
-    }
-    setMeta(db, metaKey, "1");
-  });
-  txn(parsed);
+  importApprovalsJsonIfNeededFromRegistry(filePath, approvalRegistryDeps);
 }
 
 export function listApprovalRecords(filter?: { state?: Approval["state"] | "all"; sessionId?: string }): Approval[] {
-  const db = initDb();
-  const clauses: string[] = [];
-  const args: unknown[] = [];
-  const state = filter?.state ?? "pending";
-  if (state !== "all") {
-    clauses.push("state = ?");
-    args.push(state);
-  }
-  if (filter?.sessionId) {
-    clauses.push("session_id = ?");
-    args.push(filter.sessionId);
-  }
-  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = db.prepare(`SELECT * FROM approvals ${where} ORDER BY created_at DESC`).all(...args) as ApprovalRow[];
-  return rows.map(rowToApproval);
+  return listApprovalRecordsFromRegistry(filter, approvalRegistryDeps);
 }
 
 export function getApprovalRecord(id: string): Approval | undefined {
-  const db = initDb();
-  const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
-  return row ? rowToApproval(row) : undefined;
+  return getApprovalRecordFromRegistry(id, approvalRegistryDeps);
 }
 
 export function createApprovalRecord(input: {
@@ -1623,47 +1551,7 @@ export function createApprovalRecord(input: {
   type: Approval["type"];
   payload: JsonObject;
 }): Approval {
-  const db = initDb();
-  const txn = db.transaction(() => {
-    if (input.type === "fallback") {
-      const existing = db
-        .prepare("SELECT * FROM approvals WHERE session_id = ? AND type = 'fallback' AND state = 'pending'")
-        .get(input.sessionId) as ApprovalRow | undefined;
-      if (existing) {
-        db.prepare("UPDATE approvals SET payload = ? WHERE id = ?").run(JSON.stringify(input.payload), existing.id);
-        return getApprovalRecord(existing.id);
-      }
-    }
-
-    const approval: Approval = {
-      id: uuidv4(),
-      sessionId: input.sessionId,
-      type: input.type,
-      payload: input.payload,
-      state: "pending",
-      createdAt: new Date().toISOString(),
-      resolvedAt: null,
-      actor: null,
-    };
-    db.prepare(`
-      INSERT INTO approvals
-        (id, session_id, type, payload, state, created_at, resolved_at, actor)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      approval.id,
-      approval.sessionId,
-      approval.type,
-      JSON.stringify(approval.payload),
-      approval.state,
-      approval.createdAt,
-      approval.resolvedAt,
-      approval.actor,
-    );
-    return approval;
-  });
-  const approval = txn() as Approval | undefined;
-  if (!approval) throw new Error("failed to create approval");
-  return approval;
+  return createApprovalRecordInRegistry(input, approvalRegistryDeps);
 }
 
 export function resolveApprovalRecord(
@@ -1671,21 +1559,11 @@ export function resolveApprovalRecord(
   state: "approved" | "rejected",
   actor?: string | null,
 ): Approval | undefined {
-  const db = initDb();
-  const txn = db.transaction(() => {
-    const existing = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
-    if (!existing) return undefined;
-    if (existing.state !== "pending") return rowToApproval(existing);
-    const resolvedAt = new Date().toISOString();
-    db.prepare("UPDATE approvals SET state = ?, resolved_at = ?, actor = ? WHERE id = ? AND state = 'pending'")
-      .run(state, resolvedAt, actor ?? null, id);
-    return getApprovalRecord(id);
-  });
-  return txn() as Approval | undefined;
+  return resolveApprovalRecordInRegistry(id, state, actor, approvalRegistryDeps);
 }
 
 export function clearApprovalRecordsForTest(): void {
-  initDb().prepare("DELETE FROM approvals").run();
+  clearApprovalRecordsForTestInRegistry(approvalRegistryDeps);
 }
 
 // ── File management ──────────────────────────────────────────────────
