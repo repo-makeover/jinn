@@ -887,6 +887,14 @@ export async function startGateway(
     antigravityEngine.killIdle();
     grokInteractiveEngine.killIdle();
     hermesInteractiveEngine.killIdle();
+    orchestrationRuntime = refreshOrchestrationRuntimeForOrgReload(
+      apiContext,
+      currentConfig,
+      orchestrationRuntime,
+      (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
+      { refreshState: orchestrationRefreshState, reason: "org_reload" },
+    );
+    bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
     emit("org:changed", {});
   };
 
@@ -956,6 +964,14 @@ export async function startGateway(
       sessionManager.setConfig(currentConfig);
       invalidateModelRegistry(); // rebuild the model/capability registry from the new config
       refreshDynamicModels(currentConfig); // re-discover dynamic models (engine bins/auth may have changed)
+      orchestrationRuntime = swapOrchestrationRuntime(
+        apiContext,
+        currentConfig,
+        orchestrationRuntime,
+        (nextConfig) => createGatewayOrchestrationRuntime(nextConfig, employeeRegistry),
+        { refreshState: orchestrationRefreshState, reason: "config_reload" },
+      );
+      bindOrchestrationResumeHandler(orchestrationRuntime, apiContext);
       logger.info("Config reloaded successfully");
       logBoardSummary(ORG_DIR, (msg) => logger.info(msg));
       emit("config:reloaded", {});

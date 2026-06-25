@@ -15,7 +15,8 @@ import { PersistentMatrixScheduler } from "../../orchestration/persistent-schedu
 import { OrchestrationStore, type ArtifactKind } from "../../orchestration/store.js";
 import { requeueRecoveredContinuation } from "../../orchestration/recovery-requeue.js";
 import { listRecoveryNotices } from "../../orchestration/store-recovery.js";
-import { ORCH_DB, ORCH_RECOVERY_DIR } from "../../shared/paths.js";
+import { JINN_HOME, ORCH_DB, ORCH_RECOVERY_DIR } from "../../shared/paths.js";
+import { authenticateGatewayRequest } from "../auth.js";
 import { readOrchestrationTelemetry, summarizeOrchestrationTelemetry } from "../../orchestration/telemetry.js";
 import { listManagedWorktrees, resolveWorktreeOptions } from "../../orchestration/worktree.js";
 import { scanOrg } from "../org.js";
@@ -214,14 +215,19 @@ export async function handleOrchestrationRoutes(
       json(res, { error: "dual-lane selection requires an HTTP request body" }, 400);
       return true;
     }
+    if (!requireOrchestrationMutationAuth(req, res, context)) return true;
     const parsed = await readJsonBody(req, res);
     if (!parsed.ok) return true;
-    const body = parsed.body as { taskId?: unknown; winnerLane?: unknown } | null;
+    const body = parsed.body as { taskId?: unknown; coordinatorId?: unknown; winnerLane?: unknown } | null;
     if (typeof body?.taskId !== "string" || typeof body?.winnerLane !== "string") {
       json(res, { error: "taskId and winnerLane are required" }, 400);
       return true;
     }
-    const result = selectDualLaneWinner({ taskId: body.taskId, winnerLane: body.winnerLane });
+    const result = selectDualLaneWinner({
+      taskId: body.taskId,
+      coordinatorId: typeof body.coordinatorId === "string" ? body.coordinatorId : undefined,
+      winnerLane: body.winnerLane,
+    });
     if (!result.ok) {
       json(res, { error: result.message }, result.reason === "not_found" ? 404 : 409);
       return true;
@@ -238,16 +244,26 @@ export async function handleOrchestrationRoutes(
       json(res, { error: "orchestration is disabled" }, 409);
       return true;
     }
+    if (!req) {
+      json(res, { error: "dual-lane apply requires an HTTP request body" }, 400);
+      return true;
+    }
+    if (!requireOrchestrationMutationAuth(req, res, context)) return true;
     const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
     if (!parsed.ok) return true;
-    const body = parsed.body as { taskId?: unknown; winnerLane?: unknown } | null;
+    const body = parsed.body as { taskId?: unknown; coordinatorId?: unknown; winnerLane?: unknown } | null;
     if (typeof body?.taskId !== "string" || typeof body?.winnerLane !== "string") {
       json(res, { error: "taskId and winnerLane are required" }, 400);
       return true;
     }
     const store = context.orchestration?.runtime?.getStore() ?? openFallbackStore(context);
     try {
-      const result = applyDualLaneWinner({ taskId: body.taskId, winnerLane: body.winnerLane, store });
+      const result = applyDualLaneWinner({
+        taskId: body.taskId,
+        coordinatorId: typeof body.coordinatorId === "string" ? body.coordinatorId : undefined,
+        winnerLane: body.winnerLane,
+        store,
+      });
       if (!result.ok) {
         json(res, { error: result.message, reason: result.reason }, result.reason === "not_found" ? 404 : 409);
         return true;
@@ -296,7 +312,7 @@ export async function handleOrchestrationRoutes(
     if (!runtime) return true;
     const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
     if (!parsed.ok) return true;
-    const body = parsed.body as { manifestPath?: unknown; taskId?: unknown; managerName?: unknown } | null;
+    const body = parsed.body as { manifestPath?: unknown; taskId?: unknown; coordinatorId?: unknown; managerName?: unknown } | null;
     if (typeof body?.manifestPath !== "string" || typeof body?.taskId !== "string" || typeof body?.managerName !== "string") {
       json(res, { error: "manifestPath, taskId, and managerName are required" }, 400);
       return true;
@@ -309,8 +325,10 @@ export async function handleOrchestrationRoutes(
     const result = requeueRecoveredContinuation({
       manifestPath: body.manifestPath,
       taskId: body.taskId,
+      coordinatorId: typeof body.coordinatorId === "string" ? body.coordinatorId : undefined,
       managerName: body.managerName,
       store: runtime.getStore(),
+      recoveryDir: context.orchestration?.recoveryDir ?? ORCH_RECOVERY_DIR,
     });
     if (!result.ok) {
       json(res, { error: result.message, reason: result.reason }, result.reason === "manifest_not_found" || result.reason === "continuation_not_found" ? 404 : 409);
@@ -332,6 +350,7 @@ export async function handleOrchestrationRoutes(
       json(res, { error: "orchestration run requires an HTTP request body" }, 400);
       return true;
     }
+    if (!requireOrchestrationMutationAuth(req, res, context)) return true;
     const parsed = await readJsonBody(req, res);
     if (!parsed.ok) return true;
     const body = parsed.body as { mode?: unknown; task?: unknown } | null;
@@ -341,7 +360,7 @@ export async function handleOrchestrationRoutes(
         mode: typeof body?.mode === "string" ? liveRunModeSchema.parse(body.mode) : undefined,
         task: body?.task,
       });
-      json(res, result, result.ok || result.state === "failed" ? 200 : 409);
+      json(res, result, result.ok ? 200 : (result.state === "failed" ? 500 : 409));
     } catch (err) {
       json(res, { error: "orchestration run failed", detail: formatZodError(err) }, 400);
     }
@@ -402,7 +421,12 @@ export async function handleOrchestrationRoutes(
       }
       const store = runtime?.getStore() ?? openFallbackStore(context);
       try {
-        json(res, { taskId: artifactParams.taskId, kind, artifacts: listArtifactContents(store, artifactParams.taskId, kind) });
+        const coordinatorId = queryParam(req?.url, "coordinatorId");
+        json(res, { taskId: artifactParams.taskId, coordinatorId, kind, artifacts: listArtifactContents(store, artifactParams.taskId, kind, coordinatorId ?? undefined) });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = message.includes("ambiguous") ? 409 : 500;
+        json(res, { error: message, reason: status === 409 ? "ambiguous_run_identifier" : "artifact_read_failed" }, status);
       } finally {
         if (!runtime) store.close();
       }
@@ -477,6 +501,54 @@ export async function handleOrchestrationRoutes(
   }
 }
 
+function requireOrchestrationMutationAuth(req: HttpRequest, res: ServerResponse, context: ApiContext): boolean {
+  if (!isSameOriginOrLocal(req)) {
+    json(res, { error: "Origin not allowed" }, 403);
+    return false;
+  }
+  if (!context.gatewayAuthToken) {
+    json(res, { error: "Gateway auth token is not configured" }, 503);
+    return false;
+  }
+  const auth = authenticateGatewayRequest(req, context.gatewayAuthToken, context.jinnHome ?? JINN_HOME);
+  if (!auth.ok) {
+    json(res, { error: auth.reason || "Unauthorized" }, 401);
+    return false;
+  }
+  return true;
+}
+
+function isSameOriginOrLocal(req: HttpRequest): boolean {
+  const rawOrigin = req.headers.origin;
+  const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
+  if (!origin) return true;
+  const rawHost = req.headers.host;
+  const host = Array.isArray(rawHost) ? rawHost[0] : rawHost;
+  try {
+    const parsed = new URL(origin);
+    const originHost = parsed.hostname.toLowerCase();
+    const requestHost = host ? new URL(`http://${host}`).hostname.toLowerCase() : "";
+    return originHost === requestHost
+      || originHost === "localhost"
+      || originHost.endsWith(".localhost")
+      || originHost === "127.0.0.1"
+      || originHost === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function queryParam(url: string | undefined, key: string): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url, "http://localhost");
+    const value = parsed.searchParams.get(key);
+    return value && value.trim() ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildStatusPayload(context: ApiContext, runtime: OrchestrationRuntime | undefined) {
   const enabled = context.getConfig().orchestration?.enabled === true;
   const controlState = runtime?.getControlState() ?? { queuePaused: false, pausedAt: null, pauseReason: null };
@@ -548,8 +620,12 @@ function jsonLeaseStop(
   }
   const message = sanitizeStopReason(reason) ?? "Interrupted by orchestration lease stop";
   if (session.status !== "running") {
-    const released = runtime.releaseLease(lease.leaseId, lease.coordinatorId);
-    json(res, { status: "released_terminal_session", lease: released, sessionId: session.id }, 200);
+    try {
+      const released = runtime.releaseLease(lease.leaseId, lease.coordinatorId);
+      json(res, { status: "released_terminal_session", lease: released, sessionId: session.id }, 200);
+    } catch (err) {
+      json(res, { error: err instanceof Error ? err.message : String(err), leaseId }, 409);
+    }
     return;
   }
   const stopped = killSessionEngines(context, session, message);

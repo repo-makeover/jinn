@@ -51,7 +51,7 @@ describe("GET /api/orchestration/*", () => {
 
   it("rejects mutating methods on observe-only routes", async () => {
     let cap = makeRes();
-    await handleApiRequest(makeReq("POST", "/api/orchestration/leases"), cap.res, makeCtx(config()));
+    await handleOrchestrationRoutes("POST", "/api/orchestration/leases", cap.res, makeCtx(config()), makeReq("POST", "/api/orchestration/leases"));
 
     expect(cap.status).toBe(405);
     expect(cap.body).toEqual({ error: "Method not allowed" });
@@ -305,6 +305,28 @@ describe("GET /api/orchestration/*", () => {
     expect(cap.body).toEqual({ error: "orchestration is disabled" });
   });
 
+  it("rejects unauthenticated high-risk orchestration mutations on loopback", async () => {
+    const cap = makeRes();
+    await handleOrchestrationRoutes(
+      "POST",
+      "/api/orchestration/run",
+      cap.res,
+      makeCtx(config()),
+      makeJsonReq({
+        mode: "single_worker",
+        task: {
+          taskId: "api-unauth",
+          coordinatorId: "api-unauth",
+          requiredRoles: ["seniorImplementer"],
+          prompt: "Do not run without auth",
+        },
+      }, "/api/orchestration/run", false),
+    );
+
+    expect(cap.status).toBe(401);
+    expect(cap.body.error).toContain("Missing or invalid gateway auth token");
+  });
+
   it("retries failed continuations through the live runtime", async () => {
     const ctx = makeCtx(config());
     ctx.orchestration = {
@@ -525,7 +547,7 @@ describe("GET /api/orchestration/*", () => {
 
 async function get(pathname: string, ctx: ApiContext) {
   const cap = makeRes();
-  await handleApiRequest(makeReq("GET", pathname), cap.res, ctx);
+  await handleOrchestrationRoutes("GET", pathname, cap.res, ctx, makeReq("GET", pathname));
   expect(cap.status).toBe(200);
   return cap;
 }
@@ -534,16 +556,20 @@ function makeReq(method: string, urlPath: string) {
   return {
     method,
     url: urlPath,
-    headers: { host: "localhost" },
+    headers: { host: "localhost", authorization: "Bearer test-gateway-token" },
   } as Parameters<typeof handleApiRequest>[0];
 }
 
-function makeJsonReq(body: unknown, url = "/api/orchestration/run") {
+function makeJsonReq(body: unknown, url = "/api/orchestration/run", auth = true) {
   const req = Readable.from([Buffer.from(JSON.stringify(body))]) as NonNullable<Parameters<typeof handleOrchestrationRoutes>[4]>;
   Object.assign(req, {
     method: "POST",
     url,
-    headers: { host: "localhost", "content-type": "application/json" },
+    headers: {
+      host: "localhost",
+      "content-type": "application/json",
+      ...(auth ? { authorization: "Bearer test-gateway-token" } : {}),
+    },
   });
   return req;
 }
@@ -593,6 +619,8 @@ function makeCtx(cfg: OrchestrationConfig, orchestrationCfg: { enabled?: boolean
     sessionManager: {
       getQueue: () => ({ getTransportState: (_key: string, status: string) => status, getPendingCount: () => 0 }),
     },
+    gatewayAuthToken: "test-gateway-token",
+    jinnHome: tmpDir,
     orchestration: { config: cfg, dbPath },
   } as unknown as ApiContext;
 }

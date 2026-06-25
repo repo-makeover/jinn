@@ -21,6 +21,10 @@ export interface ApiContext {
   hookSecret?: string;
   /** Gateway API token generated into gateway.json. Used to mint short-lived PTY websocket tokens. */
   apiToken?: string;
+  /** Gateway auth token generated into gateway.json. Used by route-local high-risk mutation guards. */
+  gatewayAuthToken?: string;
+  /** Test-injectable Jinn home for auth device storage. Defaults to shared JINN_HOME. */
+  jinnHome?: string;
   /** PTY-backed Claude engine used by CLI-mode message sends so the user sees the
    *  prompt + response stream into the live xterm. Distinct from the headless
    *  "claude" engine in sessionManager (which chat/cron/connectors use). */

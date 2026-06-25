@@ -28,7 +28,15 @@ export function swapOrchestrationRuntime(
   }
 
   if (config.orchestration?.enabled === true) {
-    const nextRuntime = createRuntime(config);
+    let nextRuntime: OrchestrationRuntime | undefined;
+    try {
+      nextRuntime = createRuntime(config);
+    } catch (err) {
+      logger.error(`Orchestration runtime refresh failed: ${err instanceof Error ? err.message : err}`);
+      if (currentRuntime) bindRuntime(apiContext, currentRuntime);
+      else unbindRuntime(apiContext);
+      return currentRuntime;
+    }
     if (nextRuntime) {
       bindRuntime(apiContext, nextRuntime);
       currentRuntime?.close();

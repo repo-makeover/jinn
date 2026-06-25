@@ -537,6 +537,9 @@ export async function runWebSession(
     const wasInterrupted = result.error?.startsWith("Interrupted");
     const wasSuperseded = !wasInterrupted && isTurnSuperseded(currentSession.id, turnStartedAt);
     const quietPreempted = wasInterrupted || wasSuperseded;
+    if (!quietPreempted && isOrchestrationImplementationTurn(currentSession) && !result.error && !result.result?.trim()) {
+      result.error = "Orchestration implementation turn produced no output";
+    }
 
     const streamedBlocks = getMessages(currentSession.id).filter((m) => m.partial);
     const preserveStreamedBlocks = shouldPreserveStreamedBlocks({ quietPreempted, streamedBlocks });
@@ -790,4 +793,11 @@ export async function runWebSession(
     maybeEmitTalkGraph(currentSession.id, "completed", { getSession, emit: context.emit });
     logger.error(`Web session ${currentSession.id} error: ${errMsg}`);
   }
+}
+
+function isOrchestrationImplementationTurn(session: Session): boolean {
+  const lease = (session.transportMeta as Record<string, unknown> | undefined)?.orchestrationLease as { role?: unknown } | undefined;
+  if (!lease) return false;
+  const role = typeof lease.role === "string" ? lease.role.toLowerCase() : "";
+  return !role.includes("review");
 }
