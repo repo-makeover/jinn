@@ -1,240 +1,69 @@
-import http from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { WebSocketServer, type WebSocket } from "ws";
-import type { JinnConfig, Connector, Employee, Engine } from "../shared/types.js";
+import { fileURLToPath } from "node:url";
+import type { Engine, JinnConfig } from "../shared/types.js";
 import { loadConfig, normalizeClaudeEngineConfig } from "../shared/config.js";
-import { invalidateModelRegistry, refreshGrokModels, refreshPiModels, refreshHermesModels } from "../shared/models.js";
+import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js";
 import { configureLogger, logger } from "../shared/logger.js";
-import { initDb, recoverStaleSessions, recoverStaleQueueItems, clearAllPartialMessages, getInterruptedSessions, listSessions, updateSession, getSession } from "../sessions/registry.js";
-import { SessionManager, type RouteOptions } from "../sessions/manager.js";
-import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
-import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
+import { invalidateModelRegistry, refreshGrokModels, refreshHermesModels, refreshPiModels } from "../shared/models.js";
+import { CLAUDE_SETTINGS_DIR, GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, ORG_DIR } from "../shared/paths.js";
 import { CodexEngine } from "../engines/codex.js";
 import { CodexInteractiveEngine } from "../engines/codex-interactive.js";
-import { AntigravityEngine } from "../engines/antigravity.js";
-import { PiEngine } from "../engines/pi.js";
+import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 import { GrokEngine } from "../engines/grok.js";
 import { GrokInteractiveEngine } from "../engines/grok-interactive.js";
 import { HermesAcpEngine } from "../engines/hermes-acp.js";
 import { HermesInteractiveEngine } from "../engines/hermes-interactive.js";
 import { KiroEngine } from "../engines/kiro.js";
+import { PiEngine } from "../engines/pi.js";
+import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
-import { HookRegistry } from "./hook-registry.js";
-import { writeGatewayInfo, readGatewayInfo, updateGatewayPtyPids, staleGatewayPids } from "./gateway-info.js";
-import { authenticateGatewayRequest, authRequiredForRequest, ensureGatewayAuthToken, shouldRequireGatewayAuth, validateGatewayExposure } from "./auth.js";
-import { seedTrust, cleanupSessionSettings } from "../shared/claude-settings.js";
-import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, CLAUDE_SETTINGS_DIR, ORG_DIR } from "../shared/paths.js";
-import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
-import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
-import { interruptExpiredOrchestrationLeaseSessions } from "./api/session-dispatch.js";
+import { AntigravityEngine } from "../engines/antigravity.js";
 import type { OrchestrationRuntime } from "../orchestration/runtime.js";
-import { runAllocatedDualLaneTask } from "../orchestration/dual-lane.js";
-import { runAllocatedOrchestrationTask } from "../orchestration/run-mode.js";
-import { startStatusReconciler } from "./status-reconciler.js";
-import { createGatewayNotificationSink } from "./notification-sink.js";
-import { syncExternalTurn } from "./external-turns.js";
-import { pickEncoding, isCompressibleExt, compressStream } from "./compress.js";
-import { attachPtyWebSocket } from "./pty-ws.js";
-import { startWsHeartbeat, trackHeartbeat } from "./ws-heartbeat.js";
-import { ensureFilesDir, cleanupOldUploads } from "./files.js";
-import {
-  handleAuthApiRequest,
-  isAuthenticatedRequest,
-  unauthorized,
-  verifyPtyAccessToken,
-} from "./auth.js";
+import { initDb, clearAllPartialMessages, getInterruptedSessions, getSession, listSessions, recoverStaleQueueItems, recoverStaleSessions, updateSession } from "../sessions/registry.js";
+import { SessionManager } from "../sessions/manager.js";
 import { initStt } from "../stt/stt.js";
-import { startWatchers, stopWatchers, syncSkillSymlinks } from "./watcher.js";
-import { SlackConnector } from "../connectors/slack/index.js";
-import { DiscordConnector, type DiscordConnectorConfig } from "../connectors/discord/index.js";
-import { RemoteDiscordConnector } from "../connectors/discord/remote.js";
-import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
-import { TelegramConnector } from "../connectors/telegram/index.js";
 import { loadJobs } from "../cron/jobs.js";
-import { startScheduler, reloadScheduler, stopScheduler } from "../cron/scheduler.js";
-import { scanOrg } from "./org.js";
-import { syncBoardForEvent } from "./board-sync.js";
-import { logBoardSummary } from "./board-service.js";
+import { reloadScheduler, startScheduler, stopScheduler } from "../cron/scheduler.js";
 import { startBoardWorker } from "./board-worker.js";
-import { reconcileOrphanedTickets } from "./orphaned-ticket-reconciler.js";
+import { logBoardSummary } from "./board-service.js";
+import { syncBoardForEvent } from "./board-sync.js";
+import { ensureGatewayAuthToken, shouldRequireGatewayAuth, validateGatewayExposure } from "./auth.js";
+import { createGatewayNotificationSink } from "./notification-sink.js";
+import { createGatewayOrchestrationRuntime } from "./orchestration-runtime-factory.js";
 import {
   refreshDeferredOrchestrationRuntimeIfDrained,
   refreshOrchestrationRuntimeForOrgReload,
   swapOrchestrationRuntime,
   type OrchestrationRuntimeRefreshState,
 } from "./orchestration-runtime-manager.js";
-import { createGatewayOrchestrationRuntime } from "./orchestration-runtime-factory.js";
-
+import { scanOrg } from "./org.js";
+import { reconcileOrphanedTickets } from "./orphaned-ticket-reconciler.js";
+import { startStatusReconciler } from "./status-reconciler.js";
+import { syncExternalTurn } from "./external-turns.js";
+import { HookRegistry } from "./hook-registry.js";
+import { readGatewayInfo, staleGatewayPids, updateGatewayPtyPids, writeGatewayInfo } from "./gateway-info.js";
+import { startWatchers, stopWatchers, syncSkillSymlinks } from "./watcher.js";
+import { cleanupOldUploads, ensureFilesDir } from "./files.js";
+import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
+import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
+import { startConfiguredConnectors } from "./server/connectors.js";
+import { createGatewayCleanup, type GatewayCleanup } from "./server/cleanup.js";
+import { serveStatic, isAllowedCorsOrigin } from "./server/http-static.js";
+import { bindOrchestrationRuntimeHandlers } from "./server/orchestration.js";
+import { createGatewayTransports } from "./server/transports.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Extract the lowercased hostname from a Host header (or any host[:port]
-// string), tolerating IPv6 brackets and missing ports. Returns null if unparseable.
-function hostnameOf(hostHeader: string | undefined): string | null {
-  if (!hostHeader) return null;
-  try {
-    return new URL(`http://${hostHeader}`).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
+export { isAllowedCorsOrigin, serveStatic };
 
-export function isAllowedCorsOrigin(origin: string | undefined, requestHost?: string): boolean {
-  if (!origin) return true;
-  let parsed: URL;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-  const host = parsed.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "[::1]") {
-    return true;
-  }
-  // Same-origin requests: when the dashboard is served by this same gateway over
-  // Tailscale/LAN, the browser's Origin host matches the request's Host header.
-  // (Browsers attach Origin on same-origin POST/PUT/etc., so without this remote
-  // message sends 403 even though the page itself loaded fine.) Reflecting only an
-  // exact host match keeps arbitrary cross sites (evil.example) rejected.
-  const reqHostname = hostnameOf(requestHost);
-  if (reqHostname && reqHostname === host) return true;
-  return false;
-}
-
-function setCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): boolean {
-  const rawOrigin = req.headers.origin;
-  const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  const allowed = isAllowedCorsOrigin(origin, req.headers.host);
-  if (allowed && origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  }
-  return allowed;
-}
-
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html",
-  ".js": "application/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-};
-
-export function serveStatic(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  webDir: string,
-): boolean {
-  if (!fs.existsSync(webDir)) return false;
-
-  // Strip query string before resolving file path
-  const urlPath = (req.url || "/").split("?")[0];
-  let filePath = path.join(webDir, urlPath);
-  if (filePath.endsWith("/")) filePath = path.join(filePath, "index.html");
-
-  // Prevent directory traversal
-  const resolved = path.resolve(filePath);
-  if (!resolved.startsWith(path.resolve(webDir))) {
-    res.writeHead(403);
-    res.end("Forbidden");
-    return true;
-  }
-
-  // Hashed assets (Vite emits /assets/<name>-<hash>.<ext>) are content-addressed
-  // — safe to cache forever. The HTML shell + root files use `no-store` (not just
-  // `no-cache`) so a back-forward / session-restored tab — e.g. after a reboot, or
-  // iOS Safari over Tailscale — can never reuse a stale shell that points at old
-  // hashed JS/CSS. `no-cache` still lets the browser store and replay the response
-  // without revalidating in those paths; `no-store` forces a fresh fetch of
-  // index.html every load, so the current asset hashes are always picked up.
-  const isHashedAsset = urlPath.startsWith("/assets/");
-  const cacheControl = isHashedAsset
-    ? "public, max-age=31536000, immutable"
-    : "no-store";
-
-  if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) {
-    if (urlPath.startsWith("/assets/")) {
-      res.writeHead(404, {
-        "Content-Type": "text/plain",
-        "Cache-Control": "no-store",
-      });
-      res.end("Not found");
-      return true;
-    }
-
-    // SPA fallback to index.html for client-side routing
-    const indexPath = path.join(webDir, "index.html");
-    if (fs.existsSync(indexPath)) {
-      res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
-      fs.createReadStream(indexPath).pipe(res);
-      return true;
-    }
-    return false;
-  }
-
-  const ext = path.extname(resolved);
-  const contentType = MIME_TYPES[ext] || "application/octet-stream";
-  const enc = isCompressibleExt(ext) ? pickEncoding(req.headers["accept-encoding"]) : null;
-  const headers: Record<string, string> = { "Content-Type": contentType, "Cache-Control": cacheControl };
-  if (enc) {
-    headers["Content-Encoding"] = enc;
-    headers["Vary"] = "Accept-Encoding";
-    res.writeHead(200, headers);
-    fs.createReadStream(resolved).pipe(compressStream(enc)).pipe(res);
-    return true;
-  }
-  res.writeHead(200, headers);
-  fs.createReadStream(resolved).pipe(res);
-  return true;
-}
-
-function bindOrchestrationRuntimeHandlers(runtime: OrchestrationRuntime | undefined, apiContext: ApiContext): void {
-  runtime?.setResumeQueuedRunHandler(async ({ continuation, allocation, reviewPolicy }) => {
-    const result = continuation.mode === "dual_lane"
-      ? await runAllocatedDualLaneTask({
-        context: apiContext,
-        task: continuation.task,
-        allocation,
-        reviewPolicy,
-      })
-      : await runAllocatedOrchestrationTask({
-        context: apiContext,
-        mode: continuation.mode,
-        task: continuation.task,
-        allocation,
-        reviewPolicy,
-      });
-    if (!result.ok) {
-      throw new Error(result.state === "failed"
-        ? result.errorSummary
-        : `unexpected orchestration state while resuming ${continuation.taskId}/${continuation.coordinatorId}: ${result.state}`);
-    }
-  });
-  runtime?.setExpiredLeaseHandler((leases) => interruptExpiredOrchestrationLeaseSessions(apiContext, leases));
-}
-
-export type GatewayCleanup = () => Promise<void>;
-
-export async function startGateway(
-  config: JinnConfig,
-): Promise<GatewayCleanup> {
+export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> {
   const bootId = randomUUID().slice(0, 8);
 
-  // Configure logging
   configureLogger({
     level: config.logging.level,
     stdout: config.logging.stdout,
@@ -244,21 +73,18 @@ export async function startGateway(
   const gatewayName = config.portal?.portalName || "Jinn";
   logger.info(`Starting ${gatewayName} gateway (boot ${bootId}, pid ${process.pid})...`);
 
-  // Initialize database and recover any sessions stuck from a previous run
   initDb();
   ensureFilesDir();
-  // Retention: drop session-upload buckets older than 30 days on boot, then daily.
-  try { cleanupOldUploads(30); } catch { /* best-effort */ }
+  try { cleanupOldUploads(30); } catch { }
   const uploadCleanupTimer = setInterval(() => {
-    try { cleanupOldUploads(30); } catch { /* best-effort */ }
+    try { cleanupOldUploads(30); } catch { }
   }, 24 * 60 * 60 * 1000);
   uploadCleanupTimer.unref?.();
+
   const recovered = recoverStaleSessions();
   if (recovered > 0) {
     logger.info(`Recovered ${recovered} stale session(s) — marked as "interrupted" for resume`);
   }
-
-  // Log resumable sessions so operators know what can be picked up
   const resumable = getInterruptedSessions();
   if (resumable.length > 0) {
     logger.info(`${resumable.length} interrupted session(s) available for resume:`);
@@ -270,17 +96,13 @@ export async function startGateway(
   if (recoveredQueue > 0) {
     logger.info(`Recovered ${recoveredQueue} in-flight queue item(s) from previous run — reset to pending`);
   }
-  // Drop any mid-turn streaming blocks stranded by a restart — their turn's final
-  // message was never written, so the partials have nothing to consolidate into.
   const sweptPartials = clearAllPartialMessages();
   if (sweptPartials > 0) {
     logger.info(`Swept ${sweptPartials} stranded mid-turn partial message(s) from previous run`);
   }
 
-  // Resolve gateway port/host early so boot artifacts (gateway.json) can record it.
   const port = config.gateway.port || 7777;
   const host = config.gateway.host || "127.0.0.1";
-  // Mutable config reference for hot-reload
   let currentConfig = config;
 
   const exposure = validateGatewayExposure(config);
@@ -288,10 +110,7 @@ export async function startGateway(
   const gatewayAuthToken = ensureGatewayAuthToken(JINN_HOME);
   if (shouldRequireGatewayAuth(config)) logger.info("Gateway auth enabled for privileged API and WebSocket routes");
 
-  // Normalize claude engine config (idempotent — loadConfig already normalized it)
   const claudeCfg = normalizeClaudeEngineConfig(config.engines.claude);
-
-  // Reap any orphaned PTYs from a prior crashed run before writing the fresh gateway.json.
   const oldInfo = readGatewayInfo(GATEWAY_INFO_FILE);
   if (oldInfo) {
     for (const pid of staleGatewayPids(oldInfo)) {
@@ -299,7 +118,6 @@ export async function startGateway(
         process.kill(pid, "SIGTERM");
         logger.info(`Reaping stale pid ${pid} from prior gateway`);
       } catch (err: unknown) {
-        // ESRCH = no such process — already gone, which is the normal case.
         const code = (err as NodeJS.ErrnoException).code;
         if (code !== "ESRCH") {
           logger.warn(`Unexpected error reaping stale pid ${pid}: ${err instanceof Error ? err.message : err}`);
@@ -308,46 +126,33 @@ export async function startGateway(
     }
   }
 
-  // Write gateway connection info (port + hook secret + pid) for hook-relay discovery.
   const gatewayInfo = writeGatewayInfo(GATEWAY_INFO_FILE, { port, host, pid: process.pid, token: gatewayAuthToken });
-
-  // Hook registry — shared by the interactive engine and the internal hook route.
   const hookRegistry = new HookRegistry();
 
-  // Claude engine — InteractiveClaudeEngine (PTY): runs all work turns
-  // (chat, employees, cron, child sessions) AND backs the live xterm CLI view.
-
-  // Copy hook-relay asset next to JINN_HOME so PTY-spawned Claude can find it.
   const relayCandidates = [
     path.join(__dirname, "..", "..", "..", "assets", "hook-relay.mjs"),
     path.join(__dirname, "..", "..", "assets", "hook-relay.mjs"),
     path.join(__dirname, "..", "assets", "hook-relay.mjs"),
   ];
   try {
-    const relaySrc = relayCandidates.find((p) => fs.existsSync(p));
-    if (relaySrc) {
-      fs.copyFileSync(relaySrc, HOOK_RELAY_SCRIPT);
-    } else {
-      logger.warn(`hook-relay.mjs asset not found in any candidate location; interactive Claude hooks may not work`);
-    }
+    const relaySrc = relayCandidates.find((candidate) => fs.existsSync(candidate));
+    if (relaySrc) fs.copyFileSync(relaySrc, HOOK_RELAY_SCRIPT);
+    else logger.warn("hook-relay.mjs asset not found in any candidate location; interactive Claude hooks may not work");
   } catch (err) {
     logger.warn(`Failed to copy hook-relay.mjs: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Seed trust for the Jinn project dir so interactive Claude doesn't prompt.
   try {
     seedTrust(path.join(os.homedir(), ".claude.json"), JINN_HOME);
   } catch (err) {
     logger.warn(`Failed to seed Claude trust: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Orphan-PTY tracking spans all interactive engines.
-  // Declared as a hoisted function so the lifecycle callbacks below can reference
-  // the not-yet-constructed managers (only invoked later, on adopt/cleanup).
   let codexLifecycle: PtyLifecycleManager | undefined;
   let antigravityLifecycle: PtyLifecycleManager | undefined;
   let grokLifecycle: PtyLifecycleManager | undefined;
   let hermesLifecycle: PtyLifecycleManager | undefined;
+
   function refreshPtyPids(): void {
     try {
       const pids = [
@@ -358,10 +163,11 @@ export async function startGateway(
         ...(hermesLifecycle ? hermesLifecycle.livePids() : []),
       ];
       updateGatewayPtyPids(GATEWAY_INFO_FILE, pids);
-    } catch { /* best effort */ }
+    } catch {
+    }
   }
 
-  const claudeLifecycle: PtyLifecycleManager = new PtyLifecycleManager({
+  const claudeLifecycle = new PtyLifecycleManager({
     maxLivePtys: claudeCfg.maxLivePtys!,
     onAdopt: () => refreshPtyPids(),
     onCleanup: (id) => {
@@ -371,19 +177,12 @@ export async function startGateway(
     },
   });
   const interactiveClaudeEngine = new InteractiveClaudeEngine(claudeLifecycle, hookRegistry);
-
-  // Codex has two modes: headless `codex exec --json` for chat/default work
-  // turns, and real `codex` TUI PTYs for the dashboard CLI view.
   codexLifecycle = new PtyLifecycleManager({
     maxLivePtys: claudeCfg.maxLivePtys!,
     onAdopt: () => refreshPtyPids(),
     onCleanup: () => refreshPtyPids(),
   });
   const codexInteractiveEngine = new CodexInteractiveEngine(codexLifecycle);
-
-  // Antigravity (`agy`) — PTY-interactive engine. One instance both runs turns
-  // and backs the xterm view (agy has no headless mode), so it needs its own
-  // PTY lifecycle manager.
   antigravityLifecycle = new PtyLifecycleManager({
     maxLivePtys: claudeCfg.maxLivePtys!,
     onAdopt: () => refreshPtyPids(),
@@ -410,9 +209,6 @@ export async function startGateway(
   const grokEngine = new GrokEngine();
   const hermesEngine = new HermesAcpEngine();
   const engines = new Map<string, Engine>();
-  // Claude WORK TURNS (chat, employees, cron, child sessions) run on the
-  // interactive PTY engine → cc_entrypoint=cli, covered by the Max subscription
-  // (per-content-block streaming via transcript tail).
   engines.set("claude", interactiveClaudeEngine);
   logger.info("Claude work turns: INTERACTIVE PTY (cc_entrypoint=cli, Max-subsidized)");
   engines.set("codex", codexEngine);
@@ -422,8 +218,6 @@ export async function startGateway(
   engines.set("pi", piEngine);
   engines.set("kiro", kiroEngine);
 
-  // PTY-capable engines, keyed by engine name — the /ws/pty handler routes by
-  // session.engine so the xterm view attaches to the right engine.
   const ptyViewEngines: Record<string, Engine & PtyViewEngine> = {
     claude: interactiveClaudeEngine,
     codex: codexInteractiveEngine,
@@ -432,400 +226,28 @@ export async function startGateway(
     hermes: hermesInteractiveEngine,
   };
 
-  // Derive connector names from config
   const connectorNames: string[] = [];
-  if (config.connectors?.slack?.appToken && config.connectors?.slack?.botToken) {
-    connectorNames.push("slack");
-  }
-  if (config.connectors?.discord?.botToken || config.connectors?.discord?.proxyVia) {
-    connectorNames.push("discord");
-  }
-  if (config.connectors?.telegram?.botToken) {
-    connectorNames.push("telegram");
-  }
-  if (config.connectors?.whatsapp) {
-    connectorNames.push("whatsapp");
-  }
+  if (config.connectors?.slack?.appToken && config.connectors?.slack?.botToken) connectorNames.push("slack");
+  if (config.connectors?.discord?.botToken || config.connectors?.discord?.proxyVia) connectorNames.push("discord");
+  if (config.connectors?.telegram?.botToken) connectorNames.push("telegram");
+  if (config.connectors?.whatsapp) connectorNames.push("whatsapp");
 
-  // Session manager
   const sessionManager = new SessionManager(config, engines, connectorNames);
-
-  // Build employee registry
   let employeeRegistry = scanOrg();
   logger.info(`Loaded ${employeeRegistry.size} employee(s) from org directory`);
 
-  // Start connectors
-  const connectors: Connector[] = [];
-  const connectorMap = new Map<string, Connector>();
-  /** IDs of connectors created from config.connectors.instances[] (vs legacy top-level connectors) */
-  const instanceConnectorIds = new Set<string>();
-
-  /**
-   * Shared boilerplate for legacy top-level connectors: create, wire onMessage
-   * routing, register, and fire-and-forget start. Per-connector config guards
-   * and construction stay explicit at the call sites.
-   */
-  const initConnector = (opts: {
-    id: string;
-    label: string;
-    create: () => Connector;
-    /** Read at message time so it tracks the captured config like before. */
-    employee: () => string | undefined;
-    startMsg?: string;
-  }): void => {
-    try {
-      const connector = opts.create();
-      connector.onMessage((msg) => {
-        const routeOpts: RouteOptions = {};
-        const employeeName = opts.employee();
-        if (employeeName) {
-          const emp = employeeRegistry.get(employeeName);
-          if (emp) routeOpts.employee = emp;
-        }
-        sessionManager.route(msg, connector, routeOpts).catch((err) => {
-          logger.error(`${opts.label} route error: ${err instanceof Error ? err.message : err}`);
-        });
-      });
-      // Push to registry before starting so shutdown can clean up even if start is in-flight.
-      connectors.push(connector);
-      connectorMap.set(opts.id, connector);
-      // Fire-and-forget: don't block boot — a slow handshake must not delay HTTP listen.
-      connector.start().catch((err) => {
-        logger.error(`Failed to start ${opts.label} connector: ${err instanceof Error ? err.message : err}`);
-      });
-      if (opts.startMsg) logger.info(opts.startMsg);
-    } catch (err) {
-      logger.error(`Failed to initialize ${opts.label} connector: ${err instanceof Error ? err.message : err}`);
-    }
-  };
-
-  if (config.connectors?.slack?.appToken && config.connectors?.slack?.botToken) {
-    const slackConfig = config.connectors.slack;
-    initConnector({
-      id: "slack",
-      label: "Slack",
-      create: () =>
-        new SlackConnector({
-          appToken: slackConfig.appToken,
-          botToken: slackConfig.botToken,
-          allowFrom: slackConfig.allowFrom,
-          ignoreOldMessagesOnBoot: slackConfig.ignoreOldMessagesOnBoot,
-        }),
-      employee: () => config.connectors.slack?.employee,
-    });
-  }
-
-  if (config.connectors?.discord?.proxyVia) {
-    // Remote mode: proxy all Discord operations through the primary instance
-    const discordConfig = config.connectors.discord;
-    initConnector({
-      id: "discord",
-      label: "remote Discord",
-      create: () =>
-        new RemoteDiscordConnector({
-          proxyVia: discordConfig.proxyVia!,
-          apiToken: discordConfig.proxyToken,
-          channelId: discordConfig.channelId,
-        }),
-      employee: () => config.connectors.discord?.employee,
-      startMsg: "Discord remote connector starting",
-    });
-  } else if (config.connectors?.discord?.botToken) {
-    // Primary mode: direct Discord bot connection
-    initConnector({
-      id: "discord",
-      label: "Discord",
-      create: () => new DiscordConnector(config.connectors.discord as DiscordConnectorConfig),
-      employee: () => config.connectors.discord?.employee,
-      startMsg: "Discord connector starting",
-    });
-  }
-
-  if (config.connectors?.telegram?.botToken) {
-    const telegramConfig = config.connectors.telegram;
-    initConnector({
-      id: "telegram",
-      label: "Telegram",
-      create: () =>
-        new TelegramConnector({
-          botToken: telegramConfig.botToken,
-          allowFrom: telegramConfig.allowFrom,
-          ignoreOldMessagesOnBoot: telegramConfig.ignoreOldMessagesOnBoot,
-          stt: config.stt,
-        }),
-      employee: () => config.connectors.telegram?.employee,
-    });
-  }
-
-  if (config.connectors?.whatsapp) {
-    initConnector({
-      id: "whatsapp",
-      label: "WhatsApp",
-      create: () => new WhatsAppConnector(config.connectors.whatsapp ?? {}),
-      employee: () => config.connectors.whatsapp?.employee,
-      startMsg: "WhatsApp connector starting (scan QR code if first run)",
-    });
-  }
-
-  // Process named connector instances (allows multiple connectors of the same type)
-  if (config.connectors?.instances) {
-    for (const instance of config.connectors.instances) {
-      const { id, type, employee, ...typeConfig } = instance;
-      if (!id || !type) {
-        logger.warn(`Skipping connector instance without id or type`);
-        continue;
-      }
-      if (connectorMap.has(id)) {
-        logger.warn(`Duplicate connector instance id "${id}", skipping`);
-        continue;
-      }
-
-      try {
-        let connector: Connector;
-        switch (type) {
-          case "discord": {
-            const discordConfig = { ...typeConfig, id } as DiscordConnectorConfig;
-            const discord = new DiscordConnector(discordConfig);
-            discord.onMessage((msg) => {
-              const routeOpts: RouteOptions = {};
-              if (employee) {
-                const emp = employeeRegistry.get(employee);
-                if (emp) routeOpts.employee = emp;
-              }
-              sessionManager.route(msg, discord, routeOpts).catch((err) => {
-                logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-              });
-            });
-            void discord.start().catch((err) => {
-              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-            });
-            connector = discord;
-            break;
-          }
-          case "slack": {
-            const slackConfig = { ...typeConfig, id } as any;
-            const slack = new SlackConnector(slackConfig);
-            slack.onMessage((msg) => {
-              const routeOpts: RouteOptions = {};
-              if (employee) {
-                const emp = employeeRegistry.get(employee);
-                if (emp) routeOpts.employee = emp;
-              }
-              sessionManager.route(msg, slack, routeOpts).catch((err) => {
-                logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-              });
-            });
-            void slack.start().catch((err) => {
-              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-            });
-            connector = slack;
-            break;
-          }
-          case "whatsapp": {
-            const whatsapp = new WhatsAppConnector({ ...typeConfig } as any);
-            whatsapp.onMessage((msg) => {
-              const routeOpts: RouteOptions = {};
-              if (employee) {
-                const emp = employeeRegistry.get(employee);
-                if (emp) routeOpts.employee = emp;
-              }
-              sessionManager.route(msg, whatsapp, routeOpts).catch((err) => {
-                logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-              });
-            });
-            void whatsapp.start().catch((err) => {
-              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-            });
-            connector = whatsapp;
-            break;
-          }
-          case "telegram": {
-            const telegramConfig = { ...typeConfig, id, stt: config.stt } as any;
-            const tg = new TelegramConnector(telegramConfig);
-            tg.onMessage((msg) => {
-              const routeOpts: RouteOptions = {};
-              if (employee) {
-                const emp = employeeRegistry.get(employee);
-                if (emp) routeOpts.employee = emp;
-              }
-              sessionManager.route(msg, tg, routeOpts).catch((err) => {
-                logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-              });
-            });
-            void tg.start().catch((err) => {
-              logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-            });
-            connector = tg;
-            break;
-          }
-          default:
-            logger.warn(`Unknown connector type "${type}" for instance "${id}"`);
-            continue;
-        }
-        connectors.push(connector);
-        connectorMap.set(id, connector);
-        instanceConnectorIds.add(id);
-        logger.info(`Connector instance "${id}" (type: ${type}, employee: ${employee || "default"}) started`);
-      } catch (err) {
-        logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-      }
-    }
-  }
-
+  const { connectors, connectorMap, reloadConnectorInstances } = startConfiguredConnectors({
+    config,
+    sessionManager,
+    getEmployeeRegistry: () => employeeRegistry,
+  });
   sessionManager.setConnectorProvider(() => connectorMap);
 
-  // Reload connector instances from config (stop old instances, start new ones)
-  async function reloadConnectorInstances(): Promise<{ started: string[]; stopped: string[]; errors: string[] }> {
-    const freshConfig = loadConfig();
-    const started: string[] = [];
-    const stopped: string[] = [];
-    const errors: string[] = [];
-
-    // Find instance-based connectors (keys that came from instances array)
-    const instanceIds = new Set<string>();
-    if (freshConfig.connectors?.instances) {
-      for (const inst of freshConfig.connectors.instances) {
-        if (inst.id) instanceIds.add(inst.id);
-      }
-    }
-
-    // Stop old instance connectors that are no longer in config or need refresh
-    for (const [id, connector] of connectorMap.entries()) {
-      // Skip legacy (top-level) connectors — only reload instance-based ones
-      if (!instanceConnectorIds.has(id)) continue;
-      try {
-        await connector.stop();
-        connectorMap.delete(id);
-        instanceConnectorIds.delete(id);
-        const idx = connectors.indexOf(connector);
-        if (idx >= 0) connectors.splice(idx, 1);
-        stopped.push(id);
-        logger.info(`Stopped connector instance "${id}" for reload`);
-      } catch (err) {
-        errors.push(`Failed to stop ${id}: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-
-    // Start new instances from fresh config
-    if (freshConfig.connectors?.instances) {
-      for (const instance of freshConfig.connectors.instances) {
-        const { id, type, employee, ...typeConfig } = instance;
-        if (!id || !type) continue;
-        if (connectorMap.has(id)) continue;
-
-        try {
-          let connector: Connector;
-          switch (type) {
-            case "discord": {
-              const discordConfig = { ...typeConfig, id } as DiscordConnectorConfig;
-              const discord = new DiscordConnector(discordConfig);
-              discord.onMessage((msg) => {
-                const routeOpts: RouteOptions = {};
-                if (employee) {
-                  const emp = employeeRegistry.get(employee);
-                  if (emp) routeOpts.employee = emp;
-                }
-                sessionManager.route(msg, discord, routeOpts).catch((err) => {
-                  logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-                });
-              });
-              void discord.start().catch((err) => {
-                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
-                errors.push(msg);
-                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-              });
-              connector = discord;
-              break;
-            }
-            case "slack": {
-              const slackConfig = { ...typeConfig, id } as any;
-              const slack = new SlackConnector(slackConfig);
-              slack.onMessage((msg) => {
-                const routeOpts: RouteOptions = {};
-                if (employee) {
-                  const emp = employeeRegistry.get(employee);
-                  if (emp) routeOpts.employee = emp;
-                }
-                sessionManager.route(msg, slack, routeOpts).catch((err) => {
-                  logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-                });
-              });
-              void slack.start().catch((err) => {
-                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
-                errors.push(msg);
-                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-              });
-              connector = slack;
-              break;
-            }
-            case "whatsapp": {
-              const whatsapp = new WhatsAppConnector({ ...typeConfig } as any);
-              whatsapp.onMessage((msg) => {
-                const routeOpts: RouteOptions = {};
-                if (employee) {
-                  const emp = employeeRegistry.get(employee);
-                  if (emp) routeOpts.employee = emp;
-                }
-                sessionManager.route(msg, whatsapp, routeOpts).catch((err) => {
-                  logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-                });
-              });
-              void whatsapp.start().catch((err) => {
-                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
-                errors.push(msg);
-                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-              });
-              connector = whatsapp;
-              break;
-            }
-            case "telegram": {
-              const telegramConfig = { ...typeConfig, id, stt: config.stt } as any;
-              const tg = new TelegramConnector(telegramConfig);
-              tg.onMessage((msg) => {
-                const routeOpts: RouteOptions = {};
-                if (employee) {
-                  const emp = employeeRegistry.get(employee);
-                  if (emp) routeOpts.employee = emp;
-                }
-                sessionManager.route(msg, tg, routeOpts).catch((err) => {
-                  logger.error(`${id} route error: ${err instanceof Error ? err.message : err}`);
-                });
-              });
-              void tg.start().catch((err) => {
-                const msg = `Failed to start "${id}": ${err instanceof Error ? err.message : err}`;
-                errors.push(msg);
-                logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-              });
-              connector = tg;
-              break;
-            }
-            default:
-              errors.push(`Unknown connector type "${type}" for instance "${id}"`);
-              continue;
-          }
-          connectors.push(connector);
-          connectorMap.set(id, connector);
-          instanceConnectorIds.add(id);
-          started.push(id);
-          logger.info(`Connector instance "${id}" (type: ${type}, employee: ${employee || "default"}) started`);
-        } catch (err) {
-          errors.push(`Failed to start "${id}": ${err instanceof Error ? err.message : err}`);
-          logger.error(`Failed to start connector instance "${id}": ${err instanceof Error ? err.message : err}`);
-        }
-      }
-    }
-
-    return { started, stopped, errors };
-  }
-
-  // Start cron scheduler
   const cronJobs = loadJobs();
   startScheduler(cronJobs, sessionManager, config, connectorMap);
   logger.info(`Loaded ${cronJobs.length} cron job(s)`);
 
   const startTime = Date.now();
-
-  // Broadcast function (defined early so apiContext can reference it)
   const wsClients = new Set<import("ws").WebSocket>();
   const emit = (event: string, payload: unknown): void => {
     const message = JSON.stringify({ event, payload, ts: Date.now() });
@@ -839,10 +261,6 @@ export async function startGateway(
         }
       }
     }
-    // Auto-reflect running jobs on the department Kanban. Catches every session
-    // lifecycle emit (web/talk/cron/manager/reconciler) at this single chokepoint.
-    // Fire-and-forget; never let a board write break the broadcast. `board:updated`
-    // is re-emitted (not a session event) so this does not recurse.
     if (
       event === "session:started" || event === "session:completed" ||
       event === "session:fallback-required" || event === "approval:resolved"
@@ -860,30 +278,19 @@ export async function startGateway(
     }
   };
 
-  // Discover dynamic engine models in the background. Fire-and-forget: the
-  // registry serves known/synthesized fallbacks until the snapshots land, then
-  // the web UI invalidates its model registry cache via engines:updated.
   const refreshDynamicModels = (cfg: JinnConfig): void => {
     void Promise.all([refreshPiModels(cfg), refreshGrokModels(cfg), refreshHermesModels(cfg)])
       .finally(() => emit("engines:updated", {}));
   };
   refreshDynamicModels(currentConfig);
+
   let orchestrationRuntime: OrchestrationRuntime | undefined;
   const orchestrationRefreshState: OrchestrationRuntimeRefreshState = { pending: false };
+  let apiContext: ApiContext;
 
-  // Synchronously re-scan org/ into the in-memory registry and drop warm PTYs so the
-  // next turn respawns with a fresh system prompt. Shared by the API employee-update
-  // handler (immediate refresh, no watcher lag) and the chokidar onOrgChange watcher.
-  const reloadOrg = () => {
+  const reloadOrg = (): void => {
     employeeRegistry = scanOrg();
     logger.info(`Org directory changed, reloaded ${employeeRegistry.size} employee(s)`);
-    // Org/persona changed — recycle only IDLE warm PTYs so the next turn respawns
-    // with the fresh system prompt. Must NOT killAll(): a turn in flight may itself
-    // have written the org file that triggered this reload (e.g. the onboarding
-    // genie hatching an employee, or a COO turn editing a persona). Interrupting
-    // that turn's PTY would settle it as "Interrupted", drop the web response, and
-    // hang the session. Active turns finish on their current persona; the new
-    // persona takes effect on the session's NEXT turn via cold respawn.
     interactiveClaudeEngine.killIdle();
     codexInteractiveEngine.killIdle();
     antigravityEngine.killIdle();
@@ -900,11 +307,6 @@ export async function startGateway(
     emit("org:changed", {});
   };
 
-  // Post-settle background activity (in-memory only): the interactive engine
-  // reports when the CLI still has upstream API requests in flight (background
-  // subagents/tasks) AFTER the Stop hook settled the turn — so the UI can show
-  // "still working" instead of lying "idle". Mirrored into serializeSession via
-  // apiContext.backgroundActivity and pushed live as `session:background`.
   const backgroundActivity = new Map<string, { activeStreams: number; lastActivityAt: number }>();
   interactiveClaudeEngine.onBackgroundActivity((sessionId, info) => {
     if (info) backgroundActivity.set(sessionId, info);
@@ -917,10 +319,6 @@ export async function startGateway(
     });
   });
 
-  // Unsolicited-Stop consumer: a Stop hook nobody claims within the registry's
-  // grace delay means a PTY-native turn (typed straight into the CLI/xterm
-  // view — no run() in flight) or a Stop past the late-recovery window. Persist
-  // that turn into the messages DB from the transcript tail so chat mode sees it.
   hookRegistry.setUnclaimedHookHandler((jinnSessionId, payload) => {
     try {
       syncExternalTurn(jinnSessionId, emit, payload);
@@ -929,8 +327,7 @@ export async function startGateway(
     }
   });
 
-  // API context
-  const apiContext: ApiContext = {
+  apiContext = {
     config: currentConfig,
     sessionManager,
     startTime,
@@ -956,16 +353,13 @@ export async function startGateway(
     apiContext.orchestration = { runtime: orchestrationRuntime };
   }
 
-  // Re-read config.yaml into memory. Used by both the file-watcher (debounced)
-  // and by API handlers that write config.yaml and need getConfig() to reflect
-  // the change immediately (e.g. onboarding / PUT /api/config).
   const reloadConfig = (): void => {
     try {
       currentConfig = loadConfig();
       apiContext.config = currentConfig;
       sessionManager.setConfig(currentConfig);
-      invalidateModelRegistry(); // rebuild the model/capability registry from the new config
-      refreshDynamicModels(currentConfig); // re-discover dynamic models (engine bins/auth may have changed)
+      invalidateModelRegistry();
+      refreshDynamicModels(currentConfig);
       orchestrationRuntime = swapOrchestrationRuntime(
         apiContext,
         currentConfig,
@@ -981,6 +375,8 @@ export async function startGateway(
       logger.error(`Failed to reload config: ${err instanceof Error ? err.message : err}`);
     }
   };
+  apiContext.reloadConfig = reloadConfig;
+
   const replayDeferredOrchestrationRuntimeRefresh = (): void => {
     if (!orchestrationRefreshState.pending) return;
     orchestrationRuntime = refreshDeferredOrchestrationRuntimeIfDrained(
@@ -992,203 +388,48 @@ export async function startGateway(
     );
     bindOrchestrationRuntimeHandlers(orchestrationRuntime, apiContext);
   };
-  apiContext.reloadConfig = reloadConfig;
 
-  // Replay any pending web queue items (e.g. gateway restart mid-run)
   resumePendingWebQueueItems(apiContext);
-
-  reconcileOrphanedTickets({
-    engines,
-    orgDir: ORG_DIR,
-    getSession,
-    listSessions,
-    emit,
-    cause: "startup",
-  });
+  reconcileOrphanedTickets({ engines, orgDir: ORG_DIR, getSession, listSessions, emit, cause: "startup" });
   logBoardSummary(ORG_DIR, (msg) => logger.info(msg));
 
-  // Unstick sessions whose completion event was lost (status:"running" with no
-  // live turn). 15s sweep; logs one line per fix.
   const stopStatusReconciler = startStatusReconciler({
     engines,
     emit,
     notificationSink,
     onAfterSweep: () => {
-      reconcileOrphanedTickets({
-        engines,
-        orgDir: ORG_DIR,
-        getSession,
-        listSessions,
-        emit,
-      });
+      reconcileOrphanedTickets({ engines, orgDir: ORG_DIR, getSession, listSessions, emit });
       replayDeferredOrchestrationRuntimeRefresh();
     },
   });
   const stopBoardWorker = startBoardWorker({ context: apiContext, orgDir: ORG_DIR });
 
-  // Resolve web UI directory — bundled into dist/web/ by postbuild script
-  // At runtime __dirname is dist/src/gateway/, so ../../web resolves to dist/web/
   const webDir = path.resolve(__dirname, "..", "..", "web");
-
-  // Create HTTP server
   const authRequiredNow = (): boolean => shouldRequireGatewayAuth(currentConfig);
-
-  const server = http.createServer(async (req, res) => {
-    const url = req.url || "/";
-    const corsAllowed = setCorsHeaders(req, res);
-
-    if (url.startsWith("/api/") && !corsAllowed) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Origin not allowed" }));
-      return;
-    }
-
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    const pathname = url.split("?")[0];
-    if (authRequiredNow() && authRequiredForRequest(req.method, pathname)) {
-      const auth = authenticateGatewayRequest(req, gatewayAuthToken, JINN_HOME);
-      if (!auth.ok) {
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: auth.reason || "Unauthorized" }));
-        return;
-      }
-    }
-
-    // API routes
-    if (url.startsWith("/api/")) {
-      if (pathname.startsWith("/api/orchestration/")) {
-        const handled = await handleOrchestrationRoutes(req.method || "GET", pathname, res, apiContext, req);
-        if (handled) return;
-      }
-      handleApiRequest(req, res, apiContext);
-      return;
-    }
-
-    // Static files for web UI
-    if (!serveStatic(req, res, webDir)) {
-      if (url === "/" || url === "/index.html") {
-        res.writeHead(503, { "Content-Type": "text/html" });
-        res.end("<html><body><h1>Web UI not built</h1><p>Run <code>pnpm build</code> from the project root to build the web UI.</p></body></html>");
-      } else {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Not found" }));
-      }
-    }
+  const transports = createGatewayTransports({
+    apiContext,
+    authRequiredNow,
+    gatewayAuthToken,
+    gatewayInfoToken: gatewayInfo.token ?? "",
+    gatewayName: `${gatewayName} (boot ${bootId})`,
+    handleApiRequest: (req, res) => handleApiRequest(req, res, apiContext),
+    handleOrchestrationRoutes,
+    host,
+    jinnHome: JINN_HOME,
+    port,
+    ptyViewEngines,
+    getSession,
+    webDir,
+    wsClients,
   });
 
-  // WebSocket server
-  const wss = new WebSocketServer({ noServer: true });
-  // Dedicated WS server for per-session PTY streams (/ws/pty/:sessionId) — kept
-  // separate from the global broadcast `wss` so its connections aren't added to
-  // the broadcast client set.
-  const ptyWss = new WebSocketServer({ noServer: true });
-
-  // Protocol-level ping/pong sweep across both WS servers. Terminates half-open
-  // (dead but readyState===OPEN) sockets; terminating a PTY socket fires its
-  // close handler -> onDisconnect -> viewerCount decrement, fixing the leak.
-  const stopWsHeartbeat = startWsHeartbeat([wss, ptyWss], {
-    onSweep: (r) => { if (r.terminated > 0) logger.info(`WS heartbeat reaped ${r.terminated} dead socket(s)`); },
-  });
-
-  wss.on("connection", (ws) => {
-    wsClients.add(ws);
-    trackHeartbeat(ws);
-    logger.info(`WebSocket client connected (${wsClients.size} total)`);
-
-    // App-level ping echo: the browser client cannot observe protocol-level
-    // pongs from JS, so it sends an app `ping` and watches for this `pong` to
-    // confirm server liveness during idle.
-    ws.on("message", (raw) => {
-      try {
-        const m = JSON.parse(raw.toString());
-        if (m?.event === "ping" && ws.readyState === 1) {
-          ws.send(JSON.stringify({ event: "pong", payload: {} }));
-        }
-      } catch {
-        // ignore non-JSON / unknown frames
-      }
-    });
-
-    ws.on("close", () => {
-      wsClients.delete(ws);
-      logger.info(`WebSocket client disconnected (${wsClients.size} total)`);
-    });
-
-    ws.on("error", (err) => {
-      logger.error(`WebSocket error: ${err.message}`);
-      wsClients.delete(ws);
-    });
-  });
-
-  server.on("upgrade", (req, socket, head) => {
-    const reqUrl = req.url || "";
-    const pathname = reqUrl.split("?")[0];
-    if (authRequiredNow() && authRequiredForRequest("GET", pathname)) {
-      const auth = authenticateGatewayRequest(req, gatewayAuthToken, JINN_HOME);
-      if (!auth.ok) {
-        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-    }
-    if (reqUrl === "/ws") {
-      if (!isAuthenticatedRequest(req, gatewayInfo.token)) {
-        socket.destroy();
-        return;
-      }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
-      return;
-    }
-    // Dedicated per-session PTY channel for the live xterm CLI view.
-    const ptyMatch = reqUrl.split("?")[0].match(/^\/ws\/pty\/([^/]+)$/);
-    if (ptyMatch) {
-      let sessionId: string;
-      try {
-        sessionId = decodeURIComponent(ptyMatch[1]);
-      } catch {
-        socket.destroy();
-        return;
-      }
-      const ptySession = getSession(sessionId);
-      // Route to the session's OWN engine. Do NOT fall back to claude: codex has no
-      // PTY view, and attaching the claude TUI to a codex session showed the wrong
-      // engine. No view engine for this engine → refuse the upgrade (FE hides the
-      // CLI toggle for codex so this only catches stragglers).
-      const ptyEngine = ptySession ? ptyViewEngines[ptySession.engine] : undefined;
-      if (!ptyEngine) { socket.destroy(); return; }
-      ptyWss.handleUpgrade(req, socket, head, (ws) => {
-        trackHeartbeat(ws);
-        try {
-          attachPtyWebSocket(ws, sessionId, ptyEngine);
-        } catch (err) {
-          logger.warn(`PTY websocket attach failed for ${sessionId}: ${err instanceof Error ? err.message : err}`);
-          ws.close();
-        }
-      });
-      return;
-    }
-    socket.destroy();
-  });
-
-
-  // Sync skill symlinks to .claude/skills/ and .agents/skills/
   syncSkillSymlinks();
-
-  // Initialize STT model symlinks
   try {
     initStt();
   } catch (err) {
     logger.warn(`STT init skipped: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Start file watchers
   startWatchers({
     onConfigReload: reloadConfig,
     onCronReload: () => {
@@ -1204,45 +445,9 @@ export async function startGateway(
     },
   });
 
-  // Start listening (port/host resolved earlier at boot). During `jinn restart`
-  // the replacement daemon can race the old process' graceful shutdown; retry
-  // EADDRINUSE briefly instead of exiting and leaving the gateway stopped.
-  await new Promise<void>((resolve, reject) => {
-    const startedAt = Date.now();
-    const retryForMs = 15_000;
-    const retryDelayMs = 250;
-    const listen = () => {
-      const onError = (err: NodeJS.ErrnoException) => {
-        server.off("listening", onListening);
-        if (err.code === "EADDRINUSE" && Date.now() - startedAt < retryForMs) {
-          setTimeout(listen, retryDelayMs).unref?.();
-          return;
-        }
-        if (err.code === "EADDRINUSE") {
-          const msg = `Port ${port} is already in use.`;
-          logger.error(msg);
-          console.error(`\nError: ${msg}`);
-          console.error(`\nTry: jinn start -p ${port + 1}`);
-          console.error(`Or update the port in config.yaml\n`);
-          process.exit(1);
-        }
-        reject(err);
-      };
-      const onListening = () => {
-        server.off("error", onError);
-        logger.info(`${gatewayName} gateway listening on http://${host}:${port} (boot ${bootId})`);
-        resolve();
-      };
-      server.once("error", onError);
-      server.once("listening", onListening);
-      server.listen(port, host);
-    };
-    listen();
-  });
+  await transports.startListening();
 
-  // Notify connected WebSocket clients about interrupted sessions available for resume
   if (resumable.length > 0) {
-    // Small delay to let WebSocket clients connect after server starts
     setTimeout(() => {
       emit("sessions:interrupted", {
         count: resumable.length,
@@ -1257,13 +462,9 @@ export async function startGateway(
     }, 1000);
   }
 
-  // Prevent macOS from sleeping while the gateway is running
   let caffeinate: ChildProcess | null = null;
   if (process.platform === "darwin") {
-    caffeinate = spawn("caffeinate", ["-s"], {
-      stdio: "ignore",
-      detached: false,
-    });
+    caffeinate = spawn("caffeinate", ["-s"], { stdio: "ignore", detached: false });
     caffeinate.unref();
     caffeinate.on("error", (err) => {
       logger.warn(`caffeinate failed to start: ${err.message}`);
@@ -1272,110 +473,42 @@ export async function startGateway(
     logger.info("caffeinate started — macOS sleep prevention active");
   }
 
-  // Return cleanup function
-  return async () => {
-    logger.info("Gateway cleanup starting...");
-
-    // Stop the status reconciler sweep before we start marking sessions
-    // interrupted below — a mid-shutdown sweep must not race the teardown.
-    stopStatusReconciler();
-    stopBoardWorker();
-
-    // Stop caffeinate
-    if (caffeinate && caffeinate.exitCode === null) {
-      caffeinate.kill();
-      logger.info("caffeinate stopped");
-    }
-
-    // Mark all running sessions as "interrupted" before killing engine processes.
-    // This preserves their engine_session_id so they can be resumed on next startup.
-    const runningSessions = listSessions({ status: "running" });
-    for (const session of runningSessions) {
-      updateSession(session.id, {
+  return createGatewayCleanup({
+    caffeinate,
+    claudeLifecycle,
+    connectors,
+    gatewayInfoFile: GATEWAY_INFO_FILE,
+    getRunningSessions: () => listSessions({ status: "running" }),
+    hookRegistry,
+    interruptSession: (sessionId) => {
+      updateSession(sessionId, {
         status: "interrupted",
         lastActivity: new Date().toISOString(),
         lastError: "Interrupted: gateway shutting down gracefully",
       });
-      logger.info(`Marked session ${session.id} as interrupted for resume`);
-    }
-
-    // Terminate live engine subprocesses after marking sessions.
-    interactiveClaudeEngine.killAll();
-    codexEngine.killAll();
-    codexInteractiveEngine.killAll();
-    antigravityEngine.killAll();
-    grokEngine.killAll();
-    grokInteractiveEngine.killAll();
-    hermesEngine.killAll();
-    hermesInteractiveEngine.killAll();
-    piEngine.killAll();
-    kiroEngine.killAll();
-
-    await orchestrationRuntime?.prepareForShutdown("Interrupted: gateway shutting down gracefully");
-    orchestrationRuntime?.close();
-
-    // Dispose the PTY lifecycle manager.
-    try {
-      claudeLifecycle.dispose();
-    } catch (err) {
-      logger.warn(`Failed to dispose PTY lifecycle manager: ${err instanceof Error ? err.message : err}`);
-    }
-
-    // Dispose the hook registry so its periodic sweep timer is cleared. The
-    // timer is .unref()'d so the process exits anyway in production, but
-    // in-process shutdown (tests, future hot-reload) requires explicit cleanup.
-    try {
-      hookRegistry.dispose();
-    } catch (err) {
-      logger.warn(`Failed to dispose hook registry: ${err instanceof Error ? err.message : err}`);
-    }
-
-    // Remove the gateway connection info file.
-    try {
-      fs.rmSync(GATEWAY_INFO_FILE, { force: true });
-    } catch (err) {
-      logger.warn(`Failed to remove ${GATEWAY_INFO_FILE}: ${err instanceof Error ? err.message : err}`);
-    }
-
-    // Stop cron scheduler
-    stopScheduler();
-
-    // Stop connectors
-    for (const connector of connectors) {
-      try {
-        await connector.stop();
-      } catch (err) {
-        logger.error(`Failed to stop ${connector.name} connector: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-
-    // Stop watchers
-    await stopWatchers();
-
-    // Stop the WS heartbeat sweep before tearing down the WS servers.
-    stopWsHeartbeat();
-
-    // Close WebSocket connections. Use terminate() during shutdown so lingering
-    // PTY/SSE clients cannot hold server.close() open until the force-exit timer.
-    for (const client of wsClients) {
-      client.terminate();
-    }
-    wsClients.clear();
-    for (const client of ptyWss.clients) {
-      client.terminate();
-    }
-
-    // Close WebSocket servers
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => ptyWss.close(() => resolve()));
-
-    // Close HTTP server
-    await new Promise<void>((resolve, reject) => {
-      server.closeAllConnections?.();
-      server.closeIdleConnections?.();
-      server.close((err) => (err ? reject(err) : resolve()));
-    });
-
-    logger.info("Gateway shutdown complete");
-  };
+    },
+    killEngines: () => {
+      interactiveClaudeEngine.killAll();
+      codexEngine.killAll();
+      codexInteractiveEngine.killAll();
+      antigravityEngine.killAll();
+      grokEngine.killAll();
+      grokInteractiveEngine.killAll();
+      hermesEngine.killAll();
+      hermesInteractiveEngine.killAll();
+      piEngine.killAll();
+      kiroEngine.killAll();
+    },
+    orchestrationRuntime,
+    ptyWss: transports.ptyWss,
+    server: transports.server,
+    stopBoardWorker,
+    stopScheduler,
+    stopStatusReconciler,
+    stopWatchers,
+    stopWsHeartbeat: transports.stopWsHeartbeat,
+    uploadCleanupTimer,
+    wsClients: transports.wsClients,
+    wss: transports.wss,
+  });
 }
