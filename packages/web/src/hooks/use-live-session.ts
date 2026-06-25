@@ -383,47 +383,14 @@ export function useLiveSession(
 
         if (p.result) {
           const resultStr = String(p.result)
-          const resultKey = resultStr.trim()
           setMessages((prev) => {
             const cleaned = [...prev]
             const turnStart = intermediateStart >= 0 ? Math.min(intermediateStart, cleaned.length) : cleaned.length
-            // Reconcile the canonical result with any text already on screen, by
-            // identity — Grok streams its answer text live, and a transcript
-            // `tool_use` that lands AFTER the streamed answer freezes that text into
-            // a permanent assistant bubble (via the tool_use handler above). Without
-            // this dedupe the same answer would render twice. Only scan the current
-            // turn's live/intermediate range so older identical answers survive.
-            if (resultKey) {
-              for (let i = cleaned.length - 1; i >= turnStart; i--) {
-                const m = cleaned[i]
-                if (
-                  m.role === 'assistant' &&
-                  !m.toolCall &&
-                  !(m.media && m.media.length > 0) &&
-                  !(m.blocks && m.blocks.length > 0) &&
-                  m.content.trim() === resultKey
-                ) {
-                  cleaned.splice(i, 1)
-                  break
-                }
-              }
-            }
-            const last = cleaned[cleaned.length - 1]
-            // Pop a trailing optimistic streaming-text bubble so the canonical result
-            // replaces it, but NEVER pop an attachment (media) message — it's already
-            // persisted and would otherwise vanish until reload.
-            if (
-              cleaned.length - 1 >= turnStart &&
-              last &&
-              last.role === 'assistant' &&
-              !last.toolCall &&
-              !(last.media && last.media.length > 0) &&
-              !(last.blocks && last.blocks.length > 0)
-            ) {
-              cleaned.pop()
-            }
+            const kept = cleaned.slice(0, turnStart)
+            const preservedMedia = cleaned.slice(turnStart).filter((m) => m.media && m.media.length > 0)
             return [
-              ...cleaned,
+              ...kept,
+              ...preservedMedia,
               {
                 id: crypto.randomUUID(),
                 role: 'assistant' as const,
@@ -493,6 +460,9 @@ export function useLiveSession(
       onMetaRef.current?.(meta)
 
       const history = session.messages || session.history || []
+      const firstPartialIndex = Array.isArray(history)
+        ? history.findIndex((m: Record<string, unknown>) => m.partial === true)
+        : -1
       const backendMessages: Message[] = Array.isArray(history)
         ? history.map((m: Record<string, unknown>) => {
           const blocks = Array.isArray(m.blocks) ? m.blocks.filter(isChatBlock) : []
@@ -552,7 +522,7 @@ export function useLiveSession(
         // The server now persists mid-turn partial blocks, so the backend snapshot
         // already carries in-progress output — no localStorage replay needed. This is
         // what makes a mid-turn refresh restore the streamed blocks on any device.
-        intermediateStartRef.current = backendMessages.length
+        intermediateStartRef.current = firstPartialIndex >= 0 ? firstPartialIndex : backendMessages.length
         setMessages((current) => {
           // If backend has FEWER messages than local, the backend snapshot is stale —
           // local already contains newer live blocks the server hasn't flushed yet (or

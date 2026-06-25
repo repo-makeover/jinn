@@ -158,12 +158,39 @@ describe("useLiveSession (read-only)", () => {
       emit("session:completed", { sessionId: "s1", result: "The answer is 42." })
       await Promise.resolve()
     })
-    // Exactly ONE copy of the answer survives (no duplicate), plus the tool card.
+    // Exactly ONE copy of the answer survives (no duplicate), and the transient
+    // tool row is collapsed away with the rest of the active turn.
     expect(result.current.messages.filter((m) => m.content === "The answer is 42." && !m.toolCall)).toHaveLength(1)
-    expect(result.current.messages.filter((m) => m.toolCall === "read")).toHaveLength(1)
+    expect(result.current.messages.some((m) => m.toolCall === "read")).toBe(false)
   })
 
-  it("keeps visible progress around a tool call instead of collapsing to only the final answer", async () => {
+  it("collapses partial rows loaded from a running session when completion arrives", async () => {
+    getSession.mockResolvedValue({
+      status: "running",
+      messages: [
+        { id: "u1", role: "user", content: "do it", timestamp: 1 },
+        { id: "p1", role: "assistant", content: "PROGRESS-FIRST", timestamp: 2, partial: true },
+        { id: "p2", role: "assistant", content: "Using Bash", timestamp: 3, partial: true, toolCall: "Bash" },
+      ],
+    })
+    const { subscribe, emit } = makeBus()
+    const { result } = renderHook(() =>
+      useLiveSession("s1", { subscribe, readOnly: true }),
+    )
+    await act(async () => { await Promise.resolve() })
+
+    expect(result.current.messages.map((m) => m.content)).toEqual(["do it", "PROGRESS-FIRST", "Using Bash"])
+
+    await act(async () => {
+      emit("session:completed", { sessionId: "s1", result: "PROGRESS-FINAL" })
+      await Promise.resolve()
+    })
+
+    expect(result.current.messages.map((m) => m.content)).toEqual(["do it", "PROGRESS-FINAL"])
+    expect(result.current.messages.some((m) => m.toolCall)).toBe(false)
+  })
+
+  it("collapses visible progress around a tool call to only the final answer on completion", async () => {
     getSession.mockResolvedValue({ status: "running", messages: [] })
     const { subscribe, emit } = makeBus()
     const { result } = renderHook(() =>
@@ -183,12 +210,8 @@ describe("useLiveSession (read-only)", () => {
       await Promise.resolve()
     })
 
-    expect(result.current.messages.map((m) => m.content)).toEqual([
-      "PROGRESS-FIRST",
-      "Used Bash",
-      "PROGRESS-FINAL",
-    ])
-    expect(result.current.messages[1]?.toolCall).toBe("Bash")
+    expect(result.current.messages.map((m) => m.content)).toEqual(["PROGRESS-FINAL"])
+    expect(result.current.messages.some((m) => m.toolCall)).toBe(false)
   })
 
   it("shows transient status deltas and clears them when real output arrives", async () => {
@@ -326,7 +349,7 @@ describe("useLiveSession (read-only)", () => {
     expect(result.current.messages[1]?.blocks?.[0]?.id).toBe("plan")
   })
 
-  it("keeps live task-list blocks visible when a turn completes with text", async () => {
+  it("drops live task-list blocks when a turn completes with text", async () => {
     getSession.mockResolvedValue({ status: "running", messages: [] })
     const { subscribe, emit } = makeBus()
     const { result } = renderHook(() =>
@@ -357,8 +380,8 @@ describe("useLiveSession (read-only)", () => {
       await Promise.resolve()
     })
 
-    expect(result.current.messages.some((m) => m.blocks?.some((block) => block.id === "plan"))).toBe(true)
-    expect(result.current.messages.at(-1)?.content).toBe("Done.")
+    expect(result.current.messages.map((m) => m.content)).toEqual(["Done."])
+    expect(result.current.messages.some((m) => m.blocks?.some((block) => block.id === "plan"))).toBe(false)
   })
 
   it("marks the matching unfinished tool row done when a block arrives before tool_result", async () => {
