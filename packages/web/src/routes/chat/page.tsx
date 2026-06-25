@@ -694,15 +694,15 @@ function ChatPage() {
 
         <div className="chat-pills-layout relative min-w-0 flex-1 flex-col overflow-hidden bg-background flex">
           {/* Soft top scrim (gradient, not a border) — content scrolls under it.
-              Keep it light and short so it protects the floating header without
-              clouding the first visible message row. Theme-aware via var(--bg). */}
+              Hold a real cloud behind the floating header, then fade before the
+              message list's top padding ends. Theme-aware via var(--bg). */}
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 z-[5] h-[72px]",
+              "pointer-events-none absolute inset-x-0 top-0 z-[5] h-[88px]",
               onMobileList && "hidden lg:block",
             )}
-            style={{ background: 'linear-gradient(to bottom, var(--bg) 0, color-mix(in srgb, var(--bg) 82%, transparent) 32px, color-mix(in srgb, var(--bg) 32%, transparent) 52px, transparent 100%)' }}
+            style={{ background: 'linear-gradient(to bottom, var(--bg) 0, var(--bg) 52px, color-mix(in srgb, var(--bg) 68%, transparent) 68px, transparent 100%)' }}
           />
 
           {/* Frosted corner pills replace the solid header. Hidden over the mobile

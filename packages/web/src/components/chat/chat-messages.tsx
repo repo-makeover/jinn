@@ -885,7 +885,7 @@ export function ChatMessages({ messages, loading, streamingText, onRetry }: Chat
 
   return (
     <div ref={containerRef} style={{ overflowAnchor: 'auto' }} className="chat-messages-scroll relative flex-1 overflow-y-auto overflow-x-hidden bg-[var(--bg)] min-h-0">
-      <div className="mx-auto w-full max-w-[var(--chat-measure)] py-[var(--space-3)] pb-[var(--space-6)]">
+      <div className="mx-auto w-full max-w-[var(--chat-measure)] pt-[72px] pb-[var(--space-6)] lg:pt-[88px]">
       {groupedMessages.map((item) => {
         if (item.kind === 'tool-group') {
           const firstMsg = item.msgs[0]
