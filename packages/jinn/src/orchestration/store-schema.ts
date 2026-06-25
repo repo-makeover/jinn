@@ -133,7 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_orch_holds_state_expiry ON orchestration_holds (s
 CREATE TABLE IF NOT EXISTS artifact_records (
   artifact_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
-  coordinator_id TEXT,
+  coordinator_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   lane TEXT,
   path TEXT NOT NULL,

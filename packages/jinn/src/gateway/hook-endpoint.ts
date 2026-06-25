@@ -55,6 +55,23 @@ export function handleHookPost(
   if (!body.jinnSessionId || !body.hook?.hook_event_name) {
     return { status: 400, body: "bad request" };
   }
+  const now = ctx.now?.() ?? Date.now();
+  if (body.timestamp !== undefined) {
+    if (typeof body.timestamp !== "number" || !Number.isFinite(body.timestamp) || Math.abs(now - body.timestamp) > HOOK_REPLAY_WINDOW_MS) {
+      return { status: 400, body: "stale hook" };
+    }
+  }
+  if (body.nonce !== undefined) {
+    if (typeof body.nonce !== "string" || !body.nonce.trim()) {
+      return { status: 400, body: "missing nonce" };
+    }
+    pruneSeenNonces(now);
+    const nonceKey = `${body.jinnSessionId}:${body.nonce}`;
+    if (seenHookNonces.has(nonceKey)) {
+      return { status: 409, body: "hook replay" };
+    }
+    seenHookNonces.set(nonceKey, now + HOOK_REPLAY_WINDOW_MS);
+  }
   if (body.hook.hook_event_name === "PreToolUse" && body.hook.tool_name === "Bash") {
     const input = body.hook.tool_input;
     const command = input && typeof input === "object" && "command" in input

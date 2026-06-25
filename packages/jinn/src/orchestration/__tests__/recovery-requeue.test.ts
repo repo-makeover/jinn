@@ -94,6 +94,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-recovered",
+      coordinatorId: "coord-recovered",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -142,6 +143,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-mid",
+      coordinatorId: "coord-mid",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -175,6 +177,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-with-holds",
+      coordinatorId: "coord-with-holds",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -209,6 +212,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-exp-holds",
+      coordinatorId: "coord-exp-holds",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -226,6 +230,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath: path.join(tmpDir, "nonexistent.json"),
       taskId: "task-x",
+      coordinatorId: "coord-x",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -244,6 +249,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath: badManifestPath,
       taskId: "task-x",
+      coordinatorId: "coord-x",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -263,6 +269,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-unknown",
+      coordinatorId: "coord-found",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -290,6 +297,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-x",
+      coordinatorId: "coord-x",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -317,6 +325,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-outside",
+      coordinatorId: "coord-outside",
       managerName: "operator",
       store,
       recoveryDir,
@@ -410,6 +419,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-bad-hold",
+      coordinatorId: "coord-bad-hold",
       managerName: "operator",
       store,
       now: () => fixedNow,
@@ -448,6 +458,7 @@ describe("requeueRecoveredContinuation", () => {
     const result = requeueRecoveredContinuation({
       manifestPath,
       taskId: "task-done",
+      coordinatorId: "coord-done",
       managerName: "operator",
       store,
       now: () => fixedNow,

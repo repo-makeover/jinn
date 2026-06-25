@@ -30,7 +30,7 @@ export interface HoldRecord {
 export interface ArtifactRecord {
   artifactId: string;
   taskId: string;
-  coordinatorId: string | null;
+  coordinatorId: string;
   kind: ArtifactKind;
   lane: string | null;
   path: string;
@@ -189,6 +189,7 @@ export function cancelHoldInDb(db: Database.Database, holdId: string, updatedAt:
 }
 
 export function addArtifactRecordInDb(db: Database.Database, record: ArtifactRecord): void {
+  if (!record.coordinatorId.trim()) throw new Error("artifact record coordinatorId is required");
   db.prepare(`
     INSERT INTO artifact_records (artifact_id, task_id, coordinator_id, kind, lane, path, bytes, created_at, note)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -296,6 +297,7 @@ function rowToHold(row: HoldRow): HoldRecord {
 }
 
 function rowToArtifact(row: ArtifactRow): ArtifactRecord {
+  if (!row.coordinator_id) throw new Error(`artifact record ${row.artifact_id} is missing coordinator_id`);
   return {
     artifactId: row.artifact_id,
     taskId: row.task_id,

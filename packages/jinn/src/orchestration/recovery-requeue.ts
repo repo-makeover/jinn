@@ -43,7 +43,7 @@ interface HoldRow {
 export function requeueRecoveredContinuation(opts: {
   manifestPath: string;
   taskId: string;
-  coordinatorId?: string;
+  coordinatorId: string;
   managerName: string;
   store: OrchestrationStore;
   recoveryDir?: string;
@@ -61,13 +61,8 @@ export function requeueRecoveredContinuation(opts: {
     if (!hasTable(db, "live_run_continuations")) {
       return { ok: false, reason: "invalid_manifest", message: "quarantined DB has no live_run_continuations table" };
     }
-    const rows = opts.coordinatorId
-      ? db.prepare("SELECT * FROM live_run_continuations WHERE task_id = ? AND coordinator_id = ?").all(opts.taskId, opts.coordinatorId) as LiveRunContinuationRow[]
-      : db.prepare("SELECT * FROM live_run_continuations WHERE task_id = ?").all(opts.taskId) as LiveRunContinuationRow[];
+    const rows = db.prepare("SELECT * FROM live_run_continuations WHERE task_id = ? AND coordinator_id = ?").all(opts.taskId, opts.coordinatorId) as LiveRunContinuationRow[];
     if (rows.length === 0) return { ok: false, reason: "continuation_not_found", message: `no recovered continuation for ${opts.taskId}` };
-    if (rows.length > 1) {
-      return { ok: false, reason: "invalid_record", message: `multiple recovered continuations for ${opts.taskId}; specify coordinatorId` };
-    }
     const nowIso = (opts.now?.() ?? new Date()).toISOString();
     const continuation = rowToContinuation(rows[0], nowIso);
     const holds = stageRecoveredHolds(db, continuation.taskId, continuation.coordinatorId, nowIso);

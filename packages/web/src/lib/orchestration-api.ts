@@ -299,8 +299,8 @@ export async function viewArtifact(taskId: string, coordinatorId: string, kind: 
   )
 }
 
-export async function requeueRecoveredTask(manifestPath: string, taskId: string, managerName: string) {
-  return post("/api/orchestration/recovery/requeue", { manifestPath, taskId, managerName })
+export async function requeueRecoveredTask(manifestPath: string, taskId: string, coordinatorId: string, managerName: string) {
+  return post("/api/orchestration/recovery/requeue", { manifestPath, taskId, coordinatorId, managerName })
 }
 
 export async function pauseOrchestrationQueue(reason?: string) {

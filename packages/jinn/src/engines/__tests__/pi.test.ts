@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PassThrough } from "node:stream";
 import type { EngineResult } from "../../shared/types.js";
+import { __resetPiThrottleForTests } from "../../shared/pi-throttle.js";
 
 interface FakeProc {
   stdout: PassThrough;
@@ -96,6 +97,7 @@ async function startRun(): Promise<{ engine: PiEngine; promise: Promise<EngineRe
 
 beforeEach(() => {
   spawnCalls.length = 0;
+  __resetPiThrottleForTests();
 });
 
 describe("PiEngine lifecycle", () => {

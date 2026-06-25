@@ -246,7 +246,7 @@ async function _sendDiscordNotification(message: string, sink?: SessionNotificat
     headers: internalGatewayHeaders(gateway),
     body: JSON.stringify({ channel, text: message }),
   });
-  if (!response.ok) throw new Error(`connector notification failed (${response.status})`);
+  await assertFetchOk(response, "connector notification");
 }
 
 async function _sendRaw(
@@ -255,6 +255,10 @@ async function _sendRaw(
   displayMessage?: string,
   sink?: SessionNotificationSink,
 ): Promise<void> {
+  if (sink) {
+    await sink.sendSessionNotification(parentSessionId, message, displayMessage);
+    return;
+  }
   const gateway = internalGatewayConnection();
 
   const response = await fetch(`${gateway.baseUrl}/api/sessions/${parentSessionId}/message`, {
@@ -266,11 +270,12 @@ async function _sendRaw(
       ...(displayMessage ? { displayMessage } : {}),
     }),
   });
-  if (!response.ok) throw new Error(`parent notification failed (${response.status})`);
+  await assertFetchOk(response, "parent notification");
 }
 
 function internalGatewayConnection(): { baseUrl: string; token?: string } {
   const info = readGatewayInfo(GATEWAY_INFO_FILE);
+  const token = info?.token ?? (info as { apiToken?: string } | null)?.apiToken;
   let fallbackHost: string | undefined;
   let fallbackPort = 7777;
   try {
@@ -283,13 +288,10 @@ function internalGatewayConnection(): { baseUrl: string; token?: string } {
   const port = info?.port ?? fallbackPort;
   return {
     baseUrl: gatewayBaseUrl({ port, host: info?.host }, fallbackHost),
-    token: info?.token,
+    token,
   };
 }
 
 function internalGatewayHeaders(gateway: { token?: string }): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    ...(gateway.token ? { authorization: `Bearer ${gateway.token}` } : {}),
-  };
+  return jsonApiHeaders(gateway.token);
 }

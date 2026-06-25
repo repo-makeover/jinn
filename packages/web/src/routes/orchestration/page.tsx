@@ -246,9 +246,9 @@ export default function OrchestrationPage() {
                   <RecoveryPanel
                     notices={data.status.recoveryNotices ?? []}
                     actionKey={actionKey}
-                    onRequeue={(manifestPath, taskId, managerName) => runAction(
-                      `recovery:${taskId}`,
-                      () => requeueRecoveredTask(manifestPath, taskId, managerName),
+                    onRequeue={(manifestPath, taskId, coordinatorId, managerName) => runAction(
+                      `recovery:${taskId}:${coordinatorId}`,
+                      () => requeueRecoveredTask(manifestPath, taskId, coordinatorId, managerName),
                     )}
                   />
                 </Section>
@@ -576,7 +576,7 @@ function DualLaneList({ runs, actionKey, onSelect, onApply, onArtifact }: {
 function RecoveryPanel({ notices, actionKey, onRequeue }: {
   notices: NonNullable<OrchestrationDashboardData["status"]["recoveryNotices"]>
   actionKey: string | null
-  onRequeue: (manifestPath: string, taskId: string, managerName: string) => void
+  onRequeue: (manifestPath: string, taskId: string, coordinatorId: string, managerName: string) => void
 }) {
   if (notices.length === 0) return <EmptyState text="No recovery notices." />
   return (
@@ -592,9 +592,11 @@ function RecoveryPanel({ notices, actionKey, onRequeue }: {
             onClick={() => {
               const taskId = window.prompt("Recovered task id")?.trim()
               if (!taskId) return
+              const coordinatorId = window.prompt("Recovered coordinator id")?.trim()
+              if (!coordinatorId) return
               const managerName = window.prompt("Manager name")?.trim()
               if (!managerName) return
-              onRequeue(notice.manifestPath, taskId, managerName)
+              onRequeue(notice.manifestPath, taskId, coordinatorId, managerName)
             }}
             className="focus-ring h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--separator)] disabled:opacity-45 text-[length:var(--text-footnote)] shrink-0"
           >

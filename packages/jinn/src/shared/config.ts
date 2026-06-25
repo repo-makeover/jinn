@@ -35,6 +35,11 @@ function normalizeWindow(
   return { start, end };
 }
 
+function clampMinutes(value: unknown, fallback: number): number {
+  const minutes = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.min(60, Math.floor(minutes)));
+}
+
 export function normalizeClaudeEngineConfig(raw: ClaudeEngineConfig): Required<Pick<ClaudeEngineConfig, "maxLivePtys">> & ClaudeEngineConfig {
   return {
     ...raw,
@@ -47,10 +52,10 @@ export function normalizeBoardWorkerConfig(raw: BoardWorkerConfig | undefined): 
   const weekend = normalizeWindow(raw?.schedule?.weekend);
   return {
     enabled: raw?.enabled ?? false,
-    idleMinutes: raw?.idleMinutes ?? 5,
+    idleMinutes: clampMinutes(raw?.idleMinutes, 5),
     timezone: raw?.timezone ?? systemTimezone(),
     schedule: { weekday, weekend },
-    usage: { minRemainingPercent: raw?.usage?.minRemainingPercent ?? 20 },
+    usage: { minRemainingPercent: raw?.usage?.minRemainingPercent ?? 15 },
   };
 }
 

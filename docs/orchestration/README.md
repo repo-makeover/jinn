@@ -114,7 +114,7 @@ jinn artifacts view --task-id task-live --coordinator-id task-live-review --kind
 jinn continuations list
 jinn continuations retry --task-id task-live --coordinator-id task-live-review
 jinn recovery notices --json
-jinn recovery requeue --manifest ~/.jinn/orchestration-recovery/<manifest>.json --task-id task-live --manager-name <manager>
+jinn recovery requeue --manifest ~/.jinn/orchestration-recovery/<manifest>.json --task-id task-live --coordinator-id task-live-review --manager-name <manager>
 
 jinn worktree create docs/orchestration/examples/task-live.yaml --lane seniorImplementer
 jinn worktree diff docs/orchestration/examples/task-live.yaml --lane seniorImplementer
@@ -165,8 +165,9 @@ local/near-zero or low-cost non-editing roles; roles requiring `repo_edit` or
 
 `jinn recovery notices` lists recent corrupt orchestration DB recovery manifests
 from `~/.jinn/orchestration-recovery/`. `jinn recovery requeue` imports one
-operator-selected recovered continuation from a manifest, keeps it queued, and
-adds a per-task pause so it cannot dispatch until explicitly resumed.
+operator-selected recovered continuation from a manifest by `taskId +
+coordinatorId`, keeps it queued, and adds a per-task pause so it cannot dispatch
+until explicitly resumed.
 
 `jinn worktree create|diff|cleanup` uses the live `config.yaml`
 `orchestration.worktreeRoot` and `orchestration.maxWorktrees` settings. The

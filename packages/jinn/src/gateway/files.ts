@@ -354,7 +354,7 @@ function serverError(res: ServerResponse, message: string): void {
 }
 
 /** Maximum upload file size in megabytes. */
-const MAX_UPLOAD_SIZE_MB = 100;
+const MAX_UPLOAD_SIZE_MB = 50;
 /** Maximum upload file size in bytes. */
 const MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 /** Maximum JSON upload body size (base64 encoded content + URL fetch). */

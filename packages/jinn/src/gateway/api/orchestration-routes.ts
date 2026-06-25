@@ -313,8 +313,8 @@ export async function handleOrchestrationRoutes(
     const parsed = req ? await readJsonBody(req, res) : { ok: false as const };
     if (!parsed.ok) return true;
     const body = parsed.body as { manifestPath?: unknown; taskId?: unknown; coordinatorId?: unknown; managerName?: unknown } | null;
-    if (typeof body?.manifestPath !== "string" || typeof body?.taskId !== "string" || typeof body?.managerName !== "string") {
-      json(res, { error: "manifestPath, taskId, and managerName are required" }, 400);
+    if (typeof body?.manifestPath !== "string" || typeof body?.taskId !== "string" || typeof body?.coordinatorId !== "string" || typeof body?.managerName !== "string") {
+      json(res, { error: "manifestPath, taskId, coordinatorId, and managerName are required" }, 400);
       return true;
     }
     const auth = authorizeManagerScope(scanOrg(), body.managerName, []);
@@ -325,7 +325,7 @@ export async function handleOrchestrationRoutes(
     const result = requeueRecoveredContinuation({
       manifestPath: body.manifestPath,
       taskId: body.taskId,
-      coordinatorId: typeof body.coordinatorId === "string" ? body.coordinatorId : undefined,
+      coordinatorId: body.coordinatorId,
       managerName: body.managerName,
       store: runtime.getStore(),
       recoveryDir: context.orchestration?.recoveryDir ?? ORCH_RECOVERY_DIR,

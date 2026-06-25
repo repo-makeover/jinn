@@ -68,7 +68,7 @@
 - `jinn continuations retry --task-id <id> --coordinator-id <id> [--json]` re-attempts a previously failed live continuation through the running gateway.
 - `jinn scheduler stats [--path <file>] [--json]` summarizes append-only orchestration run telemetry by provider, family, role, worker, and disposition.
 - `jinn recovery notices [--json]` lists recent corrupt orchestration DB recovery manifests.
-- `jinn recovery requeue --manifest <path> --task-id <id> --manager-name <name> [--json]` imports one parsed recovered continuation as queued and task-paused; it never dispatches automatically.
+- `jinn recovery requeue --manifest <path> --task-id <id> --coordinator-id <id> --manager-name <name> [--json]` imports one parsed recovered continuation as queued and task-paused; it never dispatches automatically.
 - `scripts/orchestration-smoke.mjs` is an opt-in live-daemon smoke script; without `JINN_ORCHESTRATION_SMOKE=1`, it prints a skip message and exits 0.
 - `jinn worktree create <task-file> [--lane <name>] [--json]` creates a managed git worktree for a task/lane when the task cwd is inside a git repo.
 - `jinn worktree diff <task-file> [--lane <name>] [--json]` prints the diff for a managed task/lane worktree.
@@ -120,7 +120,7 @@
 - `POST /api/orchestration/run` executes `single_worker`, `single_worker_with_review`, `dual_lane`, `architecture`, and `local_heavy` tasks through the daemon runtime.
 - `POST /api/orchestration/dual-lane/select` selects a completed dual-lane winner keyed by `taskId + coordinatorId` and archives/discards the loser lane.
 - `POST /api/orchestration/dual-lane/apply` applies a selected or selection-required winner patch keyed by `taskId + coordinatorId` to the base repo as unstaged changes only.
-- `POST /api/orchestration/recovery/requeue` imports one parsed recovered continuation from an explicit recovery manifest and leaves it task-paused until resumed.
+- `POST /api/orchestration/recovery/requeue` imports one parsed recovered continuation from an explicit recovery manifest by `taskId + coordinatorId` and leaves it task-paused until resumed.
 - Run responses include `reviewPolicy.explanations` for reviewer selection, explicit same-family fallback, and blocked reviewer allocation.
 - Blocked live runs persist a durable continuation keyed by task/coordinator and auto-resume on later resource availability.
 - These routes inherit the existing `/api/*` gateway token gate; unsupported methods on each path return `405`.

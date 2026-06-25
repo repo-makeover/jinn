@@ -100,6 +100,7 @@ import { listApprovals, getApproval, resolveApproval } from "./approvals.js";
 import { SUPERSEDED_TURN_META_KEY } from "./session-turn-state.js";
 import { cancelQueueItemForSession, patchSessionTransportMeta, listRecentCwds, getArchive, createArchiveAndDeleteSessions } from "../sessions/registry.js";
 import { handleSessionQueryRoutes, loadSessionMessagesForApi } from "./api/session-query-routes.js";
+import { handleStatusRoutes } from "./api/routes/status.js";
 import { dispatchWebSessionRun, maybeRevertEngineOverride } from "./api/session-dispatch.js";
 import { authorizeManagerScope } from "./manager-auth.js";
 import { readBoardState, defaultBoardState, readBoardArray, writeMergedBoard, BoardConflictError } from "./board-service.js";
@@ -640,6 +641,9 @@ export async function handleApiRequest(
       res.setHeader("Set-Cookie", clearAuthCookieHeaders());
       return json(res, { status: "ok" });
     }
+
+    if (await handleStatusRoutes(method, pathname, res, context)) return;
+    if (await handleSessionQueryRoutes(method, pathname, url, res, context, SESSION_LIST_PER_GROUP)) return;
 
     // GET /api/status
     if (method === "GET" && pathname === "/api/status") {

@@ -19,7 +19,8 @@ vi.mock("../../shared/logger.js", () => ({
   },
 }));
 
-vi.mock("../../gateway/gateway-info.js", () => ({
+vi.mock("../../gateway/gateway-info.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/gateway-info.js")>()),
   readGatewayInfo: vi.fn(() => ({
     port: 7777,
     secret: "secret",

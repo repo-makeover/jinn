@@ -456,10 +456,7 @@ export async function handleTalkApi(
       if (!parsed.ok) return true;
       const config = context.getConfig();
       const base = gatewayBaseUrl({ port: config.gateway?.port || 7777, host: config.gateway?.host });
-      const headers = {
-        "Content-Type": "application/json",
-        ...(context.gatewayAuthToken ? { authorization: `Bearer ${context.gatewayAuthToken}` } : {}),
-      };
+      const headers = jsonApiHeaders(context.apiToken ?? context.gatewayAuthToken);
       // Attachments persist by merging into the talk session's transport_meta;
       // updateSessionMeta wraps the generic updateSession meta writer.
       const attachmentDeps = {

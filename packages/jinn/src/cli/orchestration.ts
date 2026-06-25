@@ -85,6 +85,7 @@ export interface ArtifactViewOptions {
 export interface RecoveryRequeueOptions {
   manifest: string;
   taskId: string;
+  coordinatorId: string;
   managerName: string;
   json?: boolean;
 }
@@ -531,7 +532,7 @@ export async function runRecoveryNotices(opts: { json?: boolean }): Promise<void
 export async function runRecoveryRequeue(opts: RecoveryRequeueOptions): Promise<void> {
   const res = await fetchGatewayOrchestration("/api/orchestration/recovery/requeue", {
     method: "POST",
-    body: JSON.stringify({ manifestPath: opts.manifest, taskId: opts.taskId, managerName: opts.managerName }),
+    body: JSON.stringify({ manifestPath: opts.manifest, taskId: opts.taskId, coordinatorId: opts.coordinatorId, managerName: opts.managerName }),
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(String((body as { error?: unknown } | null)?.error ?? `recovery requeue failed (${res.status})`));

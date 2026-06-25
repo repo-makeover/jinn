@@ -19,7 +19,7 @@ export function writeGatewayInfo(file: string, opts: { port: number; host?: stri
     host: opts.host ?? previous?.host,
     pid: opts.pid,
     secret: opts.secret ?? previous?.secret ?? crypto.randomBytes(24).toString("hex"),
-    token: opts.token ?? previous?.token,
+    token: opts.token ?? previous?.token ?? crypto.randomBytes(24).toString("hex"),
     ptyPids: [],
   };
   // Atomic + fsync + 0o600 (ephemeral runtime info; no audit).
@@ -29,7 +29,10 @@ export function writeGatewayInfo(file: string, opts: { port: number; host?: stri
 
 export function readGatewayInfo(file: string): GatewayInfo | null {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf-8")) as GatewayInfo;
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as GatewayInfo & { apiToken?: string };
+    if (!parsed.token && typeof parsed.apiToken === "string") parsed.token = parsed.apiToken;
+    delete parsed.apiToken;
+    return parsed;
   } catch {
     return null;
   }
