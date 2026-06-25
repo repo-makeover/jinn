@@ -4,7 +4,7 @@ import type { AuthState } from "@/lib/auth"
 import { AuthStateIcon, AuthStateLabel } from "./auth-motion"
 
 type PairingMode = "code" | "token"
-type PairingFlow = "cli" | "web"
+type PairingFlow = "cli" | "web" | null
 
 interface PairingScreenProps {
   authState: Partial<AuthState> | null
@@ -41,6 +41,10 @@ export function PairingScreen({ authState, pairing, error, onPair }: PairingScre
     setCode("")
   }
 
+  function toggleFlow(nextFlow: Exclude<PairingFlow, null>) {
+    setFlow((current) => (current === nextFlow ? null : nextFlow))
+  }
+
   return (
     <main className="h-dvh overflow-y-auto bg-[var(--bg)] text-[var(--text-primary)] flex items-start sm:items-center justify-center px-[var(--space-4)] py-[max(var(--safe-top),var(--space-8))]">
       <section className="w-full max-w-[560px] rounded-[var(--radius-xl)] bg-[var(--material-regular)] shadow-[var(--shadow-card)] p-[var(--space-6)]">
@@ -69,7 +73,7 @@ export function PairingScreen({ authState, pairing, error, onPair }: PairingScre
               icon={<Terminal size={16} />}
               title="Pair with Jinn CLI"
               controls="jinn-pair-cli-flow"
-              onClick={() => setFlow("cli")}
+              onClick={() => toggleFlow("cli")}
             />
             {flow === "cli" && (
               <div id="jinn-pair-cli-flow" className="animate-auth-reveal rounded-[var(--radius-md)] bg-[var(--fill-tertiary)] px-[var(--space-3)] py-[var(--space-3)] shadow-[inset_0_0_0_1px_var(--separator)] text-[length:var(--text-footnote)] leading-[var(--leading-relaxed)] text-[var(--text-secondary)]">
@@ -88,7 +92,7 @@ export function PairingScreen({ authState, pairing, error, onPair }: PairingScre
               icon={<Settings size={16} />}
               title="Pair from Web Settings"
               controls="jinn-pair-web-flow"
-              onClick={() => setFlow("web")}
+              onClick={() => toggleFlow("web")}
             />
             {flow === "web" && (
               <div id="jinn-pair-web-flow" className="animate-auth-reveal rounded-[var(--radius-md)] bg-[var(--fill-tertiary)] px-[var(--space-3)] py-[var(--space-3)] shadow-[inset_0_0_0_1px_var(--separator)] text-[length:var(--text-footnote)] leading-[var(--leading-relaxed)] text-[var(--text-secondary)]">

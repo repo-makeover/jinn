@@ -43,6 +43,25 @@ describe("PairingScreen", () => {
     expect(screen.getByText(/Enter the code below/i)).toBeTruthy()
   })
 
+  it("toggles the open pairing flow closed when its header is clicked again", () => {
+    render(
+      <PairingScreen
+        authState={{ authRequired: true, authenticated: false, canBootstrapLocal: false, networkExposed: true }}
+        pairing={false}
+        onPair={() => {}}
+      />,
+    )
+
+    const cliHeader = screen.getByRole("button", { name: /pair with jinn cli/i })
+    expect(cliHeader.getAttribute("aria-expanded")).toBe("true")
+    expect(screen.getByText(/run this on the mac where jinn is running/i)).toBeTruthy()
+
+    fireEvent.click(cliHeader)
+
+    expect(cliHeader.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByText(/run this on the mac where jinn is running/i)).toBeNull()
+  })
+
   it("keeps fallback setup-token pairing explicit and ephemeral", () => {
     const onPair = vi.fn()
     render(
