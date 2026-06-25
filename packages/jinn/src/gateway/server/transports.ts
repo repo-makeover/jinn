@@ -19,13 +19,6 @@ interface GatewayTransportDeps {
   gatewayInfoToken: string;
   gatewayName: string;
   handleApiRequest: (req: http.IncomingMessage, res: http.ServerResponse) => void;
-  handleOrchestrationRoutes: (
-    method: string,
-    pathname: string,
-    res: http.ServerResponse,
-    apiContext: ApiContext,
-    req: http.IncomingMessage,
-  ) => Promise<boolean>;
   host: string;
   jinnHome: string;
   port: number;
@@ -42,7 +35,6 @@ export function createGatewayTransports({
   gatewayInfoToken,
   gatewayName,
   handleApiRequest,
-  handleOrchestrationRoutes,
   host,
   jinnHome,
   port,
@@ -78,10 +70,6 @@ export function createGatewayTransports({
     }
 
     if (url.startsWith("/api/")) {
-      if (pathname.startsWith("/api/orchestration/")) {
-        const handled = await handleOrchestrationRoutes(req.method || "GET", pathname, res, apiContext, req);
-        if (handled) return;
-      }
       handleApiRequest(req, res);
       return;
     }

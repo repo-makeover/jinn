@@ -49,7 +49,6 @@ import { readGatewayInfo, staleGatewayPids, updateGatewayPtyPids, writeGatewayIn
 import { startWatchers, stopWatchers, syncSkillSymlinks } from "./watcher.js";
 import { cleanupOldUploads, ensureFilesDir } from "./files.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
-import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
 import { startConfiguredConnectors } from "./server/connectors.js";
 import { createGatewayCleanup, type GatewayCleanup } from "./server/cleanup.js";
 import { serveStatic, isAllowedCorsOrigin } from "./server/http-static.js";
@@ -413,7 +412,6 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
     gatewayInfoToken: gatewayInfo.token ?? "",
     gatewayName: `${gatewayName} (boot ${bootId})`,
     handleApiRequest: (req, res) => handleApiRequest(req, res, apiContext),
-    handleOrchestrationRoutes,
     host,
     jinnHome: JINN_HOME,
     port,

@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  applyDualLaneWinner,
+  cancelHold,
+  createHold,
+  extendHold,
   loadOrchestrationDashboard,
+  pauseQueuedTask,
   pauseOrchestrationQueue,
+  requeueRecoveredTask,
+  resumeQueuedTask,
   retryContinuation,
   resumeOrchestrationQueue,
   selectDualLaneWinner,
@@ -38,36 +45,102 @@ describe("orchestration-api", () => {
     await expect(loadOrchestrationDashboard()).rejects.toThrow("orchestration is disabled")
   })
 
-  it("posts retry, selection, queue, and lease-stop actions", async () => {
+  it("posts every orchestration mutator with the expected path and body", async () => {
     const fetchMock = vi.fn(async () => ok({ ok: true }))
     vi.stubGlobal("fetch", fetchMock)
 
-    await retryContinuation("task-1", "coord-1")
-    await selectDualLaneWinner("task-2", "coord-2", "openai")
-    await pauseOrchestrationQueue("operator hold")
-    await resumeOrchestrationQueue()
-    await stopOrchestrationLease("lease-1", "operator stop")
+    const cases: Array<{
+      label: string
+      run: () => Promise<unknown>
+      path: string
+      body: unknown
+    }> = [
+      {
+        label: "retryContinuation",
+        run: () => retryContinuation("task-1", "coord-1"),
+        path: "/api/orchestration/continuations/retry",
+        body: { taskId: "task-1", coordinatorId: "coord-1" },
+      },
+      {
+        label: "selectDualLaneWinner",
+        run: () => selectDualLaneWinner("task-2", "coord-2", "openai"),
+        path: "/api/orchestration/dual-lane/select",
+        body: { taskId: "task-2", coordinatorId: "coord-2", winnerLane: "openai" },
+      },
+      {
+        label: "applyDualLaneWinner",
+        run: () => applyDualLaneWinner("task-3", "coord-3", "anthropic"),
+        path: "/api/orchestration/dual-lane/apply",
+        body: { taskId: "task-3", coordinatorId: "coord-3", winnerLane: "anthropic" },
+      },
+      {
+        label: "pauseQueuedTask",
+        run: () => pauseQueuedTask("task-4", "coord-4"),
+        path: "/api/orchestration/queue/pause-task",
+        body: { taskId: "task-4", coordinatorId: "coord-4", reason: "Paused from dashboard" },
+      },
+      {
+        label: "resumeQueuedTask",
+        run: () => resumeQueuedTask("task-5", "coord-5"),
+        path: "/api/orchestration/queue/resume-task",
+        body: { taskId: "task-5", coordinatorId: "coord-5" },
+      },
+      {
+        label: "createHold",
+        run: () => createHold({ managerName: "boss", roles: ["lead"], workerIds: ["w1"], ttlMs: 60000, reason: "coverage" }),
+        path: "/api/orchestration/holds",
+        body: { managerName: "boss", roles: ["lead"], workerIds: ["w1"], ttlMs: 60000, reason: "coverage" },
+      },
+      {
+        label: "extendHold",
+        run: () => extendHold("hold/1", "boss", 120000),
+        path: "/api/orchestration/holds/hold%2F1/extend",
+        body: { managerName: "boss", ttlMs: 120000 },
+      },
+      {
+        label: "cancelHold",
+        run: () => cancelHold("hold/2", "boss"),
+        path: "/api/orchestration/holds/hold%2F2/cancel",
+        body: { managerName: "boss" },
+      },
+      {
+        label: "requeueRecoveredTask",
+        run: () => requeueRecoveredTask("/tmp/manifest.json", "task-6", "coord-6", "boss"),
+        path: "/api/orchestration/recovery/requeue",
+        body: { manifestPath: "/tmp/manifest.json", taskId: "task-6", coordinatorId: "coord-6", managerName: "boss" },
+      },
+      {
+        label: "pauseOrchestrationQueue",
+        run: () => pauseOrchestrationQueue("operator hold"),
+        path: "/api/orchestration/queue/pause",
+        body: { reason: "operator hold" },
+      },
+      {
+        label: "resumeOrchestrationQueue",
+        run: () => resumeOrchestrationQueue(),
+        path: "/api/orchestration/queue/resume",
+        body: {},
+      },
+      {
+        label: "stopOrchestrationLease",
+        run: () => stopOrchestrationLease("lease-1", "operator stop"),
+        path: "/api/orchestration/leases/stop",
+        body: { leaseId: "lease-1", reason: "operator stop" },
+      },
+    ]
 
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/continuations/retry"), expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({ taskId: "task-1", coordinatorId: "coord-1" }),
-    }))
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/dual-lane/select"), expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({ taskId: "task-2", coordinatorId: "coord-2", winnerLane: "openai" }),
-    }))
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/queue/pause"), expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({ reason: "operator hold" }),
-    }))
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/queue/resume"), expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({}),
-    }))
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/orchestration/leases/stop"), expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({ leaseId: "lease-1", reason: "operator stop" }),
-    }))
+    for (const testCase of cases) {
+      await testCase.run()
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(cases.length)
+    for (const [index, testCase] of cases.entries()) {
+      expect(fetchMock.mock.calls[index]?.[0]).toContain(testCase.path)
+      expect(fetchMock.mock.calls[index]?.[1]).toEqual(expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(testCase.body),
+      }))
+    }
   })
 })
 

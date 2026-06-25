@@ -15,6 +15,7 @@ import { handleConnectorRoutes } from "./api/routes/connectors.js";
 import { handleCronRoutes } from "./api/routes/cron.js";
 import { handleFsRoutes } from "./api/routes/fs.js";
 import { handleOrgRoutes } from "./api/routes/org.js";
+import { handleOrchestrationRoutes } from "./api/orchestration-routes.js";
 import { handleSessionWriteRoutes } from "./api/routes/session-write.js";
 import { handleSkillRoutes } from "./api/routes/skills.js";
 import { handleStatusRoutes } from "./api/routes/status.js";
@@ -46,6 +47,7 @@ export async function handleApiRequest(
 
   try {
     if (await handleAuthRoutes(method, pathname, req, res, context)) return;
+    if (await handleOrchestrationRoutes(method, pathname, res, context, req)) return;
     if (await handleStatusRoutes(method, pathname, res, context)) return;
     if (await handleSessionQueryRoutes(method, pathname, url, res, context, SESSION_LIST_PER_GROUP)) return;
     if (await handleArchiveRoutes(method, pathname, req, res, context)) return;

@@ -5,7 +5,6 @@ import { getModelRegistry } from "../../../shared/models.js";
 import { listSessions } from "../../../sessions/registry.js";
 import { deriveWorkState, emptyWorkCounts } from "../../../shared/work-state.js";
 import { listApprovals } from "../../approvals.js";
-import { handleOrchestrationRoutes } from "../orchestration-routes.js";
 import type { ApiContext } from "../context.js";
 import { json } from "../responses.js";
 import { isSessionLiveRunning } from "../serialize-session.js";
@@ -33,8 +32,6 @@ export async function handleStatusRoutes(
   res: ServerResponse,
   context: ApiContext,
 ): Promise<boolean> {
-  if (await handleOrchestrationRoutes(method, pathname, res, context)) return true;
-
   if (method === "GET" && pathname === "/api/status") {
     const config = context.getConfig();
     const checks: Array<{ name: string; status: "ok" | "degraded" | "error"; detail?: string }> = [];
