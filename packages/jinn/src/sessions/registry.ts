@@ -18,6 +18,15 @@ import type {
   Session,
 } from '../shared/types.js';
 import { blockFallbackText, mergeBlock, validateBlockEnvelope } from '../shared/blocks.js';
+import {
+  createArchiveAndDeleteSessionsRecord,
+  createArchiveRecord,
+  deleteArchiveRecord,
+  getArchiveRecord,
+  listArchiveRecords,
+  snapshotSessionsForArchive,
+  type ArchiveRegistryDeps,
+} from './registry-archives.js';
 
 let db: Database.Database;
 
@@ -1126,64 +1135,14 @@ export function deleteSessions(ids: string[]): number {
   return txn();
 }
 
-function normalizeArchiveText(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-function rowToProjectArchive(row: Record<string, unknown>): ProjectArchive {
-  return {
-    id: row.id as string,
-    label: (row.label as string) ?? null,
-    note: (row.note as string) ?? null,
-    kind: row.kind as ArchiveKind,
-    sourceRef: (row.source_ref as string) ?? null,
-    createdAt: row.created_at as string,
-    sessionCount: (row.session_count as number) ?? 0,
-  };
-}
-
-function parseArchivePayload(value: unknown, archiveId: string): { sessions: ArchivedSessionSnapshot[] } {
-  if (typeof value !== 'string' || !value.trim()) return { sessions: [] };
-  try {
-    const parsed = JSON.parse(value) as { sessions?: ArchivedSessionSnapshot[] };
-    return { sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [] };
-  } catch {
-    logger.warn(`registry: dropped corrupt archive payload for ${archiveId}`);
-    return { sessions: [] };
-  }
-}
+const archiveRegistryDeps: ArchiveRegistryDeps = {
+  getDb: initDb,
+  getSession,
+  getMessages,
+};
 
 export function snapshotSessions(ids: string[]): ArchivedSessionSnapshot[] {
-  const snapshots: ArchivedSessionSnapshot[] = [];
-  for (const id of ids) {
-    const session = getSession(id);
-    if (!session) continue;
-    snapshots.push({
-      id: session.id,
-      engine: session.engine,
-      employee: session.employee,
-      model: session.model,
-      title: session.title,
-      promptExcerpt: session.promptExcerpt ?? null,
-      source: session.source,
-      sourceRef: session.sourceRef,
-      status: session.status,
-      createdAt: session.createdAt,
-      lastActivity: session.lastActivity,
-      totalCost: session.totalCost,
-      totalTurns: session.totalTurns,
-      parentSessionId: session.parentSessionId,
-      messages: getMessages(id).map((message) => ({
-        role: message.role,
-        content: message.content,
-        timestamp: message.timestamp,
-        ...(message.toolCall ? { toolCall: message.toolCall } : {}),
-        ...(message.media ? { media: message.media } : {}),
-      })),
-    });
-  }
-  return snapshots;
+  return snapshotSessionsForArchive(ids, archiveRegistryDeps);
 }
 
 export function createArchive(opts: {
@@ -1193,27 +1152,7 @@ export function createArchive(opts: {
   sourceRef?: string | null;
   sessions: ArchivedSessionSnapshot[];
 }): ProjectArchive {
-  const db = initDb();
-  const id = uuidv4();
-  const now = new Date().toISOString();
-  const label = normalizeArchiveText(opts.label);
-  const note = normalizeArchiveText(opts.note);
-  const sourceRef = normalizeArchiveText(opts.sourceRef);
-  const sessionCount = opts.sessions.length;
-  db.prepare(
-    `INSERT INTO archives (id, label, note, kind, source_ref, created_at, session_count, payload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    label,
-    note,
-    opts.kind,
-    sourceRef,
-    now,
-    sessionCount,
-    JSON.stringify({ sessions: opts.sessions }),
-  );
-  return { id, label, note, kind: opts.kind, sourceRef, createdAt: now, sessionCount };
+  return createArchiveRecord(opts, archiveRegistryDeps);
 }
 
 export function createArchiveAndDeleteSessions(opts: {
@@ -1223,77 +1162,19 @@ export function createArchiveAndDeleteSessions(opts: {
   sourceRef?: string | null;
   sessionIds: string[];
 }): ProjectArchive | undefined {
-  const snapshots = snapshotSessions(opts.sessionIds);
-  if (snapshots.length === 0) return undefined;
-
-  const db = initDb();
-  const id = uuidv4();
-  const now = new Date().toISOString();
-  const label = normalizeArchiveText(opts.label);
-  const note = normalizeArchiveText(opts.note);
-  const sourceRef = normalizeArchiveText(opts.sourceRef);
-  const sessionCount = snapshots.length;
-  const archive = { id, label, note, kind: opts.kind, sourceRef, createdAt: now, sessionCount };
-  const ids = snapshots.map((snapshot) => snapshot.id);
-  const placeholders = ids.map(() => '?').join(',');
-
-  const txn = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO archives (id, label, note, kind, source_ref, created_at, session_count, payload)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      label,
-      note,
-      opts.kind,
-      sourceRef,
-      now,
-      sessionCount,
-      JSON.stringify({ sessions: snapshots }),
-    );
-
-    const sessionKeys = db.prepare(
-      `SELECT session_key as sessionKey FROM sessions WHERE id IN (${placeholders})`,
-    ).all(...ids) as Array<{ sessionKey: string | null }>;
-    const liveSessionKeys = sessionKeys
-      .map((row) => row.sessionKey)
-      .filter((sessionKey): sessionKey is string => Boolean(sessionKey));
-
-    db.prepare(`DELETE FROM messages WHERE session_id IN (${placeholders})`).run(...ids);
-    db.prepare(`DELETE FROM queue_items WHERE session_id IN (${placeholders})`).run(...ids);
-    if (liveSessionKeys.length > 0) {
-      const keyPlaceholders = liveSessionKeys.map(() => '?').join(',');
-      db.prepare(`DELETE FROM queue_pauses WHERE session_key IN (${keyPlaceholders})`)
-        .run(...liveSessionKeys);
-    }
-    db.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...ids);
-  });
-
-  txn();
-  return archive;
+  return createArchiveAndDeleteSessionsRecord(opts, archiveRegistryDeps);
 }
 
 export function listArchives(): ProjectArchive[] {
-  const db = initDb();
-  const rows = db
-    .prepare('SELECT id, label, note, kind, source_ref, created_at, session_count FROM archives ORDER BY created_at DESC')
-    .all() as Record<string, unknown>[];
-  return rows.map(rowToProjectArchive);
+  return listArchiveRecords(archiveRegistryDeps);
 }
 
 export function getArchive(id: string): ProjectArchiveDetail | undefined {
-  const db = initDb();
-  const row = db.prepare('SELECT * FROM archives WHERE id = ?').get(id) as Record<string, unknown> | undefined;
-  if (!row) return undefined;
-  const summary = rowToProjectArchive(row);
-  const payload = parseArchivePayload(row.payload, summary.id);
-  return { ...summary, sessions: payload.sessions };
+  return getArchiveRecord(id, archiveRegistryDeps);
 }
 
 export function deleteArchive(id: string): boolean {
-  const db = initDb();
-  const result = db.prepare('DELETE FROM archives WHERE id = ?').run(id);
-  return result.changes > 0;
+  return deleteArchiveRecord(id, archiveRegistryDeps);
 }
 
 /** Attachment descriptor stored alongside a message and rendered by the web UI. */
