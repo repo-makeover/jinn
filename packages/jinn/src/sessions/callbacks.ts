@@ -219,7 +219,11 @@ export function notifyDiscordChannel(message: string, options?: SessionNotificat
   });
 }
 
-async function _sendDiscordNotification(message: string): Promise<void> {
+async function _sendDiscordNotification(message: string, sink?: SessionNotificationSink): Promise<void> {
+  if (sink) {
+    await sink.sendConnectorNotification(message);
+    return;
+  }
   let connector = "discord";
   let channel: string | undefined;
   const gateway = internalGatewayConnection();

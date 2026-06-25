@@ -1,0 +1,50 @@
+schema_version: 2
+artifact_type: giles_compliance_status
+repo: jinn
+repo_path: /home/ericl/Work/vscode/public_share/jinn
+generated_at: '2026-06-25T13:57:18.563911Z'
+authority:
+  source: Giles audit
+  role: advisory_work_order
+  canonical: false
+  promotion_required: true
+  canonical_source_of_truth: governance/logs/giles_compliance_todo.json
+status: blocked
+disposition: blocked_but_documented
+execution_status: ok
+compliance_status: blocked
+result: blocked
+progress:
+  total_actions: 8
+  completed: 0
+  remaining: 8
+  blocking: 4
+  percent_complete: 0.0
+open_findings: 27
+raw_open_findings: 33
+resolved_findings: 0
+blocking_actions: 4
+compliance_result: blocked
+acceptance_state: blocked
+cleanliness: not_clean
+unresolved_blocking_count: 12
+accepted_exception_count: 0
+audit_structure_crashed: false
+baseline: false
+git:
+  is_git_repo: true
+  branch: main
+  upstream: origin/main
+  behind: 0
+  ahead: 0
+  diverged: false
+  has_uncommitted_files: true
+  dirty: true
+  detail: behind 0, ahead 0 of origin/main
+declared_family: null
+policy_pack: null
+recheck_status: 33 finding(s) remain after reconciliation; 4 blocking action(s) outstanding.
+patch_todo_ref: .giles/patch_todo.yaml
+remediation_plan_ref: .giles/remediation_plan.yaml
+audit_report_ref: .giles/audit_report.yaml
+canonical_compliance_log: governance/logs/giles_compliance_todo.json

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatMessages } from '@/components/chat/chat-messages'
 import { useGateway } from '@/hooks/use-gateway'
-import { api, type Employee, type TicketSessionResponse } from '@/lib/api'
+import { api, type Employee, type TicketSessionResponse, type TicketSessionMessage } from '@/lib/api'
 import type { Message } from '@/lib/conversations'
 import type { KanbanTicket, TicketStatus, TicketPriority, TicketComplexity } from '@/lib/kanban/types'
 import { PRIORITY_COLORS, COLUMNS } from '@/lib/kanban/types'
@@ -96,12 +96,12 @@ function formatCost(cost: number | undefined) {
 }
 
 function mapTailMessages(liveSession: TicketSessionResponse | null): Message[] {
-  return (liveSession?.messages ?? []).map((message, index) => ({
+  return (liveSession?.messages ?? []).map((message: TicketSessionMessage, index: number): Message => ({
     id: `${message.ts}-${index}`,
     role: message.role,
     content: message.text,
     timestamp: message.ts,
-    toolCall: message.toolCall,
+    toolCall: typeof message.toolCall === 'string' ? message.toolCall : undefined,
   }))
 }
 

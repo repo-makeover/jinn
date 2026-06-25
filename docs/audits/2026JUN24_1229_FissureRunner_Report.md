@@ -1,0 +1,275 @@
+# Fissure Dry-Run Report
+
+- Run: `FRUN-20260624-122931`
+- Seed: `20260624`
+- Surface scan: `SCAN-20260624-122932`
+- Data path scan: `DPATH-20260624-122935`
+- Paths selected: 200
+- Stop reason: `path_limit_reached`
+- Data path summary: `{'total': 1092, 'dead': 18, 'unresolved': 193, 'completed': 881, 'hazard_count': 1617}`
+- Deterministic checks: not executed in dry-run MVP.
+- Worker/supervisor models: not invoked in dry-run MVP.
+
+## Selected Path Probes
+
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=1 strategy=baseline file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=1 strategy=baseline file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=2 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=2 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=3 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=3 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=4 strategy=boundary_values file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=4 strategy=boundary_values file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=5 strategy=long_values file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=5 strategy=long_values file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=6 strategy=unicode_values file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=6 strategy=unicode_values file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=7 strategy=invalid_identifier file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=8 strategy=duplicate_submission file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=9 strategy=baseline file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=9 strategy=baseline file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `cli.argparse.kokoro_sidecar` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/jinn/src/talk/kokoro_sidecar.py`
+- `script.npm.test` (validation_script) score=0.0 weight=1.0 diff=unchanged variant=10 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.status` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.setup` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.postinstall` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.build` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.test:e2e` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.stop` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`package.json`
+- `script.npm.typecheck` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=10 strategy=empty_input file=`packages/web/package.json`
+- `script.npm.setup:force` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`package.json`
+- `script.npm.preview` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.dev` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.test:watch` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.coverage` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`packages/jinn/package.json`
+- `script.npm.start` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`package.json`
+- `script.npm.jinn` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`package.json`
+- `script.npm.clean` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`packages/web/package.json`
+- `script.npm.nuke` (cli_command) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`package.json`
+- `script.npm.lint` (validation_script) score=0.1 weight=1.1 diff=unchanged variant=11 strategy=null_like_values file=`package.json`
+
+## Hazard Candidates
+
+- `data.environment.packages.jinn.src.cli.__tests__.orchestration-run.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=24 file=`packages/jinn/src/cli/__tests__/orchestration-run.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.cli.__tests__.orchestration-run.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=22 file=`packages/jinn/src/cli/__tests__/orchestration-run.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.cli.__tests__.orchestration-run.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=24 file=`packages/jinn/src/cli/__tests__/orchestration-run.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.cli.__tests__.orchestration-worktree.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=27 file=`packages/jinn/src/cli/__tests__/orchestration-worktree.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.cli.__tests__.orchestration-worktree.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=25 file=`packages/jinn/src/cli/__tests__/orchestration-worktree.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.cli.__tests__.orchestration-worktree.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=27 file=`packages/jinn/src/cli/__tests__/orchestration-worktree.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.cron.__tests__.jobs.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=32 file=`packages/jinn/src/cron/__tests__/jobs.test.ts` evidence='try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }'
+- `data.environment.packages.jinn.src.cron.__tests__.jobs.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=29 file=`packages/jinn/src/cron/__tests__/jobs.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.cron.__tests__.jobs.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=32 file=`packages/jinn/src/cron/__tests__/jobs.test.ts` evidence='try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }'
+- `data.environment.packages.jinn.src.engines.claude-interactive.ts.Build_the_env_passed_to_the_claude_PTY_inherits_process_env_` shell_exec severity=high line=818 file=`packages/jinn/src/engines/claude-interactive.ts` evidence='*  enables fullscreen rendering. Shared by spawn() and ensureIdleSpawn().'
+- `data.environment.packages.jinn.src.gateway.__tests__.queue-cancel-scope.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=81 file=`packages/jinn/src/gateway/__tests__/queue-cancel-scope.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.queue-cancel-scope.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=79 file=`packages/jinn/src/gateway/__tests__/queue-cancel-scope.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.gateway.__tests__.queue-cancel-scope.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=81 file=`packages/jinn/src/gateway/__tests__/queue-cancel-scope.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.queue-pause-replay.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=32 file=`packages/jinn/src/gateway/__tests__/queue-pause-replay.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.queue-pause-replay.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=30 file=`packages/jinn/src/gateway/__tests__/queue-pause-replay.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.gateway.__tests__.queue-pause-replay.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=32 file=`packages/jinn/src/gateway/__tests__/queue-pause-replay.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.session-query-routes.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=93 file=`packages/jinn/src/gateway/__tests__/session-query-routes.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.session-query-routes.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=91 file=`packages/jinn/src/gateway/__tests__/session-query-routes.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.gateway.__tests__.session-query-routes.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=93 file=`packages/jinn/src/gateway/__tests__/session-query-routes.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.ticket-dispatch-idempotency.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=67 file=`packages/jinn/src/gateway/__tests__/ticket-dispatch-idempotency.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.ticket-dispatch-idempotency.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=65 file=`packages/jinn/src/gateway/__tests__/ticket-dispatch-idempotency.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.gateway.__tests__.ticket-dispatch-idempotency.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=67 file=`packages/jinn/src/gateway/__tests__/ticket-dispatch-idempotency.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.ticket-dispatch-orchestration.test.ts.else_process_env_JINN_HOME_prevHome` destructive severity=high line=44 file=`packages/jinn/src/gateway/__tests__/ticket-dispatch-orchestration.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+- `data.environment.packages.jinn.src.gateway.__tests__.ticket-dispatch-orchestration.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=42 file=`packages/jinn/src/gateway/__tests__/ticket-dispatch-orchestration.test.ts` evidence='if (prevHome === undefined) delete process.env.JINN_HOME;'
+- `data.environment.packages.jinn.src.gateway.__tests__.ticket-dispatch-orchestration.test.ts.if_prevHome_undefined_delete_process_env_JINN_HOME` destructive severity=high line=44 file=`packages/jinn/src/gateway/__tests__/ticket-dispatch-orchestration.test.ts` evidence='fs.rmSync(tmpHome, { recursive: true, force: true });'
+
+## Audit Lens Recommendations
+
+- `audit-code-security` relationship=complements triggers=953 top={'side_channel': 525, 'destructive': 225, 'shell_exec': 203}
+  - Fissure role: Highlights shell execution, secrets/logging, destructive operations, and trust-boundary candidates.
+  - Limits: Does not validate exploitability, authorization, tenant isolation, or injection sinks end-to-end.
+- `audit-nodejs-security` relationship=complements triggers=953 top={'side_channel': 525, 'destructive': 225, 'shell_exec': 203}
+  - Fissure role: Flags Node/TypeScript child-process, process.env, package-script, and runtime hazard candidates.
+  - Limits: Does not inspect lockfiles, CORS/cookie config, npm publishing exposure, or runtime flags completely.
+- `audit-input-output-path` relationship=partial_replacement triggers=750 top={'side_channel': 525, 'destructive': 225}
+  - Fissure role: Inventories ingress/output-like paths, generated artifacts, log/report leakage candidates, and unsafe path/string hazards.
+  - Limits: Does not actively craft malicious archives, files, or malformed payloads.
+- `audit-operator-signal` relationship=complements triggers=525 top={'side_channel': 525}
+  - Fissure role: Surfaces log/report leakage and unresolved/dead-path visibility risks.
+  - Limits: Does not verify health endpoint honesty, alerts, or runbook quality.
+- `audit-concurrency` relationship=partial_replacement triggers=351 top={'race_condition': 306, 'concurrency': 45}
+  - Fissure role: Finds concurrency/race/shared-state hints and repeated path variants for later break-it tests.
+  - Limits: Does not execute concurrent requests or prove interleavings.
+- `audit-recovery-idempotency` relationship=complements triggers=351 top={'race_condition': 306, 'concurrency': 45}
+  - Fissure role: Surfaces duplicate/retry/idempotency candidates through repeated variants and side-effect hints.
+  - Limits: Does not interrupt work or verify rollback/idempotency at runtime.
+- `audit-architecture-seam` relationship=complements triggers=317 top={'unresolved': 193, 'redundancy_parallel': 124}
+  - Fissure role: Highlights unresolved call chains, cross-layer-looking sinks, and repeated implementation hotspots.
+  - Limits: Does not reason about intended ownership without human architecture context.
+- `audit-state-transition` relationship=complements triggers=306 top={'race_condition': 306}
+  - Fissure role: Highlights race/state/status mutation candidates for lifecycle review.
+  - Limits: Does not prove legal transition models or durable status semantics.
+- `audit-data-integrity` relationship=complements triggers=225 top={'destructive': 225}
+  - Fissure role: Highlights destructive and persistence-looking paths that may affect persisted correctness.
+  - Limits: Does not validate database constraints, migrations, provenance, or round-trip behavior.
+- `audit-security` relationship=complements triggers=203 top={'shell_exec': 203}
+  - Fissure role: Flags shell, path, secret, and trust-boundary candidates for deeper security review.
+  - Limits: Does not validate authz/authn, exploitability, or deployment posture end-to-end.

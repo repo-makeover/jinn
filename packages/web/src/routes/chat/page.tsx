@@ -784,7 +784,6 @@ function ChatPage() {
               onEmployeeSessionsAvailable={handleEmployeeSessionsAvailable}
               onOrderComputed={handleOrderComputed}
               onContactEmployee={contactEmployee}
-              onSelectRoom={handleSelectRoom}
             />
           </div>
 

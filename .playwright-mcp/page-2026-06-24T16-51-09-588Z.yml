@@ -1,0 +1,110 @@
+- generic [ref=e3]:
+  - navigation "Primary" [ref=e5]:
+    - link "Jinn" [ref=e7] [cursor=pointer]:
+      - /url: /
+      - generic [ref=e8]: 🧞️
+    - link "Chat" [ref=e9] [cursor=pointer]:
+      - /url: /
+      - img [ref=e11]
+      - generic:
+        - generic: Chat
+    - link "Organization" [ref=e13] [cursor=pointer]:
+      - /url: /org
+      - img [ref=e15]
+      - generic:
+        - generic: Organization
+    - link "Kanban" [ref=e20] [cursor=pointer]:
+      - /url: /kanban
+      - img [ref=e22]
+      - generic:
+        - generic: Kanban
+    - link "Approvals" [ref=e27] [cursor=pointer]:
+      - /url: /approvals
+      - img [ref=e29]
+      - generic:
+        - generic: Approvals
+    - link "Archive" [ref=e32] [cursor=pointer]:
+      - /url: /archive
+      - img [ref=e34]
+      - generic:
+        - generic: Archive
+    - link "Cron" [ref=e37] [cursor=pointer]:
+      - /url: /cron
+      - img [ref=e39]
+      - generic:
+        - generic: Cron
+    - link "Orchestration" [ref=e42] [cursor=pointer]:
+      - /url: /orchestration
+      - img [ref=e44]
+      - generic:
+        - generic: Orchestration
+    - link "Limits" [ref=e49] [cursor=pointer]:
+      - /url: /limits
+      - img [ref=e51]
+      - generic:
+        - generic: Limits
+    - link "Activity" [ref=e54] [cursor=pointer]:
+      - /url: /logs
+      - img [ref=e56]
+      - generic:
+        - generic: Activity
+    - link "Skills" [ref=e58] [cursor=pointer]:
+      - /url: /skills
+      - img [ref=e60]
+      - generic:
+        - generic: Skills
+    - link "Settings" [ref=e62] [cursor=pointer]:
+      - /url: /settings
+      - img [ref=e64]
+      - generic:
+        - generic: Settings
+    - generic [ref=e67]:
+      - link "Talk" [ref=e68] [cursor=pointer]:
+        - /url: /talk
+        - img [ref=e70]
+        - generic:
+          - generic: Talk
+      - 'button "Theme: dark" [ref=e71]':
+        - img [ref=e73]
+        - generic:
+          - generic: "Theme: dark"
+  - main [ref=e75]:
+    - generic [ref=e77]:
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - heading "Orchestration" [level=1] [ref=e81]
+          - paragraph [ref=e82]: 1 running lease(s), 1 queued item(s)
+        - generic [ref=e84]:
+          - generic [ref=e85]: Updated 12:50:55 PM
+          - button "Refresh orchestration" [ref=e86]:
+            - img [ref=e87]
+      - generic [ref=e93]:
+        - tablist [ref=e94]:
+          - tab "Overview" [ref=e95]
+          - tab "Workers" [ref=e96]
+          - tab "Queue" [ref=e97]
+          - tab "Continuations" [active] [selected] [ref=e98]
+          - tab "Dual-lane" [ref=e99]
+          - tab "Worktrees" [ref=e100]
+          - tab "Telemetry" [ref=e101]
+        - tabpanel "Continuations" [ref=e170]:
+          - generic [ref=e171]:
+            - generic [ref=e172]:
+              - heading "Continuations" [level=2] [ref=e173]
+              - generic [ref=e174]: "2"
+            - generic [ref=e175]:
+              - generic [ref=e176]:
+                - generic [ref=e177]:
+                  - generic [ref=e178]: task-failed
+                  - generic [ref=e179]: coord - single_worker - updated 6/24/2026, 12:50:35 PM
+                  - generic [ref=e180]: mock failure
+                - generic [ref=e181]:
+                  - generic [ref=e182]: failed
+                  - button "Retry" [ref=e183]
+              - generic [ref=e184]:
+                - generic [ref=e185]:
+                  - generic [ref=e186]: task-queued
+                  - generic [ref=e187]: coord - single_worker - updated 6/24/2026, 12:50:35 PM
+                - generic [ref=e188]:
+                  - generic [ref=e189]: queued
+                  - button "Retry" [disabled] [ref=e190]

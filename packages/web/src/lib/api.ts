@@ -369,6 +369,66 @@ export interface FsEntry { name: string; isDir: boolean }
 export interface FsListResult { path: string; parent: string | null; entries: FsEntry[] }
 export interface FsRecent { default: string; recent: string[] }
 
+// --- Kanban / Department Board types ---
+export interface DepartmentBoardTicket {
+  id: string
+  title: string
+  description?: string
+  status: 'backlog' | 'todo' | 'in_progress' | 'review' | 'done' | 'blocked'
+  priority?: 'low' | 'medium' | 'high'
+  complexity?: 'low' | 'medium' | 'high'
+  assignee?: string
+  source?: string
+  sessionId?: string
+  createdAt?: string
+  updatedAt?: string
+  baseUpdatedAt?: string
+  deletedAt?: string
+}
+
+export interface DepartmentBoardResponse {
+  tickets: DepartmentBoardTicket[]
+  deletedTickets: DepartmentBoardTicket[]
+  retentionDays?: number
+}
+
+export interface UpdateDepartmentBoardPayload {
+  tickets: DepartmentBoardTicket[]
+  deletedIds?: string[]
+  deletedVersions?: Record<string, string>
+  retentionDays?: number
+}
+
+export interface DispatchTicketResponse {
+  status: string
+  sessionId?: string
+}
+
+export interface TicketSessionMessage {
+  role: 'user' | 'assistant'
+  text: string
+  ts: number
+  toolCall?: unknown
+  kind?: string
+}
+
+export interface TicketSessionResponse {
+  found: boolean
+  sessionId?: string
+  messages?: TicketSessionMessage[]
+  status?: string
+  stalled?: boolean
+  stalledForMs?: number
+  lastActivityAgoMs?: number
+  lastActivityIso?: string
+  fallback?: { active: boolean; toEngine?: string; fromEngine?: string; toModel?: string }
+  engine?: string
+  model?: string
+  totalCost?: number
+  lastError?: string
+  failureReason?: string
+}
+
 export const api = {
   authStatus: () => get<{ required: boolean; authenticated: boolean }>("/api/auth/status"),
   login: (token: string) => post<{ status: string }>("/api/auth/login", { token }),

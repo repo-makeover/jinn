@@ -1,4 +1,11 @@
-import { getQueueItem, markQueueItemRunning, markQueueItemCompleted } from "./registry.js";
+import {
+  getQueueItem,
+  listPausedQueueKeys,
+  markQueueItemCompleted,
+  markQueueItemRunning,
+  pauseQueueKey,
+  resumeQueueKey,
+} from "./registry.js";
 
 export class SessionQueue {
   private queues = new Map<string, Promise<void>>();

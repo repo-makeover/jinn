@@ -15,6 +15,16 @@ interface HookMatcher { hooks: HookCommand[]; }
 // StopFailure fires INSTEAD of Stop when an API error ends the turn (rate_limit,
 // billing_error, server_error, …) — confirmed by the Phase 0 spike. It is the
 // structured rate-limit signal, so it must be registered alongside Stop.
+
+/**
+ * Bypasses the dangerous-mode permission consent prompt that blocks headless/PTY
+ * usage of `claude --dangerously-skip-permissions`. Spread into session settings
+ * objects to avoid re-typing this flag everywhere.
+ */
+export const CLAUDE_BYPASS_PERMISSIONS_CONSENT_SETTINGS = {
+  skipDangerousModePermissionPrompt: true as const,
+};
+
 export interface ClaudeSettings {
   skipDangerousModePermissionPrompt: true;
   hooks: Record<"SessionStart" | "Stop" | "StopFailure" | "PreToolUse" | "PostToolUse", HookMatcher[]>;

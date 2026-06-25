@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { withTempJinnHome } from "../test-utils/jinn-home.js";
 import { SessionQueue } from "./queue.js";
 
 withTempJinnHome();

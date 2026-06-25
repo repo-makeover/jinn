@@ -558,7 +558,7 @@ export interface PortalConfig {
  */
 
 /** How an engine conveys reasoning-effort to its CLI. */
-export type EffortMechanism = "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "none";
+export type EffortMechanism = "claude-flag" | "codex-config" | "grok-flag" | "pi-flag" | "kiro-flag" | "none";
 
 /** A single model and its capabilities, as exposed to the UI / validation. */
 export interface ModelInfo {
@@ -724,9 +724,17 @@ export interface JinnConfig {
      *  single header name or a priority-ordered list. Unset = single-user
      *  no-op (sessions default to "web-user", header never read). */
     userHeader?: string | string[];
+    /** Stall detection: inactivity threshold in ms before a stalled turn is flagged. */
+    turnStallInactivityMs?: number;
+    /** Stall detection: max ceiling in ms before hard-timeout. */
+    turnStallCeilingMs?: number;
+    /** Stall detection: number of retries before giving up. */
+    turnStallRetries?: number;
+    /** Opt-in: include resolved file paths in file API responses. Default false. */
+    exposeResolvedFilePaths?: boolean;
   };
   engines: {
-    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "hermes";
+    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "hermes" | "kiro";
     claude: {
       bin: string;
       model: string;
@@ -740,6 +748,8 @@ export interface JinnConfig {
     pi?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     /** Hermes (`hermes` CLI) engine. `bin` optional — PATH-resolved. No effort. */
     hermes?: { bin?: string; model?: string };
+    /** Kiro engine. `bin` optional — PATH-resolved. */
+    kiro?: { bin?: string; model?: string; effortLevel?: string; creditBudget?: number; billingAnchorDay?: number };
   };
   models?: ModelsConfig;
   connectors: Record<string, any> & {

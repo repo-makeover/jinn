@@ -4,6 +4,7 @@ import { CONFIG_PATH } from "./paths.js";
 import { safeWriteYaml } from "./safe-write.js";
 import type { BoardWorkerConfig, JinnConfig } from "./types.js";
 import { validateConfigShape } from "./config-schema.js";
+export { validateConfigShape } from "./config-schema.js";
 
 type ClaudeEngineConfig = JinnConfig["engines"]["claude"];
 type NormalizedBoardWorkerConfig = Required<NonNullable<JinnConfig["boardWorker"]>> & {
@@ -41,66 +42,17 @@ export function normalizeClaudeEngineConfig(raw: ClaudeEngineConfig): Required<P
   };
 }
 
-/**
- * Lightweight shape validation for a parsed config.yaml. Returns a list of
- * problems (empty = valid). Deliberately minimal: only the fields whose
- * absence/wrong type would crash the gateway at startup are checked, so
- * configs that rely on downstream defaults keep working.
- */
-export function validateConfigShape(config: unknown): string[] {
-  if (config === null || config === undefined) {
-    return ["file is empty or parsed to null — expected a YAML mapping"];
-  }
-  if (typeof config !== "object" || Array.isArray(config)) {
-    return [`expected a YAML mapping, got ${Array.isArray(config) ? "an array" : typeof config}`];
-  }
-
-  const problems: string[] = [];
-  const c = config as Record<string, any>;
-
-  if (c.gateway !== undefined) {
-    if (typeof c.gateway !== "object" || c.gateway === null || Array.isArray(c.gateway)) {
-      problems.push("gateway must be a mapping");
-    } else {
-      if (c.gateway.port !== undefined && typeof c.gateway.port !== "number") {
-        problems.push(`gateway.port must be a number (got ${typeof c.gateway.port})`);
-      }
-      if (c.gateway.host !== undefined && typeof c.gateway.host !== "string") {
-        problems.push(`gateway.host must be a string (got ${typeof c.gateway.host})`);
-      }
-      if (c.gateway.allowFileCustomPaths !== undefined && typeof c.gateway.allowFileCustomPaths !== "boolean") {
-        problems.push(`gateway.allowFileCustomPaths must be a boolean (got ${typeof c.gateway.allowFileCustomPaths})`);
-      }
-      if (c.gateway.allowFileOpen !== undefined && typeof c.gateway.allowFileOpen !== "boolean") {
-        problems.push(`gateway.allowFileOpen must be a boolean (got ${typeof c.gateway.allowFileOpen})`);
-      }
-      if (c.gateway.authRequired !== undefined && typeof c.gateway.authRequired !== "boolean") {
-        problems.push(`gateway.authRequired must be a boolean (got ${typeof c.gateway.authRequired})`);
-      }
-      if (c.gateway.authDisabled !== undefined && typeof c.gateway.authDisabled !== "boolean") {
-        problems.push(`gateway.authDisabled must be a boolean (got ${typeof c.gateway.authDisabled})`);
-      }
-      if (c.gateway.insecureAllowUnauthenticatedNetwork !== undefined && typeof c.gateway.insecureAllowUnauthenticatedNetwork !== "boolean") {
-        problems.push(`gateway.insecureAllowUnauthenticatedNetwork must be a boolean (got ${typeof c.gateway.insecureAllowUnauthenticatedNetwork})`);
-      }
-    }
-  }
-
-  if (typeof c.engines !== "object" || c.engines === null || Array.isArray(c.engines)) {
-    problems.push("engines must be a mapping with at least an engines.claude entry");
-  } else {
-    if (c.engines.default !== undefined && typeof c.engines.default !== "string") {
-      problems.push("engines.default must be a string");
-    }
-    if (typeof c.engines.claude !== "object" || c.engines.claude === null || Array.isArray(c.engines.claude)) {
-      problems.push("engines.claude must be a mapping");
-    }
-  }
-
-  return problems;
+export function normalizeBoardWorkerConfig(raw: BoardWorkerConfig | undefined): NormalizedBoardWorkerConfig {
+  const weekday = normalizeWindow(raw?.schedule?.weekday);
+  const weekend = normalizeWindow(raw?.schedule?.weekend);
+  return {
+    enabled: raw?.enabled ?? false,
+    idleMinutes: raw?.idleMinutes ?? 5,
+    timezone: raw?.timezone ?? systemTimezone(),
+    schedule: { weekday, weekend },
+    usage: { minRemainingPercent: raw?.usage?.minRemainingPercent ?? 20 },
+  };
 }
-
-export { validateConfigShape } from "./config-schema.js";
 
 export function loadConfig(): JinnConfig {
   if (!fs.existsSync(CONFIG_PATH)) {

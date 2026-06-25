@@ -1,0 +1,1054 @@
+{
+  "entries": [
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-23-independent-state-transition-codebase-audit.md"
+      },
+      "entry_id": "008695a6d0f807a2d3fe",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-23-independent-state-transition-codebase-audit.md",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-23-jinn-full-codebase-audit.md"
+      },
+      "entry_id": "69b0fb177a0ad64e89e4",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-23-jinn-full-codebase-audit.md",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-23-jinn-kanban-board-audit.md"
+      },
+      "entry_id": "b4e5fedc71972d8c809b",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-23-jinn-kanban-board-audit.md",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-23-workflow-gui-audit.md"
+      },
+      "entry_id": "64bf8054bf7cd3c2823b",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-23-workflow-gui-audit.md",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "high",
+        "name": "TURN_TIMEOUT_MS",
+        "occurrences": "7",
+        "sample_files": "packages/jinn/src/engines/antigravity.ts,packages/jinn/src/engines/codex-interactive.ts,packages/jinn/src/engines/codex.ts"
+      },
+      "entry_id": "ef57e415eb1c3f487876",
+      "event_type": "duplicated_operational_constant",
+      "subject": "TURN_TIMEOUT_MS",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "name": "MAX",
+        "occurrences": "3",
+        "sample_files": "packages/jinn/src/gateway/files.ts,packages/web/src/lib/clean-preview.ts,packages/web/src/lib/debug-log.ts"
+      },
+      "entry_id": "ea73f13e6bd6ba8688e4",
+      "event_type": "duplicated_operational_constant",
+      "subject": "MAX",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "CODEX_SESSIONS_DIR",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/engines/codex-interactive.ts,packages/jinn/src/engines/codex.ts"
+      },
+      "entry_id": "70675bc92810ad502342",
+      "event_type": "duplicated_operational_constant",
+      "subject": "CODEX_SESSIONS_DIR",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "DEFAULT_INTERVAL_MS",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/gateway/board-worker.ts,packages/jinn/src/gateway/status-reconciler.ts"
+      },
+      "entry_id": "3d28b301526bc698a82b",
+      "event_type": "duplicated_operational_constant",
+      "subject": "DEFAULT_INTERVAL_MS",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "DEFAULT_RECYCLE_BIN_RETENTION_DAYS",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/gateway/board-service.ts,packages/web/src/routes/kanban/page.tsx"
+      },
+      "entry_id": "fe5e549639a6057fbaa9",
+      "event_type": "duplicated_operational_constant",
+      "subject": "DEFAULT_RECYCLE_BIN_RETENTION_DAYS",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "DEFAULT_VOICE",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/talk/kokoro.ts,packages/jinn/src/talk/kokoro_sidecar.py"
+      },
+      "entry_id": "2d62f8030158f8c81ffd",
+      "event_type": "duplicated_operational_constant",
+      "subject": "DEFAULT_VOICE",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "DIRECT_GROUP",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/sessions/registry.ts,packages/web/src/components/chat/sidebar-view-model.ts"
+      },
+      "entry_id": "363a7e89bbe138b59488",
+      "event_type": "duplicated_operational_constant",
+      "subject": "DIRECT_GROUP",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "DISCOVER_TIMEOUT_MS",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/engines/codex-interactive.ts,packages/jinn/src/engines/grok-interactive.ts"
+      },
+      "entry_id": "bcb311d4aa99954c42ab",
+      "event_type": "duplicated_operational_constant",
+      "subject": "DISCOVER_TIMEOUT_MS",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "MAX_RECYCLE_BIN_RETENTION_DAYS",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/gateway/board-service.ts,packages/web/src/routes/kanban/page.tsx"
+      },
+      "entry_id": "b9b9e497b33e86b7cf9e",
+      "event_type": "duplicated_operational_constant",
+      "subject": "MAX_RECYCLE_BIN_RETENTION_DAYS",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "MAX_UPLOAD_SIZE",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/gateway/__tests__/files-upload-boundary.test.ts,packages/jinn/src/gateway/files.ts"
+      },
+      "entry_id": "2c626349a92a996b0fc4",
+      "event_type": "duplicated_operational_constant",
+      "subject": "MAX_UPLOAD_SIZE",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "MIN_RECYCLE_BIN_RETENTION_DAYS",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/gateway/board-service.ts,packages/web/src/routes/kanban/page.tsx"
+      },
+      "entry_id": "00c94e9eaa9db1d9c1c0",
+      "event_type": "duplicated_operational_constant",
+      "subject": "MIN_RECYCLE_BIN_RETENTION_DAYS",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "STATE_PATH",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/shared/__tests__/usageAwareness.test.ts,packages/jinn/src/shared/usageAwareness.ts"
+      },
+      "entry_id": "1db0fc5e02a8d57cd0d0",
+      "event_type": "duplicated_operational_constant",
+      "subject": "STATE_PATH",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "name": "STDERR_MAX",
+        "occurrences": "2",
+        "sample_files": "packages/jinn/src/engines/grok.ts,packages/jinn/src/engines/kiro.ts"
+      },
+      "entry_id": "bf252ac354334ad2e249",
+      "event_type": "duplicated_operational_constant",
+      "subject": "STDERR_MAX",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DEFAULT_SCENARIO",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "6d4c1f1bd91d5350ecf0",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/scripts/talk-debug.mjs",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "PORT,HOME_DIR",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "047af9d4fd7b1b189f5e",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/scripts/talk-graph-smoke.sh",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DEFAULT_CONFIG",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "9e04843cec018354ffd8",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/cli/setup.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "GLOBAL_SKILL_DIRS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "eb8fc978295fbf6c2710",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/cli/skills.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "SYSTEMD_USER_DIR",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "d4e70e82295bbf647205",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/cli/startup.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DISCORD_MAX_LENGTH",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "e73d2731c5586fcc890b",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/connectors/discord/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "SLACK_MAX_LENGTH",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "33fb0eb58defdde4481c",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/connectors/slack/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "TELEGRAM_MAX_LENGTH",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "ec05714138c6c463aaa7",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/connectors/telegram/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "WA_MAX_LENGTH",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "869e5e070c7b2d9268e8",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/connectors/whatsapp/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DEFAULT_MAX_RUN_LOG_ENTRIES",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "d8bdc993d22e98661501",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/cron/jobs.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "MODEL_DONE,MODEL_INPROGRESS,MODEL_DONE_2",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "27637ed872767909d170",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/__tests__/antigravity-protocol.test.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "ANTIGRAVITY_BRAIN_DIR,ANTIGRAVITY_SETTINGS_PATH",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "babdc4955f9d6d98230e",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/antigravity-protocol.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "ANTIGRAVITY_DEFAULT_MODEL,TURN_TIMEOUT_MS,CONV_DISCOVER_TIMEOUT_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "b1567befc5dc7f771ba5",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/antigravity.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "high",
+        "constants": "MODEL_PRICES,DEFAULT_PRICE,NATIVE_COMMAND_MIN_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "cff79a1b68da4350ae2b",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/claude-interactive.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "CODEX_SESSIONS_DIR,TURN_TIMEOUT_MS,DISCOVER_TIMEOUT_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "0406b2030fbc0973a509",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/codex-interactive.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "CODEX_SESSIONS_DIR,TURN_TIMEOUT_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "e5704872ac6511d49670",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/codex.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "TURN_TIMEOUT_MS,DISCOVER_TIMEOUT_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "be6416101c50adee8931",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/grok-interactive.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "GROK_DEFAULT_MODEL,GROK_SESSIONS_DIR,STDERR_MAX",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "9a6b41c9f48c8104f7aa",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/grok.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "TURN_TIMEOUT_MS,HANDSHAKE_TIMEOUT_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "de3fceec6c1c214ec4ce",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/hermes-acp.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "TURN_TIMEOUT_MS,OUTPUT_MAX,STDERR_MAX",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "87176b1c9bf0d23e43c1",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/kiro.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "TURN_TIMEOUT_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "f3b23b044207d78f77f8",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/pi.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "UPSTREAM_IDLE_TIMEOUT_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "bfa7a25b554668035b8f",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/engines/sse-pty-proxy.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "MAX_UPLOAD_SIZE",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "40a21207ef306ef788a6",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/gateway/__tests__/files-upload-boundary.test.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "TICKET_SESSION_TAIL_LIMIT,HOOK_BODY_MAX_BYTES,MAX_BYTES",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "ba3797d0298c4742bb4d",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/gateway/api.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "AUTH_MAX_AGE_SECONDS,PTY_TOKEN_TTL_MS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "0876a0fcc76c8eaab12d",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/gateway/auth.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DEFAULT_SCENARIO"
+      },
+      "entry_id": "b77e631869c7f01e77db",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/scripts/talk-debug.mjs",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "GLOBAL_SKILL_DIRS"
+      },
+      "entry_id": "0babe0246ebee28f8888",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/cli/skills.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DISCORD_MAX_LENGTH"
+      },
+      "entry_id": "03e1dd17bdb919c9b305",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/connectors/discord/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "SLACK_MAX_LENGTH"
+      },
+      "entry_id": "8f46ed0579fd1b7c5ef4",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/connectors/slack/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "TELEGRAM_MAX_LENGTH"
+      },
+      "entry_id": "886787fd37fbe3aaad43",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/connectors/telegram/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "WA_MAX_LENGTH"
+      },
+      "entry_id": "43fe065db84cf1b15745",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/connectors/whatsapp/format.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "TURN_TIMEOUT_MS,HANDSHAKE_TIMEOUT_MS"
+      },
+      "entry_id": "bfa4fc791ac351331a5b",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/engines/hermes-acp.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "AUTH_MAX_AGE_SECONDS,PTY_TOKEN_TTL_MS"
+      },
+      "entry_id": "6c75dfd6daff7aca261e",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/gateway/auth.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "MIN_COMPRESS_BYTES"
+      },
+      "entry_id": "d13b5c1463d3e629868c",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/gateway/compress.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "DEFAULT_INTERVAL_MS,DEFAULT_STALE_MS"
+      },
+      "entry_id": "89f1df5a950a43055a10",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/gateway/status-reconciler.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "WS_HEARTBEAT_INTERVAL_MS"
+      },
+      "entry_id": "6756c96056cda1002e61",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/gateway/ws-heartbeat.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "SCHEMA_VERSION,CREATE_SCHEMA"
+      },
+      "entry_id": "cfc4919bc43fb464f0b2",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/store.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "SCAN_PATHS,SKIP_DIRS"
+      },
+      "entry_id": "0f2eb6f856424ce7485b",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/shared/__tests__/privacy-guard.test.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "TEMP_DIR,STATE_PATH"
+      },
+      "entry_id": "9051a28694aa6eb92041",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/shared/__tests__/usageAwareness.test.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "GROK_MODEL_LABELS"
+      },
+      "entry_id": "cad7a87772b1fc634673",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/shared/grok-models.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DEFAULT_PI_MESSAGES_PER_MINUTE"
+      },
+      "entry_id": "8b01c8096c87a01cbd7d",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/shared/pi-throttle.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "RATE_LIMIT_ERROR_RE"
+      },
+      "entry_id": "90474589f3970653a3a9",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/shared/rateLimit.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "STATE_PATH"
+      },
+      "entry_id": "e8ae8cd523d19a691e31",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/shared/usageAwareness.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "MAX_ATTACHMENTS"
+      },
+      "entry_id": "c0d2b6978a58fb62c2bd",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/talk/attachments.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "DEFAULT_VOICE,SAMPLE_RATE"
+      },
+      "entry_id": "e0ac8108d6698f979aab",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/talk/kokoro_sidecar.py",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "DEFAULT_ORCHESTRATOR_PERSONA,PERSONA_FILE"
+      },
+      "entry_id": "ddd8c384620f192fe703",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/talk/orchestrator-persona.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "URL"
+      },
+      "entry_id": "6a149d82266e777747e6",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/web/scripts/capture-talk.mjs",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "MAX_HEADER_AVATARS"
+      },
+      "entry_id": "b3b0c07226a1bd2a3469",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/web/src/components/chat/room-timeline.tsx",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "FORMAT_TIME_CACHE_MAX"
+      },
+      "entry_id": "0f9fe3e1a23bc7a78602",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/web/src/components/chat/sidebar-session-helpers.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "DIRECT_GROUP,VIRTUALIZE_THRESHOLD"
+      },
+      "entry_id": "8b5af0f76d706143f971",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/web/src/components/chat/sidebar-view-model.ts",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "reason": "not_mentioned_in_README_or_AGENTS"
+      },
+      "entry_id": "8149e0ccf490c19c8839",
+      "event_type": "config_surface_undocumented",
+      "subject": "schemas/",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/logs/session/062026"
+      },
+      "entry_id": "6c9962081fa2f69d03ed",
+      "event_type": "session_log_archive_missing_summary",
+      "subject": "docs/logs/session/062026",
+      "timestamp": "2020-04-07T10:21:04Z",
+      "watcher": "session_log_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DEFAULT_CROSS_FAMILY_REVIEW_POLICY"
+      },
+      "entry_id": "502afe194df6fcfb00f1",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/cross-family.ts",
+      "timestamp": "2020-01-09T16:24:45Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "DUAL_LANE_STATE_DIR"
+      },
+      "entry_id": "1cbea60847b3637f20f2",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/dual-lane-state.ts",
+      "timestamp": "2020-01-09T16:24:45Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "LIVE_RUN_MODES"
+      },
+      "entry_id": "31b2ed350029160e7673",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/live-run.ts",
+      "timestamp": "2020-01-09T16:24:45Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-24-architecture-seam-audit.md"
+      },
+      "entry_id": "3ad93dfd64d656f7cf63",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-24-architecture-seam-audit.md",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-24-dependency-criticality-audit.md"
+      },
+      "entry_id": "54494fd4763f66f3cf96",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-24-dependency-criticality-audit.md",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-24-fissure-high-level-findings.md"
+      },
+      "entry_id": "2a9a4e8bca1d8501b49b",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-24-fissure-high-level-findings.md",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-24-kanban-board-adversarial-audit.md"
+      },
+      "entry_id": "85783ac5b90cc1c177a9",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-24-kanban-board-adversarial-audit.md",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-24-matrix-orchestration-m1-m10-audit.md"
+      },
+      "entry_id": "8c820d4b27e8368c5d7f",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-24-matrix-orchestration-m1-m10-audit.md",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-24-nodejs-architecture-audit.md"
+      },
+      "entry_id": "6058e511690793b7f79f",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-24-nodejs-architecture-audit.md",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "subject": "docs/audits/2026-06-24-script-surface-classification-audit.md"
+      },
+      "entry_id": "20806bb53cc80862b67b",
+      "event_type": "audit_loose_dated_file",
+      "subject": "docs/audits/2026-06-24-script-surface-classification-audit.md",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "audit_retention_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "DASHBOARD_TELEMETRY_MAX_BYTES,DASHBOARD_TELEMETRY_MAX_RECORDS",
+        "surfaces": "schemas/"
+      },
+      "entry_id": "86ca090657105b62d1e9",
+      "event_type": "script_local_parameter_bypass",
+      "subject": "packages/jinn/src/gateway/api/orchestration-routes.ts",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "MAX_ARTIFACT_BYTES"
+      },
+      "entry_id": "3edd2988bb5d852e8f4f",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/artifacts.ts",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "high",
+        "constants": "DEFAULT_TERMINAL_ALLOCATION_RETENTION_MS,DEFAULT_TERMINAL_ALLOCATION_LIMIT,DEFAULT_SCHEDULER_TELEMETRY_RETENTION_MS"
+      },
+      "entry_id": "85f89b930f2136331ca6",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/scheduler-retention.ts",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "medium",
+        "constants": "SCHEMA_VERSION,CREATE_SCHEMA"
+      },
+      "entry_id": "7837fda092ea72d35fb4",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/store-schema.ts",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "config_centralization_watcher"
+    },
+    {
+      "correlates": {},
+      "details": {
+        "confidence": "low",
+        "constants": "ORCHESTRATION_TELEMETRY_LOG"
+      },
+      "entry_id": "3dedddd04d17c352fa3a",
+      "event_type": "new_script_missing_config_reference",
+      "subject": "packages/jinn/src/orchestration/telemetry.ts",
+      "timestamp": "2020-04-15T23:17:13Z",
+      "watcher": "config_centralization_watcher"
+    }
+  ],
+  "registry": "config_deviation",
+  "schema_version": 1
+}

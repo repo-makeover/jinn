@@ -5,7 +5,18 @@ import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import { SESSIONS_DB } from '../shared/paths.js';
 import { logger } from '../shared/logger.js';
-import type { ChatBlock, ChatBlockEnvelope, JsonObject, ReplyContext, Session } from '../shared/types.js';
+import type {
+  Approval,
+  ArchiveKind,
+  ArchivedSessionSnapshot,
+  ChatBlock,
+  ChatBlockEnvelope,
+  JsonObject,
+  ProjectArchive,
+  ProjectArchiveDetail,
+  ReplyContext,
+  Session,
+} from '../shared/types.js';
 import { blockFallbackText, mergeBlock, validateBlockEnvelope } from '../shared/blocks.js';
 
 let db: Database.Database;

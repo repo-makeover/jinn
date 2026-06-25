@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Employee, JinnConfig } from "../shared/types.js";
 import { JINN_HOME, ORG_DIR, CRON_JOBS, DOCS_DIR } from "../shared/paths.js";
 import { gatewayBaseUrl } from "../gateway/gateway-info.js";
+import { getAllParents } from "../gateway/org-hierarchy.js";
 
 /**
  * Token budget strategy:

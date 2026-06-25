@@ -1,0 +1,1 @@
+{"pattern_hash":"5b24de9f7f14b277","domain":"config_compliance","description":"GR-001 file:repo_config.yaml","repos":{"jinn":{"repo_id":"jinn","drift_type":"undeclared","first_seen":"2020-04-07T10:21:04Z","last_seen":"2020-12-01T02:09:51Z","occurrences":2,"linked_finding_codes":["GR-001"],"linked_exception_id":null}},"promotable":false,"schema_version":"1.0"}

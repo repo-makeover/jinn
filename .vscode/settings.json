@@ -18,5 +18,41 @@
         "titleBar.inactiveBackground": "#007fff99",
         "titleBar.inactiveForeground": "#e7e7e799"
     },
-    "peacock.color": "#007fff"
+    "peacock.color": "#007fff",
+    "files.exclude": {
+        "**/.tmp-commitmsg-venv": true,
+        "**/.venv": true,
+        "**/venv": true,
+        "**/.dory": true,
+        "**/.pytest_cache": true,
+        "**/.mypy_cache": true,
+        "**/.ruff_cache": true
+    },
+    "search.exclude": {
+        "**/.tmp-commitmsg-venv": true,
+        "**/.venv": true,
+        "**/venv": true,
+        "**/.dory": true,
+        "**/.pytest_cache": true,
+        "**/.mypy_cache": true,
+        "**/.ruff_cache": true
+    },
+    "files.watcherExclude": {
+        "**/.tmp-commitmsg-venv/**": true,
+        "**/.venv/**": true,
+        "**/venv/**": true,
+        "**/.dory/**": true,
+        "**/.pytest_cache/**": true,
+        "**/.mypy_cache/**": true,
+        "**/.ruff_cache/**": true,
+        "**/node_modules/**": true,
+        "**/dist/**": true,
+        "**/build/**": true
+    },
+    "python.analysis.exclude": [
+        "**/.tmp-commitmsg-venv/**",
+        "**/.venv/**",
+        "**/venv/**"
+    ],
+    "workbench.colorTheme": "Quiet Light"
 }

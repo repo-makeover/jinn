@@ -215,6 +215,7 @@ export function ChatPane({
   }, [sessionId])
   const [effortPendingNote, setEffortPendingNote] = useState(false)
   const [selectorError, setSelectorError] = useState<string | null>(null)
+  const [interruptError, setInterruptError] = useState<string | null>(null)
   const cliTerminalRef = useRef<CliTerminalHandle | null>(null)
 
   // Pre-fill for a NEW chat. Explicit employee selection uses employee config;
@@ -337,7 +338,7 @@ export function ChatPane({
             engine: selector.engine,
             model: selector.model,
             effortLevel: selector.effortLevel,
-            cwd,
+            cwd: undefined,
           })
           if (viewMode === 'cli' && supportsCliPreference(selector.engine)) (params as Record<string, unknown>).mode = 'interactive'
           const session = (await api.createSession(params)) as Record<string, unknown>

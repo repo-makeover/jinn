@@ -12,6 +12,8 @@ import { EmojiPicker } from "@/components/ui/emoji-picker"
 import { useModelRegistry } from "@/hooks/use-model-registry"
 import { RemoteAccessPanel } from "@/components/auth/remote-access-panel"
 import { useAuth } from "@/routes/auth-provider"
+import { formatLineList, parseLineList, formatFallbackChain, parseFallbackChain } from "./settings-config"
+import type { Config } from "./settings-constants"
 
 // ---------------------------------------------------------------------------
 // Accent color presets
@@ -32,77 +34,7 @@ const ACCENT_PRESETS = [
   { label: "Pink", value: "#EC4899" },
 ]
 
-// ---------------------------------------------------------------------------
-// Config type (gateway API)
-// ---------------------------------------------------------------------------
-
-interface Config {
-  gateway?: { port?: number; host?: string }
-  engines?: {
-    default?: string
-    claude?: { bin?: string; model?: string; effortLevel?: string }
-    codex?: { bin?: string; model?: string; effortLevel?: string }
-    grok?: { bin?: string; model?: string; effortLevel?: string }
-  }
-  sessions?: {
-    maxDurationMinutes?: number
-    maxCostUsd?: number
-    interruptOnNewMessage?: boolean
-    rateLimitStrategy?: "wait" | "fallback"
-    fallbackEngine?: "codex"
-  }
-  connectors?: {
-    slack?: {
-      appToken?: string
-      botToken?: string
-      shareSessionInChannel?: boolean
-      allowFrom?: string | string[]
-      ignoreOldMessagesOnBoot?: boolean
-    }
-    discord?: {
-      botToken?: string
-      allowFrom?: string | string[]
-      guildId?: string
-      channelId?: string
-    }
-    telegram?: {
-      botToken?: string
-      allowFrom?: number[]
-      ignoreOldMessagesOnBoot?: boolean
-    }
-    whatsapp?: {
-      authDir?: string
-      allowFrom?: string[]
-    }
-    web?: Record<string, never>
-    instances?: Array<{
-      id: string
-      type: "discord" | "slack" | "whatsapp" | "telegram"
-      employee?: string
-      botToken?: string
-      allowFrom?: string | string[]
-      guildId?: string
-      channelId?: string
-      appToken?: string
-      authDir?: string
-      ignoreOldMessagesOnBoot?: boolean
-      [key: string]: unknown
-    }>
-  }
-  logging?: {
-    level?: string
-    stdout?: boolean
-    file?: boolean
-  }
-  cron?: {
-    defaultDelivery?: { connector?: string; channel?: string }
-  }
-  portal?: {
-    portalName?: string
-    operatorName?: string
-  }
-  [key: string]: unknown
-}
+// Config type imported from settings-constants (see import above)
 
 // ---------------------------------------------------------------------------
 // Section wrapper using CSS variable styling
@@ -195,6 +127,36 @@ function SettingsSelect({
         </option>
       ))}
     </select>
+  )
+}
+
+function SettingsTextarea({
+  value,
+  onChange,
+  placeholder,
+  rows = 4,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  rows?: number
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={rows}
+      className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[8px] text-[length:var(--text-footnote)] text-[var(--text-primary)] resize-y"
+    />
+  )
+}
+
+function FieldHint({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-[4px] text-[length:var(--text-caption1)] text-[var(--label-secondary)]">
+      {children}
+    </div>
   )
 }
 

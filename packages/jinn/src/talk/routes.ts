@@ -16,6 +16,7 @@ import fs from "node:fs";
 import yaml from "js-yaml";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import type { ApiContext } from "../gateway/api.js";
+import { assertFetchOk, jsonApiHeaders } from "../gateway/internal-auth.js";
 import { gatewayBaseUrl } from "../gateway/gateway-info.js";
 import { readJsonBody } from "../gateway/http-helpers.js";
 import type { JinnConfig, JsonObject } from "../shared/types.js";

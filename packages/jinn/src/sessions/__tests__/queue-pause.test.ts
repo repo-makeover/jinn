@@ -4,13 +4,20 @@ import { SessionQueue } from "../queue.js";
 // markQueueItemRunning/Completed touch the registry DB — stub them out
 vi.mock("../registry.js", () => ({
   getQueueItem: vi.fn(() => ({ status: "pending" })),
+  listPausedQueueKeys: vi.fn(() => []),
   markQueueItemRunning: vi.fn(),
   markQueueItemCompleted: vi.fn(),
   pauseQueueKey: vi.fn(),
   resumeQueueKey: vi.fn(),
 }));
 
-import { getQueueItem, markQueueItemRunning, markQueueItemCompleted } from "../registry.js";
+import {
+  getQueueItem,
+  markQueueItemCompleted,
+  markQueueItemRunning,
+  pauseQueueKey,
+  resumeQueueKey,
+} from "../registry.js";
 
 const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 
