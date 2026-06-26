@@ -42,7 +42,7 @@ You've already installed the best agent CLIs. Jinn turns that pile of terminals 
 
 ## Quickstart
 
-> **Prerequisites:** Node.js **22 or 24** (avoid 25 for now), and at least one agent CLI installed **and signed in** - Jinn orchestrates them and can't run a session without one.
+> **Prerequisites:** Node.js **24** (the repo pins **24.13.0** via `.nvmrc` and root tooling enforces `>=24 <25`), and at least one agent CLI installed **and signed in** - Jinn orchestrates them and can't run a session without one.
 
 ```bash
 # 1. Install
@@ -109,6 +109,11 @@ Jinn is a **gateway daemon + web dashboard**. The daemon dispatches each task to
       |   Scheduler   |  |   System    |
       +---------------+  +-------------+
 ```
+
+For the maintained implementation map, architecture notes, and validation ledger,
+start with [`docs/INDEX.md`](docs/INDEX.md). The current diagrams live in
+[`docs/IMPLEMENTATION_DIAGRAMS.md`](docs/IMPLEMENTATION_DIAGRAMS.md), including
+the gateway/API/session/engine component map.
 
 Three ideas make Jinn click:
 

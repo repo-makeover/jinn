@@ -7,7 +7,29 @@ artifacts unless explicitly published.
 ## Current Operator Docs
 
 - `README.md`: public overview and install/use workflow.
+- `docs/USER_MANUAL.md`: maintained user manual for setup, workflows,
+  persistence, recovery, and troubleshooting.
+- `docs/ARCHITECTURE.md`: current architecture summary, component map,
+  persistence map, boundaries, risks, and extension points.
+- `docs/SPECIFICATION.md`: source-grounded product specification with
+  requirement IDs and validation requirements.
+- `docs/IMPLEMENTATION_DIAGRAMS.md`: Mermaid diagrams for runtime, docs, and API
+  routing.
 - `docs/feature_inventory.md`: implemented CLI/API/UI surfaces and fidelity gaps.
+- `docs/TEST_LEDGER.md`: current validation evidence and test coverage map.
+- `docs/TODO_LEDGER.md`: active documentation/maintenance TODOs only.
+- `docs/DECISION_LOG.md`: accepted and deferred documentation/governance
+  decisions.
+- `docs/DOC_MAINTENANCE.md`: documentation update contract for future changes.
+- `docs/DOCUMENTATION_INVENTORY.md`: inventory of canonical, current,
+  historical, local-only, and generated documentation surfaces.
+- `docs/STRUCTURE_COMPLIANCE.md`: documentation structure and retention-policy
+  compliance report.
+- `docs/UPSTREAM_DIFF_HRISTO2612.md`: source-grounded comparison between this
+  checkout and `https://github.com/hristo2612/jinn`.
+- `docs/LOG_ARCHIVE.md`: raw-log retention policy and durable summary index.
+- `docs/SESSION_SUMMARY_062026.md`: durable June 2026 session summary.
+- `docs/AUDIT_SUMMARY_062026.md`: durable June 2026 audit summary.
 - `docs/agent/mermaid-diagram-guidance.md`: local guidance for Mermaid diagrams
   in architecture and workflow docs.
 - `docs/polish/polish-report.md`: latest code-polish stewardship report and

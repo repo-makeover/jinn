@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This guide covers the basics.
 
 ## Prerequisites
 
-- Node.js 24 or later (the repo pins 24.13.0 via `.nvmrc`)
+- Node.js 24.x (the repo pins 24.13.0 via `.nvmrc` and root tooling enforces `>=24 <25`)
 - pnpm 10+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm install -g @anthropic-ai/claude-code`)
 
@@ -24,14 +24,17 @@ Thanks for your interest in contributing. This guide covers the basics.
    ```bash
    pnpm dev
    ```
-   Then open [http://localhost:3000](http://localhost:3000). The Next.js dev
-   server proxies API requests to the gateway on `:7777` automatically.
+   For the production-like local daemon path, use `pnpm start` and open
+   [http://localhost:7777](http://localhost:7777). The web package itself is a
+   Vite app, so package-local UI development uses the Vite dev server from
+   `packages/web`.
 
 ## Submitting Pull Requests
 
 - Create a feature branch from `main`.
 - Keep commits focused and descriptive.
-- Run `pnpm typecheck` and `pnpm build` before submitting.
+- Run `pnpm lint`, `pnpm typecheck`, and `pnpm test` before submitting. Run
+  `pnpm build` before release-sensitive changes.
 - Open a pull request against `main` with a clear description of your changes.
 
 ## Code Style
@@ -45,6 +48,8 @@ Thanks for your interest in contributing. This guide covers the basics.
 
 - `packages/jinn` -- Core gateway daemon and CLI (package dir).
 - `packages/web` -- Web dashboard frontend.
+- `docs/INDEX.md` -- Canonical documentation index.
+- `docs/TEST_LEDGER.md` -- Current validation evidence and gaps.
 
 ## Questions?
 

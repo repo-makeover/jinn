@@ -363,10 +363,10 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
 
   // 1. Check Node.js version
   const nodeVersion = parseInt(process.versions.node.split(".")[0], 10);
-  if (nodeVersion >= 22) {
+  if (nodeVersion >= 24 && nodeVersion < 25) {
     ok(`Node.js v${process.versions.node}`);
   } else {
-    warn(`Node.js v${process.versions.node} -- v22+ recommended`);
+    warn(`Node.js v${process.versions.node} -- v24.x required by repo tooling`);
   }
 
   // 2. Check for claude binary

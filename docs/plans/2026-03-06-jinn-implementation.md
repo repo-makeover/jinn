@@ -690,7 +690,7 @@ git commit -m "feat: add gateway server with API, file watcher, and lifecycle ma
 
 **Step 1: Write setup command (`cli/setup.ts`)**
 
-1. Check Node.js version (>= 22)
+1. Check Node.js version (current repo tooling requires Node.js 24.x)
 2. Check for `claude` binary - if missing, prompt to install via `npm install -g @anthropic-ai/claude-code`
 3. Check for `codex` binary - if missing, prompt to install via `npm install -g @openai/codex`
 4. Check auth: run `claude --version` and `codex --version` to verify
