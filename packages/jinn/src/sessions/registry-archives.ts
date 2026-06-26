@@ -8,7 +8,7 @@ import type {
   ProjectArchiveDetail,
   Session,
 } from "../shared/types.js";
-import type { SessionMessage } from "./registry.js";
+import type { SessionMessage } from "./registry/messages.js";
 
 export interface ArchiveRegistryDeps {
   getDb: () => Database.Database;
