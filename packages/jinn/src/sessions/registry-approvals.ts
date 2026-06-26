@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
-import type { Approval, JsonObject } from "../shared/types.js";
+import type { Approval, ApprovalDecision, JsonObject } from "../shared/types.js";
 
 type ApprovalRow = {
   id: string;
@@ -12,6 +12,8 @@ type ApprovalRow = {
   created_at: string;
   resolved_at: string | null;
   actor: string | null;
+  decision_notes: string | null;
+  resulting_action: string | null;
 };
 
 export interface ApprovalRegistryDeps {
@@ -32,6 +34,8 @@ function rowToApproval(row: ApprovalRow, deps: ApprovalRegistryDeps): Approval {
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
     actor: row.actor,
+    decisionNotes: row.decision_notes,
+    resultingAction: row.resulting_action,
   };
 }
 
@@ -50,8 +54,8 @@ export function importApprovalsJsonIfNeededFromRegistry(filePath: string, deps: 
 
   const insert = db.prepare(`
     INSERT OR IGNORE INTO approvals
-      (id, session_id, type, payload, state, created_at, resolved_at, actor)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, type, payload, state, created_at, resolved_at, actor, decision_notes, resulting_action)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const txn = db.transaction((items: unknown[]) => {
     for (const item of items) {
@@ -78,6 +82,8 @@ export function importApprovalsJsonIfNeededFromRegistry(filePath: string, deps: 
         approval.createdAt,
         approval.resolvedAt ?? null,
         approval.actor ?? null,
+        approval.decisionNotes ?? null,
+        approval.resultingAction ?? null,
       );
     }
     deps.setMeta(db, metaKey, "1");
@@ -86,7 +92,7 @@ export function importApprovalsJsonIfNeededFromRegistry(filePath: string, deps: 
 }
 
 export function listApprovalRecordsFromRegistry(
-  filter: { state?: Approval["state"] | "all"; sessionId?: string } | undefined,
+  filter: { state?: Approval["state"] | "all"; sessionId?: string; type?: Approval["type"] | "all" } | undefined,
   deps: ApprovalRegistryDeps,
 ): Approval[] {
   const db = deps.getDb();
@@ -100,6 +106,10 @@ export function listApprovalRecordsFromRegistry(
   if (filter?.sessionId) {
     clauses.push("session_id = ?");
     args.push(filter.sessionId);
+  }
+  if (filter?.type && filter.type !== "all") {
+    clauses.push("type = ?");
+    args.push(filter.type);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const rows = db.prepare(`SELECT * FROM approvals ${where} ORDER BY created_at DESC`).all(...args) as ApprovalRow[];
@@ -137,11 +147,13 @@ export function createApprovalRecordInRegistry(input: {
       createdAt: new Date().toISOString(),
       resolvedAt: null,
       actor: null,
+      decisionNotes: null,
+      resultingAction: null,
     };
     db.prepare(`
       INSERT INTO approvals
-        (id, session_id, type, payload, state, created_at, resolved_at, actor)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, type, payload, state, created_at, resolved_at, actor, decision_notes, resulting_action)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       approval.id,
       approval.sessionId,
@@ -151,6 +163,8 @@ export function createApprovalRecordInRegistry(input: {
       approval.createdAt,
       approval.resolvedAt,
       approval.actor,
+      approval.decisionNotes,
+      approval.resultingAction,
     );
     return approval;
   });
@@ -161,8 +175,10 @@ export function createApprovalRecordInRegistry(input: {
 
 export function resolveApprovalRecordInRegistry(
   id: string,
-  state: "approved" | "rejected",
+  state: ApprovalDecision,
   actor: string | null | undefined,
+  decisionNotes: string | null | undefined,
+  resultingAction: string | null | undefined,
   deps: ApprovalRegistryDeps,
 ): Approval | undefined {
   const db = deps.getDb();
@@ -171,8 +187,8 @@ export function resolveApprovalRecordInRegistry(
     if (!existing) return undefined;
     if (existing.state !== "pending") return rowToApproval(existing, deps);
     const resolvedAt = new Date().toISOString();
-    db.prepare("UPDATE approvals SET state = ?, resolved_at = ?, actor = ? WHERE id = ? AND state = 'pending'")
-      .run(state, resolvedAt, actor ?? null, id);
+    db.prepare("UPDATE approvals SET state = ?, resolved_at = ?, actor = ?, decision_notes = ?, resulting_action = ? WHERE id = ? AND state = 'pending'")
+      .run(state, resolvedAt, actor ?? null, decisionNotes ?? null, resultingAction ?? null, id);
     return getApprovalRecordFromRegistry(id, deps);
   });
   return txn() as Approval | undefined;

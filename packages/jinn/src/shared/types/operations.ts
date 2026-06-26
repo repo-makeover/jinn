@@ -1,6 +1,26 @@
 import type { JsonObject } from "./json.js";
 import type { AgentModelPolicy } from "./engine.js";
 
+export type ApprovalDecision = "approved" | "rejected" | "deferred" | "revised";
+export type ApprovalState = "pending" | ApprovalDecision;
+export type CheckpointResultingAction =
+  | "resume_session"
+  | "stay_paused"
+  | "stop_session"
+  | "record_only";
+export type CheckpointOption = ApprovalDecision;
+
+export type CheckpointPayload = JsonObject & {
+  decisionNeeded: string;
+  why: string;
+  affectedFiles?: string[];
+  affectedArtifacts?: string[];
+  affectedActions?: string[];
+  options?: CheckpointOption[];
+  resumePrompt?: string | null;
+  revisePrompt?: string | null;
+};
+
 /**
  * A human approval gate. Generic from day one so future producers (tool-use,
  * custom gates) need no schema change — only `fallback` is wired as a producer
@@ -9,14 +29,16 @@ import type { AgentModelPolicy } from "./engine.js";
 export interface Approval {
   id: string;
   sessionId: string;
-  type: "fallback" | "tool" | "custom";
+  type: "fallback" | "tool" | "custom" | "checkpoint";
   /** Producer-specific. For `fallback`: { from, to, handoffPath, reason }. */
   payload: JsonObject;
-  state: "pending" | "approved" | "rejected";
+  state: ApprovalState;
   createdAt: string;
   resolvedAt?: string | null;
   /** Who resolved it (SSO identity / "web-user"). */
   actor?: string | null;
+  decisionNotes?: string | null;
+  resultingAction?: string | null;
 }
 
 export interface CronJob {

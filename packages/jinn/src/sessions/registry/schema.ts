@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS approvals (
   state TEXT NOT NULL,
   created_at TEXT NOT NULL,
   resolved_at TEXT,
-  actor TEXT
+  actor TEXT,
+  decision_notes TEXT,
+  resulting_action TEXT
 )
 `;
 

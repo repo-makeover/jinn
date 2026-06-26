@@ -83,3 +83,17 @@ export function migrateFilesSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files (sha256);
   `);
 }
+
+export function migrateApprovalsSchema(database: Database.Database): void {
+  const cols = database.prepare('PRAGMA table_info(approvals)').all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map((c) => c.name));
+  const missingColumns: Array<[string, string]> = [
+    ['decision_notes', 'TEXT'],
+    ['resulting_action', 'TEXT'],
+  ];
+  for (const [name, type] of missingColumns) {
+    if (!colNames.has(name)) {
+      database.exec(`ALTER TABLE approvals ADD COLUMN ${name} ${type}`);
+    }
+  }
+}

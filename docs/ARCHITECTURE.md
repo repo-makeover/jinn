@@ -34,6 +34,9 @@ owning model reasoning.
 - Run-scoped resource attachments: persisted in session `transportMeta`, exposed
   through session APIs, and normalized into exact file paths plus structured
   prompt context at dispatch time.
+- Human checkpoints: persisted in the approval/checkpoint registry, surfaced via
+  dedicated checkpoint APIs, and able to pause or resume session execution with
+  a durable human-decision trail.
 - Orchestration telemetry/recovery/worktrees: managed under Jinn runtime paths and bounded retention policies.
 
 ## Workflows
@@ -73,6 +76,9 @@ owning model reasoning.
 - Run attachment normalization lives in the gateway service layer; routes
   translate request shapes and session storage keeps the durable run-level
   resource roster.
+- Human checkpoint semantics live in the gateway service layer so route modules
+  only translate inputs/outputs while the shared approval store keeps the
+  durable decision history.
 
 ## Extension Points
 

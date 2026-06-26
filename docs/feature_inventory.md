@@ -150,6 +150,28 @@
   the prompt also includes a structured "Attached resources" block for folders,
   URLs, access mode, intended use, artifact linkage, and producing-run context.
 
+### Human checkpoints and approval gates
+- `packages/jinn/src/gateway/checkpoints.ts`
+- `packages/jinn/src/gateway/api/routes/checkpoints.ts`
+- `packages/jinn/src/gateway/api/routes/approvals.ts`
+- Jinn now exposes a generic human-checkpoint primitive on top of the existing
+  approval store, so runs can pause for explicit human decisions without
+  inventing producer-specific pause flows.
+- Checkpoints record the decision needed, why it is needed, affected files,
+  artifacts, and actions, allowed human options (`approved`, `rejected`,
+  `deferred`, `revised`), approver identity when available, timestamp,
+  decision notes, and resulting action.
+- `POST /api/checkpoints` creates a checkpoint for a session and, by default,
+  pauses the session in `waiting` with a visible notification trail.
+- `GET /api/checkpoints` and `GET /api/checkpoints/:id` expose the checkpoint
+  queue and history.
+- `POST /api/checkpoints/:id/decision` records a human decision and either
+  keeps the run paused, stops it, records the outcome only, or resumes the
+  session with a stored or supplied prompt.
+- Existing fallback approvals continue to work through `/api/approvals/*`, but
+  the underlying store now captures decision notes and resulting actions for the
+  broader checkpoint model too.
+
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
 - `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded

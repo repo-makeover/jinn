@@ -1,5 +1,5 @@
 import { APPROVALS_FILE } from "../shared/paths.js";
-import type { Approval, JsonObject } from "../shared/types.js";
+import type { Approval, ApprovalDecision, JsonObject } from "../shared/types.js";
 import {
   clearApprovalRecordsForTest,
   createApprovalRecord,
@@ -33,7 +33,7 @@ export function __setApprovalsStoreForTest(path: string): void {
   clearApprovalRecordsForTest();
 }
 
-export function listApprovals(filter?: { state?: Approval["state"] | "all"; sessionId?: string }): Approval[] {
+export function listApprovals(filter?: { state?: Approval["state"] | "all"; sessionId?: string; type?: Approval["type"] | "all" }): Approval[] {
   ensureMigrated();
   return listApprovalRecords(filter);
 }
@@ -70,14 +70,16 @@ export class ApprovalStateError extends Error {
  */
 export function resolveApproval(
   id: string,
-  state: "approved" | "rejected",
+  state: ApprovalDecision,
   actor?: string | null,
+  decisionNotes?: string | null,
+  resultingAction?: string | null,
 ): Approval {
   ensureMigrated();
   const current = getApprovalRecord(id);
   if (!current) throw new Error(`approval ${id} not found`);
   if (current.state !== "pending") throw new ApprovalStateError(current.state);
-  const approval = resolveApprovalRecord(id, state, actor);
+  const approval = resolveApprovalRecord(id, state, actor, decisionNotes, resultingAction);
   if (!approval) throw new Error(`approval ${id} not found`);
   return approval;
 }

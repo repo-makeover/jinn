@@ -29,7 +29,7 @@ import { getMessages, type SessionMessage } from './registry/messages.js';
 import { getSession } from './registry/sessions.js';
 
 export { initDb } from './registry/core.js';
-export { migrateFilesSchema, migrateMessagesSchema, migrateSessionsSchema } from './registry/migrations.js';
+export { migrateApprovalsSchema, migrateFilesSchema, migrateMessagesSchema, migrateSessionsSchema } from './registry/migrations.js';
 export {
   backfillFtsSync,
   disableFtsForProcess,
@@ -165,7 +165,7 @@ export function importApprovalsJsonIfNeeded(filePath: string): void {
   importApprovalsJsonIfNeededFromRegistry(filePath, approvalRegistryDeps);
 }
 
-export function listApprovalRecords(filter?: { state?: Approval["state"] | "all"; sessionId?: string }): Approval[] {
+export function listApprovalRecords(filter?: { state?: Approval["state"] | "all"; sessionId?: string; type?: Approval["type"] | "all" }): Approval[] {
   return listApprovalRecordsFromRegistry(filter, approvalRegistryDeps);
 }
 
@@ -183,10 +183,12 @@ export function createApprovalRecord(input: {
 
 export function resolveApprovalRecord(
   id: string,
-  state: "approved" | "rejected",
+  state: Approval["state"] extends "pending" ? never : Exclude<Approval["state"], "pending">,
   actor?: string | null,
+  decisionNotes?: string | null,
+  resultingAction?: string | null,
 ): Approval | undefined {
-  return resolveApprovalRecordInRegistry(id, state, actor, approvalRegistryDeps);
+  return resolveApprovalRecordInRegistry(id, state, actor, decisionNotes, resultingAction, approvalRegistryDeps);
 }
 
 export function clearApprovalRecordsForTest(): void {
