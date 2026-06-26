@@ -24,6 +24,7 @@ import {
   EngineConfigurationSection,
   GatewayWorkspacesSection,
   LoggingSection,
+  OrchestrationSection,
   RecoveryFallbacksSection,
 } from "./settings-config-sections"
 import { FieldRow, Section, SettingsInput, SettingsSelect, ToggleSwitch } from "./settings-fields"
@@ -261,6 +262,11 @@ export default function SettingsPage() {
                 updateNumberConfig={updateNumberConfig}
               />
               <BoardWorkerSection
+                config={config}
+                updateConfig={updateConfig}
+                updateNumberConfig={updateNumberConfig}
+              />
+              <OrchestrationSection
                 config={config}
                 updateConfig={updateConfig}
                 updateNumberConfig={updateNumberConfig}

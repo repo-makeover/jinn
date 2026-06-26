@@ -126,6 +126,15 @@ export interface Config {
       minRemainingPercent?: number
     }
   }
+  orchestration?: {
+    enabled?: boolean
+    configDir?: string
+    dbPath?: string
+    worktreeRoot?: string
+    maxWorktrees?: number
+    sameFamilyReviewerFallback?: boolean
+    empiricalRouting?: boolean
+  }
   portal?: {
     portalName?: string
     operatorName?: string

@@ -46,6 +46,15 @@ vi.mock("@/components/org/employee-detail", () => ({
   ),
 }));
 
+vi.mock("@/components/org/employee-create-form", () => ({
+  EmployeeCreateForm: ({ onCancel }: { onCancel: () => void }) => (
+    <div>
+      <div data-testid="employee-create-form">create form</div>
+      <button type="button" onClick={onCancel}>cancel create</button>
+    </div>
+  ),
+}));
+
 vi.mock("@/components/org/org-map", () => ({
   OrgMap: ({
     employees,
@@ -213,5 +222,15 @@ describe("OrgPage department tabs", () => {
 
     expect((await screen.findByTestId("employee-detail")).textContent).toContain("engineer");
     expect(orgMapState.selectedName).toBe("engineer");
+  });
+
+  it("opens the create-agent panel from the toolbar", async () => {
+    render(<OrgPage />);
+
+    await screen.findByTestId("org-map");
+    fireEvent.click(screen.getByRole("button", { name: "Add agent" }));
+
+    expect(await screen.findByTestId("employee-create-form")).toBeDefined();
+    expect(screen.queryByTestId("employee-detail")).toBeNull();
   });
 });

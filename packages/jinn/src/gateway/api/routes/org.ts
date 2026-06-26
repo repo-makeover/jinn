@@ -103,6 +103,33 @@ export async function handleOrgRoutes(
     return true;
   }
 
+  if (method === "POST" && pathname === "/api/org/employees") {
+    const parsed = await readJsonBody(req, res);
+    if (!parsed.ok) return true;
+    const body = parsed.body as Record<string, unknown>;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      badRequest(res, "employee body must be a JSON object");
+      return true;
+    }
+    const { createEmployeeYaml, validateEmployeeCreate } = await import("../../org.js");
+    const registry = scanOrg();
+    const result = validateEmployeeCreate(context.getConfig(), body, registry.keys());
+    if (!result.ok || !result.employee) {
+      badRequest(res, result.error || "invalid employee");
+      return true;
+    }
+    const wrote = createEmployeeYaml(result.employee);
+    if (!wrote) {
+      badRequest(res, `employee "${result.employee.name}" already exists`);
+      return true;
+    }
+    context.reloadOrg?.();
+    context.emit("org:updated", { employee: result.employee.name, action: "created" });
+    const created = scanOrg().get(result.employee.name);
+    json(res, { status: "ok", employee: created ?? null }, 201);
+    return true;
+  }
+
   params = matchRoute("/api/org/employees/:name", pathname);
   if (method === "PATCH" && params) {
     const parsed = await readJsonBody(req, res);
@@ -120,14 +147,12 @@ export async function handleOrgRoutes(
       return true;
     }
     const managerName = typeof body.managerName === "string" ? body.managerName.trim() : "";
-    if (!managerName) {
-      badRequest(res, "managerName is required");
-      return true;
-    }
-    const auth = authorizeManagerScope(registry, managerName, [params.name]);
-    if (!auth.ok) {
-      json(res, { error: auth.error }, 403);
-      return true;
+    if (managerName) {
+      const auth = authorizeManagerScope(registry, managerName, [params.name]);
+      if (!auth.ok) {
+        json(res, { error: auth.error }, 403);
+        return true;
+      }
     }
     const employeeUpdate = { ...body };
     delete employeeUpdate.managerName;

@@ -435,6 +435,67 @@ export function BoardWorkerSection({
   )
 }
 
+export function OrchestrationSection({
+  config,
+  updateConfig,
+  updateNumberConfig,
+}: SharedConfigProps) {
+  return (
+    <Section title="Orchestration">
+      <FieldRow label="Enabled">
+        <ToggleSwitch
+          checked={config.orchestration?.enabled ?? false}
+          onChange={(v) => updateConfig(["orchestration", "enabled"], v)}
+        />
+      </FieldRow>
+      <FieldRow label="Config Dir">
+        <SettingsInput
+          value={config.orchestration?.configDir ?? ""}
+          onChange={(v) => updateConfig(["orchestration", "configDir"], v.trim() || undefined)}
+          placeholder="~/.jinn/orchestration"
+        />
+      </FieldRow>
+      <FieldRow label="DB Path">
+        <SettingsInput
+          value={config.orchestration?.dbPath ?? ""}
+          onChange={(v) => updateConfig(["orchestration", "dbPath"], v.trim() || undefined)}
+          placeholder="~/.jinn/orchestration/orchestration.db"
+        />
+      </FieldRow>
+      <FieldRow label="Worktree Root">
+        <SettingsInput
+          value={config.orchestration?.worktreeRoot ?? ""}
+          onChange={(v) => updateConfig(["orchestration", "worktreeRoot"], v.trim() || undefined)}
+          placeholder="~/.jinn/orchestration/worktrees"
+        />
+      </FieldRow>
+      <FieldRow label="Max Worktrees">
+        <SettingsInput
+          type="number"
+          value={String(config.orchestration?.maxWorktrees ?? "")}
+          onChange={(v) => updateNumberConfig(["orchestration", "maxWorktrees"], v)}
+          placeholder="12"
+        />
+      </FieldRow>
+      <FieldRow label="Same-family Reviewer Fallback">
+        <ToggleSwitch
+          checked={config.orchestration?.sameFamilyReviewerFallback ?? false}
+          onChange={(v) => updateConfig(["orchestration", "sameFamilyReviewerFallback"], v)}
+        />
+      </FieldRow>
+      <FieldRow label="Empirical Routing">
+        <ToggleSwitch
+          checked={config.orchestration?.empiricalRouting ?? false}
+          onChange={(v) => updateConfig(["orchestration", "empiricalRouting"], v)}
+        />
+      </FieldRow>
+      <FieldHint>
+        Turn this on to bind the orchestration runtime. The config directory should contain workers, roles, and coordinators definitions.
+      </FieldHint>
+    </Section>
+  )
+}
+
 export function CronSection({
   config,
   updateConfig,

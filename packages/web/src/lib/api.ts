@@ -41,6 +41,15 @@ export interface Employee {
   directReports?: string[];
   depth?: number;
   chain?: string[];
+  modelPolicy?: {
+    fallback_chain?: Array<{
+      engine: string;
+      model?: string;
+      effortLevel?: string;
+      employee?: string;
+      reason?: string;
+    }>;
+  };
 }
 
 /** Editable employee fields accepted by PATCH /api/org/employees/:name.
@@ -56,6 +65,17 @@ export interface EmployeeUpdate {
   reportsTo?: string | string[];
   cliFlags?: string[];
   alwaysNotify?: boolean;
+  fallbackModel?: string | null;
+}
+
+export interface EmployeeCreate extends EmployeeUpdate {
+  name: string;
+  displayName: string;
+  department: string;
+  rank: "manager" | "senior" | "employee";
+  engine: string;
+  model: string;
+  persona: string;
 }
 
 export interface OrgWarning {
@@ -505,6 +525,8 @@ export const api = {
       `/api/org/employees/${name}`,
       data,
     ),
+  createEmployee: (data: EmployeeCreate) =>
+    post<{ status: string; employee: Employee | null }>("/api/org/employees", data),
   getDepartmentBoard: (name: string) =>
     get<DepartmentBoardResponse>(`/api/org/departments/${name}/board`),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),

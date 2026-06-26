@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState, useRef, useCallback, useMemo } fro
 import { api } from "@/lib/api";
 import type { Employee, OrgData, OrgHierarchy } from "@/lib/api";
 import { EmployeeDetail } from "@/components/org/employee-detail";
+import { EmployeeCreateForm } from "@/components/org/employee-create-form";
 import { WorkSummary } from "@/components/org/work-summary";
 import { PageLayout } from "@/components/page-layout";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -61,6 +62,7 @@ export default function OrgPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Employee | null>(null);
+  const [creating, setCreating] = useState(false);
   const [activeDepartment, setActiveDepartment] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const { settings } = useSettings();
@@ -117,6 +119,7 @@ export default function OrgPage() {
   }, [selected]);
 
   const handleSelectEmployee = useCallback((emp: Employee) => {
+    setCreating(false);
     setSelected(emp);
   }, []);
 
@@ -126,6 +129,7 @@ export default function OrgPage() {
     (emp: Employee) => {
       loadData();
       setSelected(emp);
+      setCreating(false);
     },
     [loadData],
   );
@@ -189,6 +193,16 @@ export default function OrgPage() {
                 ))}
               </TabsList>
             </Tabs>
+            <button
+              type="button"
+              onClick={() => {
+                setSelected(null)
+                setCreating(true)
+              }}
+              className="h-8 px-[var(--space-3)] rounded-[var(--radius-sm)] border border-[var(--separator)] bg-[var(--material-regular)]/95 text-[length:var(--text-footnote)] font-[var(--weight-semibold)] text-[var(--text-primary)]"
+            >
+              Add agent
+            </button>
           </div>
           {loading ? (
             <div className="flex items-center justify-center h-full text-[var(--text-tertiary)] text-[length:var(--text-caption1)]">
@@ -207,22 +221,28 @@ export default function OrgPage() {
         </div>
 
         {/* Mobile backdrop */}
-        {selected && (
+        {(selected || creating) && (
           <div
             className="fixed inset-0 z-30 lg:hidden bg-black/50"
-            onClick={() => setSelected(null)}
+            onClick={() => {
+              setSelected(null)
+              setCreating(false)
+            }}
           />
         )}
 
         {/* Detail panel */}
-        {selected && (
+        {(selected || creating) && (
           <div className="absolute top-0 right-0 bottom-0 left-0 sm:left-auto z-30">
             <div className="w-full sm:w-[420px] lg:w-[468px] xl:w-[520px] max-w-[100vw] h-full overflow-y-auto bg-[var(--bg)] flex flex-col shadow-[var(--shadow-overlay)]">
               {/* Close button */}
               <div className="sticky top-0 z-10 flex items-center justify-end px-[var(--space-4)] py-[var(--space-3)] bg-[var(--bg)]">
                 <button
                   ref={closeRef}
-                  onClick={() => setSelected(null)}
+                  onClick={() => {
+                    setSelected(null)
+                    setCreating(false)
+                  }}
                   aria-label="Close detail panel"
                   className="w-[30px] h-[30px] rounded-full flex items-center justify-center bg-[var(--fill-tertiary)] text-[var(--text-secondary)] border-none cursor-pointer text-sm"
                 >
@@ -232,11 +252,22 @@ export default function OrgPage() {
 
               {/* Employee detail */}
               <div className="px-[var(--space-4)] pb-[var(--space-6)]">
-                <EmployeeDetail
-                  name={selected.name}
-                  prefetched={selected.rank === "executive" ? selected : undefined}
-                  onUpdated={handleEmployeeUpdated}
-                />
+                {creating ? (
+                  <EmployeeCreateForm
+                    onCancel={() => setCreating(false)}
+                    onCreated={(employee) => {
+                      loadData()
+                      setCreating(false)
+                      setSelected(employee)
+                    }}
+                  />
+                ) : selected ? (
+                  <EmployeeDetail
+                    name={selected.name}
+                    prefetched={selected.rank === "executive" ? selected : undefined}
+                    onUpdated={handleEmployeeUpdated}
+                  />
+                ) : null}
               </div>
             </div>
           </div>

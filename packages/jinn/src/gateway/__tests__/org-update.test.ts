@@ -26,7 +26,7 @@ vi.mock("../../shared/logger.js", () => ({
   },
 }));
 
-import { updateEmployeeYaml, validateEmployeeUpdate, scanOrg } from "../org.js";
+import { createEmployeeYaml, updateEmployeeYaml, validateEmployeeCreate, validateEmployeeUpdate, scanOrg } from "../org.js";
 import { invalidateModelRegistry } from "../../shared/models.js";
 
 function writeYaml(subdir: string, filename: string, content: string) {
@@ -169,6 +169,27 @@ rank: employee
     expect(data.alwaysNotify).toBe(false);
   });
 
+  it("stores a fallback model in modelPolicy and clears it when removed", () => {
+    writeYaml("platform", "fallback.yaml", `
+name: fallback
+persona: Original persona
+rank: employee
+engine: claude
+model: sonnet
+modelPolicy:
+  fallback_chain:
+    - engine: claude
+      model: opus
+`);
+    expect(updateEmployeeYaml("fallback", { fallbackModel: "haiku" })).toBe(true);
+    let data = readYaml("platform", "fallback.yaml");
+    expect(data.modelPolicy.fallback_chain).toEqual([{ engine: "claude", model: "haiku" }]);
+
+    expect(updateEmployeeYaml("fallback", { fallbackModel: null })).toBe(true);
+    data = readYaml("platform", "fallback.yaml");
+    expect(data.modelPolicy).toBeUndefined();
+  });
+
   it("never writes/renames the immutable name field", () => {
     writeYaml("platform", "safe.yaml", `
 name: safe
@@ -235,6 +256,35 @@ maxCostUsd: "lots"
   });
 });
 
+describe("createEmployeeYaml", () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "org-create-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates a new employee yaml with a fallback policy", () => {
+    expect(createEmployeeYaml({
+      name: "platform-lead",
+      displayName: "Platform Lead",
+      department: "platform",
+      rank: "manager",
+      engine: "claude",
+      model: "sonnet",
+      fallbackModel: "opus",
+      persona: "Lead the platform team.",
+      alwaysNotify: true,
+    })).toBe(true);
+
+    const data = readYaml("platform", "platform-lead.yaml");
+    expect(data.name).toBe("platform-lead");
+    expect(data.displayName).toBe("Platform Lead");
+    expect(data.modelPolicy.fallback_chain).toEqual([{ engine: "claude", model: "opus" }]);
+  });
+});
+
 describe("validateEmployeeUpdate", () => {
   beforeEach(() => {
     invalidateModelRegistry();
@@ -256,6 +306,16 @@ describe("validateEmployeeUpdate", () => {
       effortLevel: "high",
       persona: "Fresh persona",
     });
+  });
+
+  it("accepts fallbackModel and clears blank fallbackModel to null", () => {
+    const ok = validateEmployeeUpdate(testConfig, emp(), { fallbackModel: "sonnet" });
+    expect(ok.ok).toBe(true);
+    expect(ok.updates?.fallbackModel).toBe("sonnet");
+
+    const cleared = validateEmployeeUpdate(testConfig, emp(), { fallbackModel: "  " });
+    expect(cleared.ok).toBe(true);
+    expect(cleared.updates?.fallbackModel).toBeNull();
   });
 
   it("rejects the immutable name field", () => {
@@ -338,5 +398,23 @@ describe("validateEmployeeUpdate", () => {
   it("rejects an empty update with no recognized fields", () => {
     const r = validateEmployeeUpdate(testConfig, emp(), {});
     expect(r.ok).toBe(false);
+  });
+
+  it("validates a create payload for a new employee", () => {
+    const result = validateEmployeeCreate(testConfig, {
+      name: "reviewer",
+      displayName: "Reviewer",
+      department: "platform",
+      rank: "senior",
+      engine: "claude",
+      model: "sonnet",
+      fallbackModel: "opus",
+      persona: "Review changes.",
+    }, []);
+    expect(result.ok).toBe(true);
+    expect(result.employee).toMatchObject({
+      name: "reviewer",
+      fallbackModel: "opus",
+    });
   });
 });

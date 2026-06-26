@@ -63,6 +63,24 @@
   dirty base worktrees, missing winner worktrees, empty patches, and patch
   conflicts; it applies only unstaged base-repo changes.
 
+### Organization agent create/edit panel
+- `packages/web/src/routes/org/page.tsx`
+- `packages/web/src/components/org/employee-create-form.tsx`
+- `packages/web/src/components/org/employee-editor.tsx`
+- `/org` can now open a right-side "Add agent" form that creates a new org
+  employee YAML file through the gateway.
+- The create/edit surfaces cover agent id, display name, department, reports-to,
+  level (`manager`, `senior`, `junior` mapped to internal `employee` rank),
+  engine/model/effort, optional same-engine fallback model, persona,
+  CLI flags, and always-notify behavior.
+
+### Settings orchestration controls
+- `packages/web/src/routes/settings/page.tsx`
+- `packages/web/src/routes/settings/settings-config-sections.tsx`
+- `/settings` now exposes first-class orchestration runtime controls including
+  the enable toggle plus config/db/worktree paths, max worktrees, same-family
+  reviewer fallback, and empirical routing.
+
 ## CLI
 
 ### Provider-neutral matrix orchestration dry-runs and observe surfaces

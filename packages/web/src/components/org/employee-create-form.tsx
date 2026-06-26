@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { api } from "@/lib/api"
-import type { Employee, EmployeeUpdate } from "@/lib/api"
+import type { Employee, EmployeeCreate } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
@@ -20,20 +20,12 @@ const LEVEL_OPTIONS = [
 ] as const
 const NONE = "__none__"
 
-function fallbackModelOf(employee: Employee): string {
-  return employee.modelPolicy?.fallback_chain?.[0]?.model ?? ""
-}
-
-function firstReportsTo(rt: Employee["reportsTo"]): string {
-  if (!rt) return ""
-  return Array.isArray(rt) ? (rt[0] ?? "") : rt
-}
-
 interface FieldProps {
   label: string
   children: React.ReactNode
   hint?: string
 }
+
 function Field({ label, children, hint }: FieldProps) {
   return (
     <div className="flex flex-col gap-[var(--space-1)]">
@@ -49,77 +41,75 @@ function Field({ label, children, hint }: FieldProps) {
 const inputCls =
   "w-full rounded-[var(--radius-md)] bg-[var(--fill-quaternary)] border border-[var(--separator)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-subheadline)] text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
 
-export function EmployeeEditor({
-  employee,
-  onCancel,
-  onSaved,
-}: {
-  employee: Employee
-  onCancel: () => void
-  onSaved: (emp: Employee) => void
-}) {
-  const [displayName, setDisplayName] = useState(employee.displayName || employee.name)
-  const [department, setDepartment] = useState(employee.department || "")
-  const [rank, setRank] = useState<Employee["rank"]>(employee.rank)
-  const [reportsTo, setReportsTo] = useState(firstReportsTo(employee.reportsTo))
-  const [persona, setPersona] = useState(employee.persona || "")
-  const [alwaysNotify, setAlwaysNotify] = useState(employee.alwaysNotify ?? true)
-  const [cliFlags, setCliFlags] = useState((employee.cliFlags ?? []).join(" "))
-  const [fallbackModel, setFallbackModel] = useState(fallbackModelOf(employee))
-  const [selector, setSelector] = useState<SelectorValue>({
-    engine: employee.engine,
-    model: employee.model,
-    effortLevel: employee.effortLevel,
-  })
+function suggestSlug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
 
-  // Department + reportsTo option lists come from the live org.
+export function EmployeeCreateForm({
+  onCancel,
+  onCreated,
+}: {
+  onCancel: () => void
+  onCreated: (employee: Employee) => void
+}) {
+  const [name, setName] = useState("")
+  const [displayName, setDisplayName] = useState("")
+  const [department, setDepartment] = useState("")
+  const [rank, setRank] = useState<EmployeeCreate["rank"]>("employee")
+  const [reportsTo, setReportsTo] = useState("")
+  const [persona, setPersona] = useState("")
+  const [alwaysNotify, setAlwaysNotify] = useState(true)
+  const [cliFlags, setCliFlags] = useState("")
+  const [fallbackModel, setFallbackModel] = useState("")
+  const [selector, setSelector] = useState<SelectorValue>({
+    engine: "claude",
+    model: "sonnet",
+  })
   const [departments, setDepartments] = useState<string[]>([])
   const [employeeNames, setEmployeeNames] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    api.getOrg().then((o) => {
-      setDepartments(o.departments)
-      setEmployeeNames(o.employees.map((e) => e.name).filter((n) => n !== employee.name))
+    api.getOrg().then((org) => {
+      setDepartments(org.departments)
+      setEmployeeNames(org.employees.map((employee) => employee.name))
     }).catch(() => {})
-  }, [employee.name])
+  }, [])
 
-  const personaInvalid = persona.trim().length === 0
+  const nameInvalid = !name.trim() || !/^[a-z0-9][a-z0-9._-]*$/i.test(name.trim())
   const displayNameInvalid = displayName.trim().length === 0
-  const canSave = !saving && !personaInvalid && !displayNameInvalid
-
-  // Build a patch of only the changed fields.
-  const patch = useMemo<EmployeeUpdate>(() => {
-    const p: EmployeeUpdate = {}
-    if (displayName !== (employee.displayName || employee.name)) p.displayName = displayName.trim()
-    if (department !== (employee.department || "")) p.department = department
-    if (rank !== employee.rank) p.rank = rank
-    const origReports = firstReportsTo(employee.reportsTo)
-    if (reportsTo !== origReports) p.reportsTo = reportsTo || undefined
-    if (persona !== employee.persona) p.persona = persona
-    if (alwaysNotify !== (employee.alwaysNotify ?? true)) p.alwaysNotify = alwaysNotify
-    const flags = cliFlags.split(/\s+/).filter(Boolean)
-    if (flags.join(" ") !== (employee.cliFlags ?? []).join(" ")) p.cliFlags = flags
-    if (fallbackModel !== fallbackModelOf(employee)) p.fallbackModel = fallbackModel.trim() || null
-    if (selector.engine !== employee.engine) p.engine = selector.engine
-    if (selector.model !== employee.model) p.model = selector.model
-    if (selector.effortLevel !== employee.effortLevel) p.effortLevel = selector.effortLevel
-    return p
-  }, [displayName, department, rank, reportsTo, persona, alwaysNotify, cliFlags, fallbackModel, selector, employee])
-
-  const dirty = Object.keys(patch).length > 0
+  const departmentInvalid = department.trim().length === 0
+  const personaInvalid = persona.trim().length === 0
+  const canSave = !saving && !nameInvalid && !displayNameInvalid && !departmentInvalid && !personaInvalid
 
   async function save() {
     if (!canSave) return
     setSaving(true)
     setError(null)
     try {
-      const res = await api.updateEmployee(employee.name, patch)
-      if (res.employee) onSaved(res.employee)
-      else onSaved({ ...employee, ...patch } as Employee)
+      const payload: EmployeeCreate = {
+        name: name.trim(),
+        displayName: displayName.trim(),
+        department: department.trim(),
+        rank,
+        engine: selector.engine || "claude",
+        model: selector.model || "",
+        effortLevel: selector.effortLevel,
+        persona: persona.trim(),
+        reportsTo: reportsTo || undefined,
+        cliFlags: cliFlags.split(/\s+/).filter(Boolean),
+        alwaysNotify,
+        fallbackModel: fallbackModel.trim() || null,
+      }
+      const res = await api.createEmployee(payload)
+      if (res.employee) onCreated(res.employee)
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save")
+      setError(e instanceof Error ? e.message : "Failed to create agent")
       setSaving(false)
     }
   }
@@ -138,28 +128,43 @@ export function EmployeeEditor({
     >
       <div className="flex items-center justify-between">
         <h2 className="text-[length:var(--text-headline)] font-[var(--weight-bold)] text-[var(--text-primary)] m-0">
-          Edit employee
+          Add agent
         </h2>
-        <span className="text-[length:var(--text-caption2)] font-[family-name:var(--font-mono)] text-[var(--text-tertiary)]">
-          {employee.name}
-        </span>
       </div>
 
       <Field label="Display name">
         <input
           className={inputCls}
           value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
+          aria-label="Display name"
+          onChange={(e) => {
+            const next = e.target.value
+            setDisplayName(next)
+            if (!name.trim()) setName(suggestSlug(next))
+          }}
           aria-invalid={displayNameInvalid}
         />
-        {displayNameInvalid && (
-          <span className="text-[length:var(--text-caption2)] text-[var(--system-red)]">Required.</span>
+      </Field>
+
+      <Field label="Agent ID" hint="Used for mentions and routing. Lowercase slug format is safest.">
+        <input
+          className={inputCls}
+          value={name}
+          aria-label="Agent ID"
+          onChange={(e) => setName(suggestSlug(e.target.value))}
+          aria-invalid={nameInvalid}
+          placeholder="platform-lead"
+        />
+        {nameInvalid && (
+          <span className="text-[length:var(--text-caption2)] text-[var(--system-red)]">
+            Use letters, numbers, dots, underscores, or hyphens.
+          </span>
         )}
       </Field>
 
       <div className="grid grid-cols-2 gap-[var(--space-3)]">
-      <Field label="Level">
-          <Select value={rank} onValueChange={(v) => setRank(v as Employee["rank"])}>
+        <Field label="Level">
+          <Select value={rank} onValueChange={(value) => setRank(value as EmployeeCreate["rank"])}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -173,45 +178,41 @@ export function EmployeeEditor({
           </Select>
         </Field>
 
-        <Field label="Department">
-          <Select value={department || NONE} onValueChange={(v) => setDepartment(v === NONE ? "" : v)}>
-            <SelectTrigger>
-              <SelectValue placeholder="None" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NONE}>None</SelectItem>
-              {departments.map((d) => (
-                <SelectItem key={d} value={d}>{d}</SelectItem>
-              ))}
-              {department && !departments.includes(department) && (
-                <SelectItem value={department}>{department}</SelectItem>
-              )}
-            </SelectContent>
-          </Select>
+        <Field label="Department" hint={departments.length ? `Known: ${departments.join(", ")}` : undefined}>
+          <input
+            className={inputCls}
+            value={department}
+            aria-label="Department"
+            onChange={(e) => setDepartment(e.target.value)}
+            aria-invalid={departmentInvalid}
+            placeholder="platform"
+          />
         </Field>
       </div>
 
-      <Field label="Reports to" hint="Changing this re-parents the node on the map.">
-        <Select value={reportsTo || NONE} onValueChange={(v) => setReportsTo(v === NONE ? "" : v)}>
+      <Field label="Reports to">
+        <Select value={reportsTo || NONE} onValueChange={(value) => setReportsTo(value === NONE ? "" : value)}>
           <SelectTrigger>
-            <SelectValue placeholder="None" />
+            <SelectValue placeholder="None (top level)" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={NONE}>None (top level)</SelectItem>
-            {employeeNames.map((n) => (
-              <SelectItem key={n} value={n}>{n}</SelectItem>
+            {employeeNames.map((employeeName) => (
+              <SelectItem key={employeeName} value={employeeName}>
+                {employeeName}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </Field>
 
-      <Field label="Engine · Model · Effort" hint="Applies to new sessions for this employee.">
+      <Field label="Engine · Model · Effort">
         <div className="rounded-[var(--radius-md)] bg-[var(--fill-quaternary)] border border-[var(--separator)] px-[var(--space-3)] py-[var(--space-2)]">
           <ModelSelectorRow mode="new" value={selector} onChange={setSelector} />
         </div>
       </Field>
 
-      <Field label="Fallback model" hint="Optional same-engine backup model for model fallback.">
+      <Field label="Fallback model" hint="Optional same-engine backup model for fallback handoffs.">
         <input
           className={inputCls}
           value={fallbackModel}
@@ -224,15 +225,10 @@ export function EmployeeEditor({
         <Textarea
           rows={10}
           value={persona}
+          aria-label="Persona / instructions"
           onChange={(e) => setPersona(e.target.value)}
           aria-invalid={personaInvalid}
         />
-        <div className="flex justify-between">
-          {personaInvalid ? (
-            <span className="text-[length:var(--text-caption2)] text-[var(--system-red)]">Persona cannot be empty.</span>
-          ) : <span />}
-          <span className="text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">{persona.length} chars</span>
-        </div>
       </Field>
 
       <Field label="CLI flags" hint="Space-separated, e.g. --chrome">
@@ -255,8 +251,8 @@ export function EmployeeEditor({
 
       <div className="flex items-center justify-end gap-[var(--space-2)] sticky bottom-0 pt-[var(--space-2)] bg-[var(--material-regular)]">
         <Button variant="ghost" onClick={onCancel} disabled={saving}>Cancel</Button>
-        <Button onClick={() => void save()} disabled={!canSave || !dirty}>
-          {saving ? "Saving…" : "Save"}
+        <Button onClick={() => void save()} disabled={!canSave}>
+          {saving ? "Creating…" : "Create agent"}
         </Button>
       </div>
     </div>
