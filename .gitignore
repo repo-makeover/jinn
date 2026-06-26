@@ -11,6 +11,7 @@ test-results/
 packages/jinn/.npmrc
 .worktrees/
 .DS_Store
+.playwright-mcp/
 
 # Giles and local audit/runtime artifacts. These stay local in this public repo
 # so they do not confuse readers browsing the source tree.
