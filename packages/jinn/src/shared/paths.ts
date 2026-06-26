@@ -41,6 +41,7 @@ export interface JinnPaths {
   AGENTS_SKILLS_DIR: string;
   FILES_DIR: string;
   UPLOADS_DIR: string;
+  RUN_BUNDLES_DIR: string;
   MIGRATIONS_DIR: string;
 }
 
@@ -76,6 +77,7 @@ function buildJinnPaths(home: string): JinnPaths {
     AGENTS_SKILLS_DIR: path.join(home, ".agents", "skills"),
     FILES_DIR: path.join(home, "files"),
     UPLOADS_DIR: path.join(home, "uploads"),
+    RUN_BUNDLES_DIR: path.join(tmpDir, "run-bundles"),
     MIGRATIONS_DIR: path.join(home, "migrations"),
   };
 }
@@ -109,6 +111,7 @@ function applyRuntimePaths(paths: JinnPaths): void {
   AGENTS_SKILLS_DIR = paths.AGENTS_SKILLS_DIR;
   FILES_DIR = paths.FILES_DIR;
   UPLOADS_DIR = paths.UPLOADS_DIR;
+  RUN_BUNDLES_DIR = paths.RUN_BUNDLES_DIR;
   MIGRATIONS_DIR = paths.MIGRATIONS_DIR;
 }
 
@@ -167,6 +170,8 @@ export let AGENTS_SKILLS_DIR = initialPaths.AGENTS_SKILLS_DIR;
 export let FILES_DIR = initialPaths.FILES_DIR;
 /** Date-bucketed storage for files attached to / emitted by sessions. */
 export let UPLOADS_DIR = initialPaths.UPLOADS_DIR;
+/** Managed export directories for portable run bundles. */
+export let RUN_BUNDLES_DIR = initialPaths.RUN_BUNDLES_DIR;
 export let MIGRATIONS_DIR = initialPaths.MIGRATIONS_DIR;
 
 export const TEMPLATE_DIR = path.join(__dirname, "..", "..", "..", "template");

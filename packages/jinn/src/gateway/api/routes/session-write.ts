@@ -32,6 +32,7 @@ import {
   resolveIncomingRunAttachments,
   setRunAttachmentsOnTransportMeta,
 } from "../../run-attachments.js";
+import { exportRunBundle } from "../../run-bundles.js";
 import { supersedeRunningTurn } from "../../session-turn-state.js";
 import { resolveUserHeader } from "../../connector-reply.js";
 import type { ApiContext } from "../context.js";
@@ -664,6 +665,32 @@ export async function handleSessionWriteRoutes(
       json(res, { attachments: serializeSession(attached.session, context).attachments ?? [] }, 201);
       return true;
     }
+  }
+
+  params = matchRoute("/api/sessions/:id/bundle", pathname);
+  if (method === "POST" && params) {
+    const session = getSession(params.id);
+    if (!session) {
+      notFound(res);
+      return true;
+    }
+    try {
+      const bundle = exportRunBundle(session.id, context);
+      context.emit("bundle:exported", { bundleId: bundle.id, sessionId: session.id, bundlePath: bundle.bundlePath });
+      json(res, bundle, 201);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "bundle export failed";
+      if (message.includes("not found")) {
+        notFound(res);
+        return true;
+      }
+      if (message.includes("not complete enough")) {
+        json(res, { error: message }, 409);
+        return true;
+      }
+      throw err;
+    }
+    return true;
   }
 
   return false;

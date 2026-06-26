@@ -36,6 +36,9 @@ operator dashboards.
 - `Human checkpoint`: run-scoped pause-for-decision record with decision intent,
   rationale, affected resources/actions, decision options, approver metadata,
   notes, and resulting action.
+- `Run bundle`: a portable exported directory for one completed run containing
+  session state, summary, copied artifacts, filtered logs, manifest, and error
+  data.
 
 ## Functional Requirements
 
@@ -49,6 +52,7 @@ operator dashboards.
 | REQ-ARTIFACTS-001 | Maintain a local artifact registry for files created, consumed, downloaded, or attached during Jinn runs, including hash, source, run, tag, validation, and bundle-manifest metadata. | verified | `packages/jinn/src/gateway/__tests__/artifact-registry.test.ts` |
 | REQ-ATTACH-001 | Provide a standard run-resource attachment contract for files, folders, URLs, and prior artifacts, including access mode, intended use, producing-run metadata, and run-scoped persistence. | verified | `packages/jinn/src/gateway/__tests__/run-attachments.test.ts` |
 | REQ-CHECKPOINT-001 | Provide a generic human checkpoint/approval-gate primitive that can pause a run, record the decision trail, and resume or stop the run after human input. | verified | `packages/jinn/src/gateway/__tests__/checkpoints.test.ts` |
+| REQ-BUNDLE-001 | Export a completed run as a portable bundle containing run state, summary, copied artifacts, filtered logs, manifest, and error data without bundling unrelated workspace files. | verified | `packages/jinn/src/gateway/__tests__/run-bundles.test.ts` |
 | REQ-ORCH-001 | Route `/api/orchestration/*` through the canonical API router and support status/control surfaces. | verified | `packages/jinn/src/gateway/api.ts`, `api-orchestration-routing.test.ts` |
 | REQ-GOV-001 | Keep local generated governance/runtime artifacts out of the public tracked source tree. | verified | `.gitignore`, `docs/STRUCTURE_COMPLIANCE.md` |
 
@@ -78,6 +82,7 @@ operator dashboards.
 - Artifact API: `packages/jinn/src/gateway/api/routes/artifacts.ts`.
 - Run attachment API: `packages/jinn/src/gateway/api/routes/session-write.ts`, `packages/jinn/src/gateway/run-attachments.ts`.
 - Checkpoint API: `packages/jinn/src/gateway/api/routes/checkpoints.ts`, `packages/jinn/src/gateway/checkpoints.ts`.
+- Run bundle export API: `packages/jinn/src/gateway/api/routes/session-write.ts`, `packages/jinn/src/gateway/run-bundles.ts`.
 
 ## Validation Requirements
 
@@ -106,3 +111,4 @@ operator dashboards.
 - 2026-06-26: Added artifact registry requirement and API surface.
 - 2026-06-26: Added run-resource attachment requirement and session API surface.
 - 2026-06-26: Added generic human checkpoint requirement and API surface.
+- 2026-06-26: Added exportable run-bundle requirement and session API surface.

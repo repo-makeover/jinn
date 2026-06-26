@@ -172,6 +172,25 @@
   the underlying store now captures decision notes and resulting actions for the
   broader checkpoint model too.
 
+### Exportable run bundles
+- `packages/jinn/src/gateway/run-bundles.ts`
+- `packages/jinn/src/gateway/api/routes/session-write.ts`
+- `POST /api/sessions/:id/bundle` exports a completed session into a portable
+  run bundle under managed Jinn runtime storage.
+- Each bundle includes `run.json`, `summary.md`, `artifacts/`, `logs/`,
+  `manifest.json`, and `errors.json`.
+- `run.json` captures the serialized session, messages, attachments, approvals,
+  and checkpoints at export time.
+- `summary.md` provides a human-readable overview of the run, prompt, resource
+  attachments, checkpoints, and exported artifact counts.
+- `artifacts/` copies only files produced by the run or explicitly attached as
+  concrete files; folder attachments remain references in metadata and are not
+  recursively copied.
+- `logs/gateway.log` contains only session-relevant log lines filtered from the
+  gateway log, so the bundle does not expose unrelated workspace activity.
+- `manifest.json` inventories the bundle files, hashes, sizes, and high-level
+  counts, forming the base contract for later import/replay work.
+
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
 - `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded

@@ -37,6 +37,9 @@ owning model reasoning.
 - Human checkpoints: persisted in the approval/checkpoint registry, surfaced via
   dedicated checkpoint APIs, and able to pause or resume session execution with
   a durable human-decision trail.
+- Run bundles: generated on demand from session state, copied run-linked
+  artifacts, filtered logs, and derived summaries into managed runtime export
+  directories suitable for handoff and future replay/import work.
 - Orchestration telemetry/recovery/worktrees: managed under Jinn runtime paths and bounded retention policies.
 
 ## Workflows
@@ -79,6 +82,8 @@ owning model reasoning.
 - Human checkpoint semantics live in the gateway service layer so route modules
   only translate inputs/outputs while the shared approval store keeps the
   durable decision history.
+- Run bundle export also lives in the gateway service layer so copy/filter rules
+  stay centralized and session routes remain thin action adapters.
 
 ## Extension Points
 
