@@ -138,8 +138,15 @@ export async function handleArtifactRoutes(
       return true;
     }
     const stat = fs.statSync(absPath);
+    // The id is used as a storage path segment (FILES_DIR/<id>) by the files
+    // routes, so a separator or `..` would let a delete/move escape FILES_DIR.
+    const providedId = typeof body.id === "string" && body.id.trim() ? body.id.trim() : null;
+    if (providedId !== null && (providedId.includes("/") || providedId.includes("\\") || providedId === "." || providedId === "..")) {
+      badRequest(res, "invalid artifact id");
+      return true;
+    }
     const artifact = insertFile({
-      id: typeof body.id === "string" && body.id.trim() ? body.id.trim() : crypto.randomUUID(),
+      id: providedId ?? crypto.randomUUID(),
       filename: typeof body.filename === "string" && body.filename.trim() ? body.filename.trim() : path.basename(absPath),
       size: stat.size,
       mimetype: typeof body.mimetype === "string" ? body.mimetype : mimeFromFilename(absPath),

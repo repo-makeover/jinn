@@ -134,6 +134,25 @@ describe("artifact registry routes", () => {
     });
   });
 
+  it("rejects a register id that would escape FILES_DIR as a path segment", async () => {
+    const source = path.join(tmp, "evil-id-source.txt");
+    fs.writeFileSync(source, "x");
+    const res = captureRes();
+    const url = new URL("/api/artifacts/register", "http://localhost");
+    await routes.handleArtifactRoutes(
+      "POST",
+      "/api/artifacts/register",
+      jsonReq("POST", "/api/artifacts/register", { path: source, id: ".." }),
+      url,
+      res.res,
+      ctx,
+    );
+    await res.out.done;
+    expect(res.out.status).toBe(400);
+    // The poisoned id must never enter the registry (it feeds FILES_DIR/<id>).
+    expect(reg.getFile("..")).toBeFalsy();
+  });
+
   it("validates expected artifact IDs and paths against registry and disk state", async () => {
     const source = path.join(tmp, "validate-output.txt");
     fs.writeFileSync(source, "ok");

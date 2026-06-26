@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { INSTANCES_REGISTRY, TEMPLATE_DIR } from "../shared/paths.js";
 import { safeWriteFile } from "../shared/safe-write.js";
+import { assertSafeDestructivePath } from "../shared/safe-delete.js";
 
 export interface Instance {
   name: string;
@@ -28,27 +29,7 @@ export function saveInstances(instances: Instance[]): void {
 }
 
 export function assertSafeDestructiveHome(home: string, label = "Jinn home"): string {
-  const resolved = path.resolve(home);
-  const root = path.parse(resolved).root;
-  const userHome = path.resolve(os.homedir());
-
-  if (resolved === root) {
-    throw new Error(`${label} resolves to filesystem root: ${resolved}`);
-  }
-  if (resolved === userHome) {
-    throw new Error(`${label} resolves to the user home directory: ${resolved}`);
-  }
-  if (resolved === path.resolve(process.cwd())) {
-    throw new Error(`${label} resolves to the current working directory: ${resolved}`);
-  }
-  try {
-    if (fs.lstatSync(resolved).isSymbolicLink()) {
-      throw new Error(`${label} is a symlink and will not be deleted: ${resolved}`);
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("will not be deleted")) throw err;
-  }
-  return resolved;
+  return assertSafeDestructivePath(home, { label });
 }
 
 export function assertSafeManagedInstanceHome(instance: Instance): string {

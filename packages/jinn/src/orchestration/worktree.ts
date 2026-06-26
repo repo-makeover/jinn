@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { JINN_HOME, ORCH_WORKTREE_ROOT } from "../shared/paths.js";
+import { safeRmSync } from "../shared/safe-delete.js";
 import type { JinnConfig } from "../shared/types.js";
 
 export const WORKTREE_MARKER = ".jinn-worktree.json";
@@ -223,7 +224,10 @@ export function createReviewBundle(opts: {
 }
 
 export function cleanupReviewBundle(handle: ReviewBundleHandle): void {
-  fs.rmSync(handle.path, { recursive: true, force: true });
+  // Contain against the bundle's own parent (always the root it was created or
+  // reaped from) so a custom reap root still cleans up while catastrophic and
+  // symlinked targets are still rejected.
+  safeRmSync(handle.path, { within: path.dirname(path.resolve(handle.path)), label: "review bundle" });
 }
 
 export function reapExpiredReviewBundles(opts: ReviewBundleReapOptions = {}): ReviewBundleHandle[] {

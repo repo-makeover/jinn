@@ -28,6 +28,45 @@ audit artifact.
 - A dedicated gateway files façade seam test was added.
 - Giles governance validation now passes `repo-check`.
 
+### FTRIAGE-001–008 destructive path guards (2026-06-26)
+
+- A shared guard `assertSafeDestructivePath` / `safeRmSync` was added in
+  `packages/jinn/src/shared/safe-delete.ts` (rejects filesystem root, the user
+  home, cwd, symlinked targets, and any out-of-containment path) with unit
+  tests. `cli/instances.ts` `assertSafeDestructiveHome` now delegates to it, so
+  the already-covered home deletes (`cli/nuke.ts`, `cli/remove.ts`,
+  `cli/setup.ts`) and `assertSafeManagedInstanceHome` share one implementation.
+- The guard was wired into the genuinely-unguarded recursive deletes:
+  `cli/skills.ts`, `gateway/api/routes/skills.ts` (DELETE `/api/skills/:name`),
+  `gateway/files.ts` (DELETE `/api/files/:id`), `gateway/files/storage.ts`,
+  `gateway/files/attachments.ts`, `orchestration/worktree.ts`
+  (`cleanupReviewBundle`), `cli/migrate.ts` (×2), `connectors/telegram/index.ts`,
+  `talk/kokoro.ts`, and `test-utils/jinn-home.ts`.
+- Root-cause hardening: `POST /api/artifacts/register` now rejects ids
+  containing a path separator or `.`/`..` (the id feeds `FILES_DIR/<id>`), and
+  `rehomeAttachmentsToSession` sanitizes the stored filename before building its
+  source path. Together with the `DELETE /api/files/:id` guard this closes a
+  network-reachable path where a poisoned artifact id (`..`) could recursively
+  delete the entire Jinn home. Regression tests were added.
+- The original triage line numbers were stale (post-modularization). The
+  single-file `force` deletes in `orchestration/store-recovery.ts` (already
+  containment-guarded via `isSameOrInside`) and `sessions/manager.ts` (a managed
+  temp file) were reviewed and left as covered / out of recursive-delete scope.
+
+### Product findings (2026-06-26)
+
+- `packages/web/vite.config.ts` now shares one proxy config across the dev
+  server and `vite preview` (preview previously 404'd on `/api` and `/ws`) and
+  pins the dev server to port 5173 with `strictPort`, matching the documented
+  URL and failing fast instead of silently moving ports.
+- `scripts/run-jinn-cli.mjs` (`pnpm jinn`) now rebuilds when any source file is
+  newer than the compiled entry, not only when the entry is absent, so source
+  edits are no longer silently run against a stale `dist` binary.
+- The Fissure `no_unhandled_exception` deterministic failure
+  (`FRUN-20260625-171340`) is most likely a downstream symptom of the preview
+  proxy / dev-port gaps above. Re-running Fissure is required to confirm and is
+  waived here when the tool is unavailable.
+
 ## Deferred / Advisory
 
 - Historical release-note backfill remains advisory because source-grounded release summaries for every tag would be public noise without reliable evidence.

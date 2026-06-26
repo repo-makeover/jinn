@@ -50,6 +50,22 @@ describe("rehomeAttachmentsToSession", () => {
     files.rehomeAttachmentsToSession(["f1"], "sess-new");
     expect(reg.getFile("f1")!.path).toBe(before);
   });
+
+  it("does not escape FILES_DIR when a registered filename contains traversal", () => {
+    // Mirrors POST /api/artifacts/register, which persists the raw `filename`.
+    const victim = path.join(os.tmpdir(), `jinn-attlogic-victim-${process.pid}.txt`);
+    fs.writeFileSync(victim, "do-not-move-me");
+    const rel = path.relative(path.join(paths.FILES_DIR, "evil"), victim);
+    reg.insertFile({ id: "evil", filename: rel, size: 3, mimetype: "text/plain", path: null });
+
+    files.rehomeAttachmentsToSession(["evil"], "sess-attack");
+
+    // The traversal target must be untouched and never adopted as the file path.
+    expect(fs.existsSync(victim)).toBe(true);
+    expect(fs.readFileSync(victim, "utf-8")).toBe("do-not-move-me");
+    expect(reg.getFile("evil")!.path).toBeNull();
+    fs.rmSync(victim, { force: true });
+  });
 });
 
 describe("fileIdsToMedia", () => {

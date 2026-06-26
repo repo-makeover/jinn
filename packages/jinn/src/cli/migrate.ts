@@ -14,6 +14,7 @@ import {
 } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
 import { safeWriteYaml } from "../shared/safe-write.js";
+import { safeRmSync } from "../shared/safe-delete.js";
 import {
   compareSemver,
   getPackageVersion,
@@ -231,7 +232,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
     process.exit(1);
   } finally {
     if (claudeMigrateSettings) {
-      fs.rmSync(claudeMigrateSettings.tempDir, { recursive: true, force: true });
+      safeRmSync(claudeMigrateSettings.tempDir, { within: os.tmpdir(), label: "claude migrate temp dir" });
     }
   }
 }
@@ -283,7 +284,7 @@ async function applyAutoMigrations(
   console.log(`\n${GREEN}Auto-migration complete.${RESET} ${applied} file(s) added.`);
 
   // Clean up
-  fs.rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  safeRmSync(MIGRATIONS_DIR, { within: JINN_HOME, label: "migrations dir" });
 
   console.log(`\n${DIM}Tip: Run ${RESET}jinn migrate${DIM} (without --auto) to also merge updated files with AI.${RESET}\n`);
 }

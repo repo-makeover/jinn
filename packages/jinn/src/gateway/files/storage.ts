@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { FILES_DIR, JINN_HOME, UPLOADS_DIR } from "../../shared/paths.js";
 import { logger } from "../../shared/logger.js";
+import { safeRmSync } from "../../shared/safe-delete.js";
 import type { FileMeta, MessageMedia } from "../../sessions/registry.js";
 
 export function ensureFilesDir(): void {
@@ -61,7 +62,7 @@ export function cleanupOldUploads(maxAgeDays = 30): number {
     const ts = Date.parse(`${entry.name}T00:00:00.000Z`);
     if (Number.isNaN(ts) || ts >= cutoff) continue;
     try {
-      fs.rmSync(path.join(UPLOADS_DIR, entry.name), { recursive: true, force: true });
+      safeRmSync(path.join(UPLOADS_DIR, entry.name), { within: UPLOADS_DIR, label: "upload bucket" });
       removed++;
     } catch (err) {
       logger.warn(`Failed to remove old upload bucket ${entry.name}: ${err instanceof Error ? err.message : String(err)}`);

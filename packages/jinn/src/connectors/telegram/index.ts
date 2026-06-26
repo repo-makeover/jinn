@@ -16,6 +16,7 @@ import type {
 import { deriveSessionKey, buildReplyContext, isOldTelegramMessage } from "./threads.js";
 import { formatResponse, stripTelegramMarkdown } from "./format.js";
 import { logger } from "../../shared/logger.js";
+import { safeRmSync } from "../../shared/safe-delete.js";
 import { TMP_DIR } from "../../shared/paths.js";
 import {
   transcribe as sttTranscribe,
@@ -250,7 +251,7 @@ export class TelegramConnector implements Connector {
             return await sttTranscribe(localPath, model, language);
           } finally {
             try {
-              fs.rmSync(tmpDir, { recursive: true, force: true });
+              safeRmSync(tmpDir, { within: os.tmpdir(), label: "telegram STT temp dir" });
             } catch {
               /* non-fatal */
             }

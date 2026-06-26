@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ServerResponse } from "node:http";
 import { SKILLS_DIR } from "../../../shared/paths.js";
 import { logger } from "../../../shared/logger.js";
+import { safeRmSync } from "../../../shared/safe-delete.js";
 import { matchRoute } from "../match-route.js";
 import { json, notFound } from "../responses.js";
 
@@ -83,7 +84,7 @@ export async function handleSkillRoutes(
       notFound(res);
       return true;
     }
-    fs.rmSync(skillDir, { recursive: true, force: true });
+    safeRmSync(skillDir, { within: SKILLS_DIR, label: `skill directory "${params.name}"` });
     const { removeFromManifest } = await import("../../../cli/skills.js");
     removeFromManifest(params.name);
     logger.info(`Skill removed via API: ${params.name}`);

@@ -19,6 +19,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { JINN_HOME } from "../shared/paths.js"
 import { logger } from "../shared/logger.js"
+import { safeRmSync } from "../shared/safe-delete.js"
 import { TALK_EVENTS, type Emit, type Tts } from "./protocol.js"
 
 /** Model / venv layout under JINN_HOME. */
@@ -413,7 +414,7 @@ function ensureVenv(modelDir: string): Promise<void> {
   // venv whose base interpreter was removed (dangling bin/python symlink), so a
   // stale dir would otherwise wedge us on the fallback voice forever.
   try {
-    fs.rmSync(venvDir, { recursive: true, force: true })
+    safeRmSync(venvDir, { within: modelDir, label: "kokoro venv" })
   } catch {
     /* ignore */
   }

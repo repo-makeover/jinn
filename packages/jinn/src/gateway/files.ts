@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { FILES_DIR } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
+import { safeRmSync } from "../shared/safe-delete.js";
 import { deleteFile, getFile, listFiles } from "../sessions/registry.js";
 import type { ApiContext } from "./api/context.js";
 import { handleSessionAttachment, fileIdsToMedia, rehomeAttachmentsToSession } from "./files/attachments.js";
@@ -187,9 +188,7 @@ export async function handleFilesRequest(
 
     // Remove managed storage directory
     const fileDir = path.join(FILES_DIR, id);
-    if (fs.existsSync(fileDir)) {
-      fs.rmSync(fileDir, { recursive: true, force: true });
-    }
+    safeRmSync(fileDir, { within: FILES_DIR, label: "file storage dir" });
     // Session-scoped uploads live under UPLOADS_DIR (recorded in meta.path) — remove that too.
     if (meta.path && isServablePath(meta.path) && fs.existsSync(meta.path)) {
       fs.rmSync(meta.path, { force: true });

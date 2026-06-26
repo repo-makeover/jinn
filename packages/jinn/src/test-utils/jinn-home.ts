@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { refreshJinnPaths, setJinnHomeForTest } from "../shared/paths.js";
+import { safeRmSync } from "../shared/safe-delete.js";
 
 export interface TempJinnHomeHandle {
   home: () => string;
@@ -31,7 +32,7 @@ export function createTempJinnHomeForTest(prefix = "jinn-test-"): TempJinnHomeHa
         setJinnHomeForTest(previousHome);
       }
       vi.resetModules();
-      fs.rmSync(tmpHome, { recursive: true, force: true });
+      safeRmSync(tmpHome, { within: os.tmpdir(), label: "temp jinn home" });
       tmpHome = "";
     },
   };
@@ -60,7 +61,7 @@ export function withStaticTempJinnHome(prefix = "jinn-test-"): { home: string } 
     } else {
       setJinnHomeForTest(previousHome);
     }
-    fs.rmSync(home, { recursive: true, force: true });
+    safeRmSync(home, { within: os.tmpdir(), label: "temp jinn home" });
   });
 
   return { home };

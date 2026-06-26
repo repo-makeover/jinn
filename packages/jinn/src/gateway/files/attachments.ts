@@ -16,6 +16,7 @@ import {
 import type { ApiContext } from "../api/context.js";
 import { badRequest, json, readBody, serverError } from "./responses.js";
 import { saveFile } from "./uploads.js";
+import { safeRmSync } from "../../shared/safe-delete.js";
 import {
   FILES_DIR,
   buildMessageMedia,
@@ -42,7 +43,10 @@ export function rehomeAttachmentsToSession(fileIds: unknown, sessionId: string):
     if (typeof id !== "string" || !id.trim()) continue;
     const meta = getFile(id);
     if (!meta) continue;
-    const current = path.join(FILES_DIR, meta.id, meta.filename);
+    // Stored uploads live under their sanitized basename (see saveFile); sanitize
+    // here too so a registered artifact's raw/`..`-laden filename cannot make
+    // `current` escape FILES_DIR and turn the rename below into an arbitrary move.
+    const current = path.join(FILES_DIR, meta.id, sanitizeUploadFilename(meta.filename));
     if (!fs.existsSync(current)) continue;
     fs.mkdirSync(destDir, { recursive: true });
     const dest = path.join(destDir, sanitizeUploadFilename(meta.filename));
@@ -51,7 +55,7 @@ export function rehomeAttachmentsToSession(fileIds: unknown, sessionId: string):
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EXDEV") {
         fs.copyFileSync(current, dest);
-        fs.rmSync(current, { force: true });
+        safeRmSync(current, { within: FILES_DIR, recursive: false, label: "attachment file" });
       } else {
         logger.warn(`Failed to re-home attachment ${id}: ${err instanceof Error ? err.message : String(err)}`);
         continue;

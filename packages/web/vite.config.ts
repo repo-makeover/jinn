@@ -4,6 +4,19 @@ import path from 'node:path'
 
 export default defineConfig(() => {
   const gatewayPort = process.env.GATEWAY_PORT ?? '7777'
+  // Shared by the dev server AND `vite preview` — preview does not inherit
+  // server.proxy, so without this the preview build 404s on /api and /ws.
+  const proxy = {
+    '/api': {
+      target: `http://127.0.0.1:${gatewayPort}`,
+      changeOrigin: true,
+    },
+    '/ws': {
+      target: `ws://127.0.0.1:${gatewayPort}`,
+      ws: true,
+      changeOrigin: true,
+    },
+  }
   return {
     plugins: [react()],
     // App reads a NEXT_PUBLIC_* var (legacy from the Next era). Vite doesn't
@@ -24,17 +37,12 @@ export default defineConfig(() => {
       sourcemap: false,
     },
     server: {
-      proxy: {
-        '/api': {
-          target: `http://127.0.0.1:${gatewayPort}`,
-          changeOrigin: true,
-        },
-        '/ws': {
-          target: `ws://127.0.0.1:${gatewayPort}`,
-          ws: true,
-          changeOrigin: true,
-        },
-      },
+      port: 5173,
+      strictPort: true,
+      proxy,
+    },
+    preview: {
+      proxy,
     },
   }
 })

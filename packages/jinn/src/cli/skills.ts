@@ -4,6 +4,7 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { JINN_HOME, SKILLS_DIR } from "../shared/paths.js";
 import { safeWriteFile } from "../shared/safe-write.js";
+import { safeRmSync } from "../shared/safe-delete.js";
 
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
@@ -211,7 +212,7 @@ export function skillsRemove(name: string): void {
     return;
   }
 
-  fs.rmSync(skillDir, { recursive: true, force: true });
+  safeRmSync(skillDir, { within: SKILLS_DIR, label: `skill directory "${name}"` });
   removeFromManifest(name);
   console.log(`${GREEN}Skill "${name}" removed.${RESET}`);
 }
