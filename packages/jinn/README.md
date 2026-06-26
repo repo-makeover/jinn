@@ -3,11 +3,11 @@
 > A lightweight AI gateway daemon that orchestrates professional AI coding CLIs — **Claude Code, Codex, Grok, Antigravity, Pi, Hermes, and Kiro** — behind one unified process. Jinn is a bus, not a brain.
 
 [![npm version](https://img.shields.io/npm/v/jinn-cli.svg)](https://www.npmjs.com/package/jinn-cli)
-[![license: MIT](https://img.shields.io/npm/l/jinn-cli.svg)](https://github.com/hristo2612/jinn)
-[![node](https://img.shields.io/node/v/jinn-cli.svg)](https://github.com/hristo2612/jinn)
+[![license: MIT](https://img.shields.io/npm/l/jinn-cli.svg)](https://github.com/repo-makeover/jinn)
+[![node](https://img.shields.io/node/v/jinn-cli.svg)](https://github.com/repo-makeover/jinn)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hristo2612/jinn/main/assets/jinn-showcase.gif" alt="Jinn web dashboard" width="800" />
+  <img src="https://raw.githubusercontent.com/repo-makeover/jinn/main/assets/jinn-showcase.gif" alt="Jinn web dashboard" width="800" />
 </p>
 
 ## What is Jinn?
@@ -52,6 +52,8 @@ jinn setup && jinn start
 - **Connectors** — Slack and more, so your agents can message, report, and act.
 - **Web dashboard + voice** — chat UI, live org chart, kanban board, logs, usage limits, and a hands-free talk mode.
 - **Skills** — reusable Markdown playbooks your agents follow step by step.
+- **Matrix orchestration** — durable runtime, queue controls, dual-lane runs, recovery/requeue flows, worktree execution, and a dedicated orchestration dashboard.
+- **Operator controls** — approvals, archives, stricter file handling, and stronger backend/frontend coverage than the upstream baseline.
 - **Subscription-friendly** — every Claude turn runs through the real interactive CLI inside a PTY, so your Max plan keeps working instead of silently draining API credits.
 
 ## 📚 Documentation
@@ -59,8 +61,12 @@ jinn setup && jinn start
 Full documentation, architecture notes, diagrams, and validation ledgers live in
 the repository:
 
-**→ https://github.com/hristo2612/jinn/blob/main/docs/INDEX.md**
+**→ https://github.com/repo-makeover/jinn/blob/main/docs/INDEX.md**
+
+For the fork-specific delta from `hristo2612/jinn`, see:
+
+**→ https://github.com/repo-makeover/jinn/blob/main/docs/UPSTREAM_DIFF_HRISTO2612.md**
 
 ## License
 
-[MIT](https://github.com/hristo2612/jinn)
+[MIT](https://github.com/repo-makeover/jinn)

@@ -64,7 +64,7 @@ Then open **[http://localhost:7777](http://localhost:7777)**, send your first me
 Or install via **Homebrew**:
 
 ```bash
-brew tap hristo2612/jinn https://github.com/hristo2612/jinn
+brew tap repo-makeover/jinn https://github.com/repo-makeover/jinn
 brew install jinn
 jinn setup && jinn start
 ```
@@ -203,6 +203,17 @@ Every department also has a **board**. Assign tickets to employees, watch work m
 - **🔄 Hot-reload & self-modification** - edit config, cron, org, or skills and the daemon reloads live; agents can edit those files too.
 - **🔗 MCP support** - connect engines to any MCP server, with per-employee allow-lists.
 
+## What's different in this checkout
+
+Compared with [`hristo2612/jinn`](https://github.com/hristo2612/jinn), this repo carries a larger feature and maintenance surface:
+
+- **Matrix orchestration** - durable orchestration runtime, queue controls, dual-lane runs, recovery/requeue flows, worktree execution, and a dedicated orchestration dashboard.
+- **Operator controls** - approvals, archives, richer Kanban/ticket dispatch, stronger session registry APIs, and additional route-level backend coverage.
+- **Safer file and gateway handling** - modularized file upload/read/attachment flows, stricter file-read boundaries, transfer guards, and focused seam tests.
+- **Governance and tooling** - Node 24 repo pinning, explicit lint/typecheck/test surfaces, Giles/governance metadata, and documentation/validation ledgers.
+
+The source-grounded fork diff lives in [`docs/UPSTREAM_DIFF_HRISTO2612.md`](docs/UPSTREAM_DIFF_HRISTO2612.md).
+
 ---
 
 ## What people build with it
@@ -264,14 +275,14 @@ Jinn is in active development. Shipped recently: six-engine support, file attach
 - **Platform** - installable plugins, REST API auth, multi-user roles, Docker image.
 - **Skills** - community marketplace, versioning, scaffolding templates.
 
-Want to suggest something? [Open an issue](https://github.com/hristo2612/jinn/issues).
+Want to suggest something? [Open an issue](https://github.com/repo-makeover/jinn/issues).
 
 ---
 
 ## Development
 
 ```bash
-git clone https://github.com/repo-sandbox/jinn.git
+git clone https://github.com/repo-makeover/jinn.git
 cd jinn
 pnpm install
 pnpm setup   # one-time: builds all packages and creates ~/.jinn
