@@ -28,7 +28,7 @@ const TEXT_EXTENSIONS = new Set([
   ".yml",
 ]);
 
-const SKIP_DIRS = new Set(["coverage", "dist", "node_modules"]);
+const SKIP_DIRS = new Set(["audits", "coverage", "dist", "logs", "node_modules"]);
 
 const BLOCKED_TERMS = [
   ["hris", "to"].join(""),

@@ -12,13 +12,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ModelSelectorRow, type SelectorValue } from "@/components/chat/model-selector-row"
+import { ReportsToField, serializeReportsTo } from "@/components/org/reports-to-field"
 
 const LEVEL_OPTIONS = [
   { value: "manager", label: "Manager" },
   { value: "senior", label: "Senior" },
   { value: "employee", label: "Junior" },
 ] as const
-const NONE = "__none__"
 
 interface FieldProps {
   label: string
@@ -60,7 +60,7 @@ export function EmployeeCreateForm({
   const [displayName, setDisplayName] = useState("")
   const [department, setDepartment] = useState("")
   const [rank, setRank] = useState<EmployeeCreate["rank"]>("employee")
-  const [reportsTo, setReportsTo] = useState("")
+  const [reportsTo, setReportsTo] = useState<string[]>([])
   const [persona, setPersona] = useState("")
   const [alwaysNotify, setAlwaysNotify] = useState(true)
   const [cliFlags, setCliFlags] = useState("")
@@ -101,7 +101,7 @@ export function EmployeeCreateForm({
         model: selector.model || "",
         effortLevel: selector.effortLevel,
         persona: persona.trim(),
-        reportsTo: reportsTo || undefined,
+        reportsTo: serializeReportsTo(reportsTo),
         cliFlags: cliFlags.split(/\s+/).filter(Boolean),
         alwaysNotify,
         fallbackModel: fallbackModel.trim() || null,
@@ -191,19 +191,12 @@ export function EmployeeCreateForm({
       </div>
 
       <Field label="Reports to">
-        <Select value={reportsTo || NONE} onValueChange={(value) => setReportsTo(value === NONE ? "" : value)}>
-          <SelectTrigger>
-            <SelectValue placeholder="None (top level)" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NONE}>None (top level)</SelectItem>
-            {employeeNames.map((employeeName) => (
-              <SelectItem key={employeeName} value={employeeName}>
-                {employeeName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ReportsToField
+          value={reportsTo}
+          options={employeeNames}
+          onChange={setReportsTo}
+          hint="Primary stays first. Additional entries are secondary matrix links."
+        />
       </Field>
 
       <Field label="Engine · Model · Effort">

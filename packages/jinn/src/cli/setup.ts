@@ -19,6 +19,7 @@ import {
   DOCS_DIR,
   SKILLS_DIR,
   ORG_DIR,
+  ORCH_CONFIG_DIR,
   CLAUDE_SKILLS_DIR,
   AGENTS_SKILLS_DIR,
 } from "../shared/paths.js";
@@ -606,6 +607,12 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   // Seed talk/ (AURA voice persona + card-reference sidecar). The persona points
   // the orchestrator at talk/card-reference.md, so both must land in ~/.jinn/talk/.
   created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "talk"), path.join(JINN_HOME, "talk"), templateReplacements));
+  // Seed orchestration/ (default matrix worker pool, roles, coordinator templates,
+  // quotas). Loaded by loadDefaultOrchestrationConfig() when an operator sets
+  // `orchestration.enabled: true`; without it, enabling orchestration errors with
+  // "missing orchestration config file". copyTemplateDir skips existing files, so
+  // re-running setup backfills this on instances created before it shipped.
+  created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "orchestration"), ORCH_CONFIG_DIR, templateReplacements));
 
   // Copy skills.json manifest
   const templateSkillsJson = path.join(TEMPLATE_DIR, "skills.json");

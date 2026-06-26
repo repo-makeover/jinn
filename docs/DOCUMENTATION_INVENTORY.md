@@ -13,7 +13,7 @@
 | `docs/DECISION_LOG.md` | decisions | current | maintainers | created 2026-06-25 | Add accepted/superseded decisions as they land. |
 | `docs/DOC_MAINTENANCE.md` | docs maintenance contract | current | `AGENTS.md` docs rules | created 2026-06-25 | Follow before releases. |
 | `docs/STRUCTURE_COMPLIANCE.md` | structure report | current | repo contract + Giles | created 2026-06-25 | Re-run after retention-policy changes. |
-| `docs/UPSTREAM_DIFF_HRISTO2612.md` | upstream diff report | current | git diff against `hristo2612/jinn` | created 2026-06-25 | Refresh after upstream syncs or public release cuts. |
+| `docs/UPSTREAM_DIFF_BASELINE.md` | upstream diff report | current | git diff against configured upstream baseline | created 2026-06-25 | Refresh after upstream syncs or public release cuts. |
 | `docs/SESSION_SUMMARY_062026.md` | durable session summary | current | repo local-log convention | created 2026-06-25 | Tracked replacement for ignored raw session logs. |
 | `docs/AUDIT_SUMMARY_062026.md` | durable audit summary | current | repo audit-retention convention | created 2026-06-25 | Tracked replacement for ignored raw audit details. |
 | `docs/LOG_ARCHIVE.md` | log archive index | current | repo local-log convention | created 2026-06-25 | Index tracked summaries and local raw paths. |

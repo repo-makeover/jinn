@@ -1,6 +1,6 @@
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import type { ArchiveKind, Session } from "../../../shared/types.js";
-import { createArchiveAndDeleteSessions, getArchive, getSession } from "../../../sessions/registry.js";
+import { createArchiveAndDeleteSessions, deleteArchive, getArchive, getSession, listArchives } from "../../../sessions/registry.js";
 import type { ApiContext } from "../context.js";
 import { matchRoute } from "../match-route.js";
 import { badRequest, json, notFound } from "../responses.js";
@@ -16,6 +16,11 @@ export async function handleArchiveRoutes(
   res: ServerResponse,
   context: ApiContext,
 ): Promise<boolean> {
+  if (method === "GET" && pathname === "/api/archives") {
+    json(res, listArchives());
+    return true;
+  }
+
   if (method === "POST" && pathname === "/api/archives") {
     const parsed = await readJsonBody(req, res);
     if (!parsed.ok) return true;
@@ -70,6 +75,16 @@ export async function handleArchiveRoutes(
       return true;
     }
     json(res, archive);
+    return true;
+  }
+
+  if (method === "DELETE" && archiveParams) {
+    if (!deleteArchive(archiveParams.id)) {
+      notFound(res);
+      return true;
+    }
+    context.emit("archive:deleted", { archiveId: archiveParams.id });
+    json(res, { status: "deleted" });
     return true;
   }
 

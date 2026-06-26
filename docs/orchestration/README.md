@@ -57,6 +57,12 @@ support the default operator directory at `~/.jinn/orchestration/`, but the
 current CLI commands still require `--config-dir`. See
 `docs/orchestration/examples/` for complete examples.
 
+`jinn setup` seeds `~/.jinn/orchestration/` with a default config from
+`packages/jinn/template/orchestration/` (a curated five-worker pool whose teams
+are all staffable — see "Default config" below). Setup skips files that already
+exist, so re-running it backfills the config on instances created before it
+shipped, and never overwrites operator edits.
+
 Required files:
 
 - `workers.yaml`
@@ -71,6 +77,29 @@ Worker records describe provider, family, tier, capabilities, tools,
 concurrency, cost class, and workspace policy. Roles describe required
 capabilities/tools and routing constraints. Coordinator templates define the
 minimum viable team for a task class. Quotas bound active provider/family leases.
+
+### Default config
+
+The seeded default (`packages/jinn/template/orchestration/`) is a curated
+five-worker pool whose `provider` values are live Jinn engine adapter ids and
+whose `family` values are model vendors used for cross-family review:
+
+| Worker | provider / family | Staffs role(s) |
+| --- | --- | --- |
+| `codexImplementer` | codex / openai | seniorImplementer |
+| `codexArchitect` | codex / openai | architect |
+| `claudeReviewer` | claude / anthropic | independentReviewer |
+| `antigravityReviewer` | antigravity / google | adversarialReviewer (+ backup code_review) |
+| `localWorker` | pi / local | qaGate, localTriage |
+
+Every role in every coordinator template can be staffed by a distinct worker;
+`orchestration/__tests__/template-config.test.ts` asserts this. Notably,
+`architectureChange` needs `independentReviewer` and `adversarialReviewer` as two
+different workers in one allocation — `antigravityReviewer` exists so that team is
+satisfiable (the earlier roster had only one review-capable worker and blocked).
+Each worker is also declared as a governed agent surface in
+`governance/agent_registry.yaml` with instructions under
+`agent_instructions/orchestration/`.
 
 ## CLI
 

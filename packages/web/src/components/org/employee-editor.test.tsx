@@ -34,7 +34,10 @@ const saveBtn = () => screen.getByRole("button", { name: /^(Save|Saving)/ }) as 
 beforeEach(() => {
   updateEmployee.mockReset()
   getOrg.mockReset()
-  getOrg.mockResolvedValue({ departments: ["content"], employees: [{ name: "content-lead" }] })
+  getOrg.mockResolvedValue({
+    departments: ["content"],
+    employees: [{ name: "content-lead" }, { name: "review-lead" }],
+  })
 })
 
 describe("EmployeeEditor", () => {
@@ -73,6 +76,31 @@ describe("EmployeeEditor", () => {
     await waitFor(() => expect(screen.getByText("rank must be one of ...")).toBeTruthy())
     expect(onSaved).not.toHaveBeenCalled()
     expect(saveBtn()).toBeTruthy() // still open
+  })
+
+  it("preserves ordered reportsTo arrays when the reporting order changes", async () => {
+    const onSaved = vi.fn()
+    const employee: Employee = {
+      ...EMP,
+      reportsTo: ["content-lead", "review-lead"],
+    }
+    updateEmployee.mockResolvedValue({
+      status: "ok",
+      employee: { ...employee, reportsTo: ["review-lead", "content-lead"] },
+    })
+
+    render(<EmployeeEditor employee={employee} onCancel={() => {}} onSaved={onSaved} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Move review-lead up" }))
+    fireEvent.click(saveBtn())
+
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1))
+    expect(updateEmployee).toHaveBeenCalledWith("content-writer", {
+      reportsTo: ["review-lead", "content-lead"],
+    })
+    await waitFor(() =>
+      expect(onSaved).toHaveBeenCalledWith({ ...employee, reportsTo: ["review-lead", "content-lead"] }),
+    )
   })
 
   it("Cancel calls onCancel", () => {

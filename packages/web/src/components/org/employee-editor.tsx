@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ModelSelectorRow, type SelectorValue } from "@/components/chat/model-selector-row"
+import { ReportsToField, normalizeReportsTo, serializeReportsTo } from "@/components/org/reports-to-field"
 
 const LEVEL_OPTIONS = [
   { value: "manager", label: "Manager" },
@@ -22,11 +23,6 @@ const NONE = "__none__"
 
 function fallbackModelOf(employee: Employee): string {
   return employee.modelPolicy?.fallback_chain?.[0]?.model ?? ""
-}
-
-function firstReportsTo(rt: Employee["reportsTo"]): string {
-  if (!rt) return ""
-  return Array.isArray(rt) ? (rt[0] ?? "") : rt
 }
 
 interface FieldProps {
@@ -61,7 +57,7 @@ export function EmployeeEditor({
   const [displayName, setDisplayName] = useState(employee.displayName || employee.name)
   const [department, setDepartment] = useState(employee.department || "")
   const [rank, setRank] = useState<Employee["rank"]>(employee.rank)
-  const [reportsTo, setReportsTo] = useState(firstReportsTo(employee.reportsTo))
+  const [reportsTo, setReportsTo] = useState(() => normalizeReportsTo(employee.reportsTo))
   const [persona, setPersona] = useState(employee.persona || "")
   const [alwaysNotify, setAlwaysNotify] = useState(employee.alwaysNotify ?? true)
   const [cliFlags, setCliFlags] = useState((employee.cliFlags ?? []).join(" "))
@@ -95,8 +91,8 @@ export function EmployeeEditor({
     if (displayName !== (employee.displayName || employee.name)) p.displayName = displayName.trim()
     if (department !== (employee.department || "")) p.department = department
     if (rank !== employee.rank) p.rank = rank
-    const origReports = firstReportsTo(employee.reportsTo)
-    if (reportsTo !== origReports) p.reportsTo = reportsTo || undefined
+    const origReports = normalizeReportsTo(employee.reportsTo)
+    if (reportsTo.join("\n") !== origReports.join("\n")) p.reportsTo = serializeReportsTo(reportsTo)
     if (persona !== employee.persona) p.persona = persona
     if (alwaysNotify !== (employee.alwaysNotify ?? true)) p.alwaysNotify = alwaysNotify
     const flags = cliFlags.split(/\s+/).filter(Boolean)
@@ -191,18 +187,13 @@ export function EmployeeEditor({
         </Field>
       </div>
 
-      <Field label="Reports to" hint="Changing this re-parents the node on the map.">
-        <Select value={reportsTo || NONE} onValueChange={(v) => setReportsTo(v === NONE ? "" : v)}>
-          <SelectTrigger>
-            <SelectValue placeholder="None" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NONE}>None (top level)</SelectItem>
-            {employeeNames.map((n) => (
-              <SelectItem key={n} value={n}>{n}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <Field label="Reports to">
+        <ReportsToField
+          value={reportsTo}
+          options={employeeNames}
+          onChange={setReportsTo}
+          hint="Primary stays first. Additional entries are secondary matrix links."
+        />
       </Field>
 
       <Field label="Engine · Model · Effort" hint="Applies to new sessions for this employee.">

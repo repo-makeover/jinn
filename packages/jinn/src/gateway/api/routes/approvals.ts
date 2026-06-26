@@ -23,7 +23,7 @@ export async function handleApprovalRoutes(
   if (method === "GET" && pathname === "/api/approvals") {
     const stateParam = (url.searchParams.get("state") ?? "pending") as
       | "pending" | "approved" | "rejected" | "all";
-    json(res, listApprovals({ state: stateParam }));
+    json(res, listApprovals({ state: stateParam }).filter((approval) => approval.type !== "checkpoint"));
     return true;
   }
 
@@ -36,6 +36,11 @@ export async function handleApprovalRoutes(
     }
     const config = context.getConfig();
     const actor = resolveUserHeader(req.headers, config.gateway.userHeader) ?? null;
+
+    if (approval.type === "checkpoint") {
+      json(res, { error: "checkpoint approvals must be resolved via POST /api/checkpoints/:id/decision" }, 409);
+      return true;
+    }
 
     if (approval.type !== "fallback") {
       if (approval.state !== "pending") {
@@ -149,6 +154,10 @@ export async function handleApprovalRoutes(
     const approval = getApproval(approvalParams.id);
     if (!approval) {
       notFound(res);
+      return true;
+    }
+    if (approval.type === "checkpoint") {
+      json(res, { error: "checkpoint approvals must be resolved via POST /api/checkpoints/:id/decision" }, 409);
       return true;
     }
     if (approval.state !== "pending") {

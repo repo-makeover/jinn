@@ -1,5 +1,34 @@
 import type { TalkGraphNodeWire } from '@/routes/talk/protocol'
-import { authFetch } from "@/lib/auth"
+import { archiveApi } from "./api-archives"
+import { approvalApi } from "./api-approvals"
+import { authFetch, del, extractErrorMessage, get, post, put } from "./api-core"
+import { orgApi } from "./api-org"
+
+export type {
+  Approval,
+  ApprovalDecision,
+  ApprovalState,
+  Checkpoint,
+  CheckpointDecisionInput,
+  CheckpointPayload,
+} from "./api-approvals"
+export type {
+  ArchiveKind,
+  ArchivedMessage,
+  ArchivedMessageMedia,
+  ArchivedSessionSnapshot,
+  CreateArchivePayload,
+  ProjectArchive,
+  ProjectArchiveDetail,
+} from "./api-archives"
+export type {
+  Employee,
+  EmployeeCreate,
+  EmployeeUpdate,
+  OrgData,
+  OrgHierarchy,
+  OrgWarning,
+} from "./api-org"
 
 export interface TranscriptContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
@@ -20,137 +49,6 @@ export interface QueueItem {
   status: 'pending' | 'running' | 'cancelled' | 'completed';
   position: number;
   createdAt: string;
-}
-
-export interface Employee {
-  name: string;
-  displayName: string;
-  department: string;
-  rank: "executive" | "manager" | "senior" | "employee";
-  engine: string;
-  model: string;
-  persona: string;
-  emoji?: string;
-  /** Office avatar id, e.g. "office:pencil". Resolved to PNG by the frontend. */
-  avatar?: string;
-  effortLevel?: string;
-  cliFlags?: string[];
-  alwaysNotify?: boolean;
-  reportsTo?: string | string[];
-  parentName?: string | null;
-  directReports?: string[];
-  depth?: number;
-  chain?: string[];
-  modelPolicy?: {
-    fallback_chain?: Array<{
-      engine: string;
-      model?: string;
-      effortLevel?: string;
-      employee?: string;
-      reason?: string;
-    }>;
-  };
-}
-
-/** Editable employee fields accepted by PATCH /api/org/employees/:name.
- *  `name` is immutable and is intentionally omitted. */
-export interface EmployeeUpdate {
-  displayName?: string;
-  department?: string;
-  rank?: "executive" | "manager" | "senior" | "employee";
-  engine?: string;
-  model?: string;
-  effortLevel?: string;
-  persona?: string;
-  reportsTo?: string | string[];
-  cliFlags?: string[];
-  alwaysNotify?: boolean;
-  fallbackModel?: string | null;
-}
-
-export interface EmployeeCreate extends EmployeeUpdate {
-  name: string;
-  displayName: string;
-  department: string;
-  rank: "manager" | "senior" | "employee";
-  engine: string;
-  model: string;
-  persona: string;
-}
-
-export interface OrgWarning {
-  employee: string;
-  type: string;
-  message: string;
-  ref?: string;
-}
-
-export interface OrgHierarchy {
-  root: string | null;
-  sorted: string[];
-  warnings: OrgWarning[];
-}
-
-export interface OrgData {
-  departments: string[];
-  employees: Employee[];
-  hierarchy: OrgHierarchy;
-}
-
-async function extractErrorMessage(res: Response): Promise<string> {
-  try {
-    const body = await res.json();
-    if (body.error) return String(body.error);
-    if (body.message) return String(body.message);
-  } catch {
-    // Response wasn't JSON — fall through
-  }
-  return `API error: ${res.status}`;
-}
-
-async function get<T>(path: string): Promise<T> {
-  const res = await authFetch(path);
-  if (!res.ok) throw new Error(await extractErrorMessage(res));
-  return res.json();
-}
-
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await authFetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(await extractErrorMessage(res));
-  return res.json();
-}
-
-async function del<T>(path: string): Promise<T> {
-  const res = await authFetch(path, { method: "DELETE" });
-  if (!res.ok) throw new Error(await extractErrorMessage(res));
-  return res.json();
-}
-
-async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await authFetch(path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await extractErrorMessage(res));
-  return res.json();
-}
-
-async function patch<T>(path: string, body: unknown): Promise<T> {
-  const res = await authFetch(path, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await extractErrorMessage(res));
-  return res.json();
 }
 
 interface UploadedFile {
@@ -300,75 +198,6 @@ export type TalkDelegateResult =
   | { ok: true; threadId: string; attached: true; mode: "observe" | "engage" }
   | { ok: true; threadId: string; detached: true }
 
-export interface Approval {
-  id: string
-  sessionId: string
-  type: 'fallback' | 'tool' | 'custom'
-  payload: Record<string, unknown>
-  state: 'pending' | 'approved' | 'rejected'
-  createdAt: string
-  resolvedAt?: string | null
-  actor?: string | null
-}
-
-export type ArchiveKind = 'room' | 'scheduled' | 'chat'
-
-export interface ArchivedMessageMedia {
-  type: 'image' | 'audio' | 'file'
-  url: string
-  name?: string
-  mimeType?: string
-  size?: number
-}
-
-export interface ArchivedMessage {
-  role: string
-  content: string
-  timestamp: number
-  toolCall?: string
-  media?: ArchivedMessageMedia[]
-}
-
-export interface ArchivedSessionSnapshot {
-  id: string
-  engine: string
-  employee: string | null
-  model: string | null
-  title: string | null
-  promptExcerpt: string | null
-  source: string
-  sourceRef: string
-  status: string
-  createdAt: string
-  lastActivity: string
-  totalCost: number
-  totalTurns: number
-  parentSessionId: string | null
-  messages: ArchivedMessage[]
-}
-
-export interface ProjectArchive {
-  id: string
-  label: string | null
-  note: string | null
-  kind: ArchiveKind
-  sourceRef: string | null
-  createdAt: string
-  sessionCount: number
-}
-
-export interface ProjectArchiveDetail extends ProjectArchive {
-  sessions: ArchivedSessionSnapshot[]
-}
-
-export interface CreateArchivePayload {
-  kind: ArchiveKind
-  sessionIds: string[]
-  label?: string
-  note?: string
-  sourceRef?: string
-}
-
 export type WorkState =
   | 'queued' | 'running' | 'waiting_on_human' | 'blocked' | 'completed' | 'failed'
 
@@ -450,6 +279,9 @@ export interface TicketSessionResponse {
 }
 
 export const api = {
+  ...approvalApi,
+  ...archiveApi,
+  ...orgApi,
   authStatus: () => get<{ required: boolean; authenticated: boolean }>("/api/auth/status"),
   login: (token: string) => post<{ status: string }>("/api/auth/login", { token }),
   logout: () => post<{ status: string }>("/api/auth/logout", {}),
@@ -460,17 +292,6 @@ export const api = {
   fsRecent: () => get<FsRecent>("/api/fs/recent"),
   /** Feature 2: normalized work-state across all sessions. */
   getWork: () => get<WorkOverview>("/api/work"),
-  /** Feature 1: human approval queue (model-fallback gates). */
-  getApprovals: (state: 'pending' | 'approved' | 'rejected' | 'all' = 'pending') =>
-    get<Approval[]>(`/api/approvals?state=${state}`),
-  approveApproval: (id: string) =>
-    post<{ approval: Approval; session?: Record<string, unknown> }>(`/api/approvals/${id}/approve`, {}),
-  rejectApproval: (id: string) =>
-    post<{ approval: Approval }>(`/api/approvals/${id}/reject`, {}),
-  listArchives: () => get<ProjectArchive[]>("/api/archives"),
-  getArchive: (id: string) => get<ProjectArchiveDetail>(`/api/archives/${id}`),
-  createArchive: (data: CreateArchivePayload) => post<ProjectArchive>("/api/archives", data),
-  deleteArchive: (id: string) => del<{ status: string }>(`/api/archives/${id}`),
   /** Resolved model + capability registry (engines, their models, effort levels). */
   getEngines: () => get<EnginesResponse>("/api/engines"),
   /** Force re-discovery of dynamic (pi) models, returning the rebuilt registry. */
@@ -516,17 +337,6 @@ export const api = {
     put<Record<string, unknown>>(`/api/cron/${id}`, data),
   triggerCronJob: (id: string) =>
     post<Record<string, unknown>>(`/api/cron/${id}/trigger`, {}),
-  getOrg: () => get<OrgData>("/api/org"),
-  getEmployee: (name: string) => get<Employee>(`/api/org/employees/${name}`),
-  /** PATCH an employee's editable fields. `name` is immutable and must not be sent.
-   *  Returns the updated employee as re-scanned from disk. */
-  updateEmployee: (name: string, data: EmployeeUpdate) =>
-    patch<{ status: string; employee: Employee | null }>(
-      `/api/org/employees/${name}`,
-      data,
-    ),
-  createEmployee: (data: EmployeeCreate) =>
-    post<{ status: string; employee: Employee | null }>("/api/org/employees", data),
   getDepartmentBoard: (name: string) =>
     get<DepartmentBoardResponse>(`/api/org/departments/${name}/board`),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),

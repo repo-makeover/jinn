@@ -1,9 +1,9 @@
-# Difference Report: `hristo2612/jinn` to This Checkout
+# Difference Report: Upstream Baseline to This Checkout
 
 ## Snapshot
 
 - Date: 2026-06-25
-- Compared upstream: `https://github.com/hristo2612/jinn`, branch `main`
+- Compared upstream: configured `upstream` remote, branch `main`
 - Upstream commit: `7d47260f2055d1020fcce1b4546b64bc42d3296b` (`formula: bump to v0.23.3`)
 - Local commit compared: `9f877408cd1e42580a853f9e97c5b3a5970af4a3` (`chore: cleanup Playwright MCP artifacts and update documentation`)
 - Relationship: local `main` is 244 commits ahead of `upstream/main`; no upstream-only commits were present at fetch time.

@@ -21,7 +21,7 @@
 - `docs/DECISION_LOG.md`
 - `docs/DOC_MAINTENANCE.md`
 - `docs/STRUCTURE_COMPLIANCE.md`
-- `docs/UPSTREAM_DIFF_HRISTO2612.md`
+- `docs/UPSTREAM_DIFF_BASELINE.md`
 - `docs/LOG_ARCHIVE.md`
 - `docs/SESSION_SUMMARY_062026.md`
 - `docs/AUDIT_SUMMARY_062026.md`
@@ -50,7 +50,7 @@
 | Markdown relative-link check | passed | 115 tracked Markdown files checked with a local Node script. |
 | Mermaid render tool check | skipped | `mmdc` is not installed; Mermaid fences are present in `docs/IMPLEMENTATION_DIAGRAMS.md`. |
 | legacy Node prerequisite scan | passed | No stale mixed-version prerequisite strings remained in current docs or setup output. |
-| `git fetch upstream main` + upstream diff commands | passed | `upstream/main` from `hristo2612/jinn` compared to local `HEAD`; local branch was 244 commits ahead at snapshot time. |
+| `git fetch upstream main` + upstream diff commands | passed | `upstream/main` compared to local `HEAD`; local branch was 244 commits ahead at snapshot time. |
 | `pnpm lint` | passed | Both package lint tasks passed. |
 | `pnpm typecheck` | passed | Both package typecheck tasks passed. |
 | `pnpm --filter jinn-cli exec vitest run src/cli/__tests__/config-seed.test.ts` | passed | 5 setup/config-seed tests passed. |

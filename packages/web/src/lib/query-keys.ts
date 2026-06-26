@@ -26,6 +26,9 @@ export const queryKeys = {
   approvals: {
     all: ['approvals'] as const,
   },
+  checkpoints: {
+    all: ['checkpoints'] as const,
+  },
   archives: {
     all: ['archives'] as const,
     detail: (id: string) => ['archives', id] as const,

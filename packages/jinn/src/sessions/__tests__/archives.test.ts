@@ -126,6 +126,33 @@ describe("project archives registry", () => {
 });
 
 describe("project archives API", () => {
+  it("GET /api/archives returns newest-first summaries", async () => {
+    const first = reg.createSession({
+      engine: "claude",
+      source: "web",
+      sourceRef: "web:list-a",
+      title: "Archive list A",
+    });
+    const second = reg.createSession({
+      engine: "claude",
+      source: "web",
+      sourceRef: "web:list-b",
+      title: "Archive list B",
+    });
+    const older = reg.createArchive({ kind: "chat", label: "Older archive", sessions: reg.snapshotSessions([first.id]) });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newer = reg.createArchive({ kind: "chat", label: "Newer archive", sessions: reg.snapshotSessions([second.id]) });
+
+    const cap = makeRes();
+    await api.handleApiRequest(makeReq("GET", "/api/archives"), cap.res, makeCtx());
+
+    expect(cap.status).toBe(200);
+    expect(cap.body).toEqual([
+      expect.objectContaining({ id: newer.id, label: "Newer archive" }),
+      expect.objectContaining({ id: older.id, label: "Older archive" }),
+    ]);
+  });
+
   it("POST /api/archives snapshots then deletes live sessions", async () => {
     const session = reg.createSession({
       engine: "claude",
@@ -213,5 +240,25 @@ describe("project archives API", () => {
       makeCtx(),
     );
     expect(cap.status).toBe(400);
+  });
+
+  it("DELETE /api/archives/:id removes an archive and returns 404 when missing", async () => {
+    const session = reg.createSession({
+      engine: "claude",
+      source: "web",
+      sourceRef: "web:archive-delete",
+      title: "Archive delete",
+    });
+    const archive = reg.createArchive({ kind: "chat", label: "Delete me", sessions: reg.snapshotSessions([session.id]) });
+
+    const cap = makeRes();
+    await api.handleApiRequest(makeReq("DELETE", `/api/archives/${archive.id}`), cap.res, makeCtx());
+    expect(cap.status).toBe(200);
+    expect(cap.body).toEqual({ status: "deleted" });
+    expect(reg.getArchive(archive.id)).toBeUndefined();
+
+    const missing = makeRes();
+    await api.handleApiRequest(makeReq("DELETE", `/api/archives/${archive.id}`), missing.res, makeCtx());
+    expect(missing.status).toBe(404);
   });
 });

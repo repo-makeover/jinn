@@ -94,11 +94,13 @@ describe("approvals store", () => {
 describe("approvals endpoints", () => {
   it("GET /api/approvals returns the pending queue", async () => {
     store.createApproval({ sessionId: "s1", type: "fallback", payload: {} });
+    store.createApproval({ sessionId: "s1", type: "checkpoint", payload: { decisionNeeded: "Ship it", why: "Need a human" } });
     const cap = makeRes();
     await api.handleApiRequest(makeReq("GET", "/api/approvals"), cap.res, makeCtx());
     expect(cap.status).toBe(200);
     expect(Array.isArray(cap.body)).toBe(true);
     expect((cap.body as unknown[]).length).toBe(1);
+    expect((cap.body as Array<{ type: string }>)[0]?.type).toBe("fallback");
   });
 
   it("approve on a missing approval → 404", async () => {
@@ -113,6 +115,28 @@ describe("approvals endpoints", () => {
     const cap = makeRes();
     await api.handleApiRequest(makeReq("POST", `/api/approvals/${a.id}/approve`), cap.res, makeCtx());
     expect(cap.status).toBe(409);
+  });
+
+  it("rejects checkpoint ids on the generic approvals endpoints", async () => {
+    const checkpoint = store.createApproval({
+      sessionId: "s1",
+      type: "checkpoint",
+      payload: { decisionNeeded: "Delete report", why: "Destructive" },
+    });
+
+    const approveCap = makeRes();
+    await api.handleApiRequest(makeReq("POST", `/api/approvals/${checkpoint.id}/approve`), approveCap.res, makeCtx());
+    expect(approveCap.status).toBe(409);
+    expect(approveCap.body).toEqual(expect.objectContaining({
+      error: expect.stringContaining("/api/checkpoints"),
+    }));
+
+    const rejectCap = makeRes();
+    await api.handleApiRequest(makeReq("POST", `/api/approvals/${checkpoint.id}/reject`), rejectCap.res, makeCtx());
+    expect(rejectCap.status).toBe(409);
+    expect(rejectCap.body).toEqual(expect.objectContaining({
+      error: expect.stringContaining("/api/checkpoints"),
+    }));
   });
 
   it("approve a fallback whose target engine is unavailable → 422", async () => {

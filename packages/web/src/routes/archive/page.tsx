@@ -131,10 +131,10 @@ function ArchiveListCard({
 
 export default function ArchivePage() {
   useBreadcrumbs([{ label: 'Archive' }])
-  const { data: archives, isLoading } = useArchives()
+  const { data: archives, isLoading, error: archivesError } = useArchives()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const activeId = selectedId ?? archives?.[0]?.id ?? null
-  const { data: detail, isLoading: detailLoading } = useArchive(activeId)
+  const { data: detail, isLoading: detailLoading, error: detailError } = useArchive(activeId)
   const deleteArchive = useDeleteArchive()
 
   useEffect(() => {
@@ -188,6 +188,10 @@ export default function ArchivePage() {
                 <Skeleton className="h-28 w-full" />
                 <Skeleton className="h-28 w-full" />
               </div>
+            ) : archivesError ? (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+                {archivesError instanceof Error ? archivesError.message : 'Failed to load previous projects.'}
+              </div>
             ) : !archives || archives.length === 0 ? (
               <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
                 No previous projects.
@@ -211,6 +215,10 @@ export default function ArchivePage() {
               <div className="flex flex-col gap-3">
                 <Skeleton className="h-36 w-full" />
                 <Skeleton className="h-72 w-full" />
+              </div>
+            ) : detailError ? (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+                {detailError instanceof Error ? detailError.message : 'Failed to load archive detail.'}
               </div>
             ) : !detail ? (
               <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">

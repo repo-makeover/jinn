@@ -25,8 +25,8 @@ artifacts unless explicitly published.
   historical, local-only, and generated documentation surfaces.
 - `docs/STRUCTURE_COMPLIANCE.md`: documentation structure and retention-policy
   compliance report.
-- `docs/UPSTREAM_DIFF_HRISTO2612.md`: source-grounded comparison between this
-  checkout and `https://github.com/hristo2612/jinn`.
+- `docs/UPSTREAM_DIFF_BASELINE.md`: source-grounded comparison between this
+  checkout and the configured upstream baseline.
 - `docs/LOG_ARCHIVE.md`: raw-log retention policy and durable summary index.
 - `docs/SESSION_SUMMARY_062026.md`: durable June 2026 session summary.
 - `docs/AUDIT_SUMMARY_062026.md`: durable June 2026 audit summary.
