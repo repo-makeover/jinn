@@ -4,8 +4,17 @@ import type { MediaAttachment } from '@/lib/conversations'
 import { MediaPreview } from './media-preview'
 import { useStt } from '@/hooks/use-stt'
 import { WhisperDownloadModal } from '@/components/stt/whisper-download-modal'
-import { MicWaveform } from './mic-waveform'
-import { EmployeeAvatar } from '@/components/ui/employee-avatar'
+import { ChatInputComposer } from './chat-input-composer'
+import { CommandSuggestions, MentionSuggestions } from './chat-input-suggestions'
+import {
+  BUILTIN_COMMANDS,
+  fileToAttachment,
+  resolveClientCommand,
+  type Employee,
+  type SlashCommand,
+} from './chat-input-utils'
+
+export { resolveClientCommand, type ClientCommand } from './chat-input-utils'
 
 /** Hold threshold (ms) that separates a quick tap from a tap-and-hold. */
 export const MIC_HOLD_THRESHOLD_MS = 250
@@ -23,37 +32,6 @@ export function classifyMicGesture(
   threshold: number = MIC_HOLD_THRESHOLD_MS,
 ): MicGesture {
   return upAt - downAt >= threshold ? 'hold' : 'tap'
-}
-
-interface Employee {
-  name: string
-  displayName?: string
-  department?: string
-  rank?: string
-  engine?: string
-  avatar?: string
-}
-
-interface SlashCommand {
-  name: string
-  description: string
-  /** Whether this command needs an @employee argument */
-  needsEmployee?: boolean
-}
-
-/** Built-in commands handled client-side (not sent to engine) */
-const BUILTIN_COMMANDS: SlashCommand[] = [
-  { name: 'new', description: 'Start a new chat session' },
-  { name: 'status', description: 'Show current session info' },
-]
-
-export type ClientCommand = 'new' | 'status'
-
-export function resolveClientCommand(text: string): ClientCommand | null {
-  const trimmed = text.trim()
-  if (trimmed === '/new') return 'new'
-  if (trimmed === '/status') return 'status'
-  return null
 }
 
 interface ChatInputProps {
@@ -83,61 +61,6 @@ interface ChatInputProps {
   mobileTerminalActionsSlot?: React.ReactNode
   /** Keeps the terminal hint footprint reserved when inactive to avoid mode-switch shifts. */
   reserveTerminalActions?: boolean
-}
-
-/* ── File to MediaAttachment ─────────────────────────────── */
-
-function resizeImage(file: File, maxPx: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    const url = URL.createObjectURL(file)
-    img.onload = () => {
-      URL.revokeObjectURL(url)
-      let { width, height } = img
-      if (width > maxPx || height > maxPx) {
-        const scale = maxPx / Math.max(width, height)
-        width = Math.round(width * scale)
-        height = Math.round(height * scale)
-      }
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const ctx = canvas.getContext('2d')
-      if (!ctx) { reject(new Error('no canvas context')); return }
-      ctx.drawImage(img, 0, 0, width, height)
-      const mimeType = file.size > 50000 ? 'image/jpeg' : 'image/png'
-      const quality = mimeType === 'image/jpeg' ? 0.85 : undefined
-      resolve(canvas.toDataURL(mimeType, quality))
-    }
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image load failed')) }
-    img.src = url
-  })
-}
-
-async function fileToAttachment(file: File): Promise<MediaAttachment> {
-  const isImage = file.type.startsWith('image/')
-  const isAudio = file.type.startsWith('audio/')
-
-  let dataUrl: string
-  if (isImage) {
-    dataUrl = await resizeImage(file, 1200)
-  } else {
-    dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onloadend = () => resolve(reader.result as string)
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
-  }
-
-  return {
-    type: isImage ? 'image' : isAudio ? 'audio' : 'file',
-    url: dataUrl,
-    name: file.name,
-    mimeType: file.type,
-    size: file.size,
-    file,
-  }
 }
 
 /* ── Component ──────────────────────────────────────────── */
@@ -534,63 +457,21 @@ export function ChatInput({
       {/* Soft top scrim — fades scrolling content into the composer instead of a
           hard 1px divider. Borderless, readable over the thread in both themes. */}
       <div aria-hidden className="pointer-events-none absolute -top-5 left-0 right-0 h-5 bg-gradient-to-b from-transparent to-[var(--bg)]" />
-      {/* Slash command autocomplete */}
-      {showCommands && filteredCommands.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 sm:left-4 sm:right-4 mb-1 border-0 bg-[var(--bg-tertiary)] rounded-[var(--radius-lg)] shadow-[var(--shadow-overlay)] max-h-60 overflow-y-auto z-10">
-          {filteredCommands.map((cmd, idx) => {
-            const isHighlighted = idx === commandIndex
-            return (
-              <button
-                key={cmd.name}
-                ref={(el) => {
-                  if (isHighlighted && el) el.scrollIntoView({ block: 'nearest' })
-                }}
-                onClick={() => handleCommandSelect(cmd)}
-                className={`w-full text-left py-[var(--space-2)] px-[var(--space-3)] text-[length:var(--text-footnote)] ${isHighlighted ? 'bg-[var(--fill-secondary)]' : 'bg-transparent'} border-none cursor-pointer flex items-center gap-[var(--space-2)] text-[var(--text-primary)]`}
-              >
-                <span className="font-[family-name:var(--font-mono)] font-[var(--weight-semibold)] text-[var(--accent)] text-[length:var(--text-footnote)]">/{cmd.name}</span>
-                <span className="text-[var(--text-tertiary)] text-[length:var(--text-caption1)]">{cmd.description}</span>
-              </button>
-            )
-          })}
-        </div>
+      {showCommands && (
+        <CommandSuggestions
+          commands={filteredCommands}
+          highlightedIndex={commandIndex}
+          onSelect={handleCommandSelect}
+        />
       )}
 
-      {/* Mention autocomplete */}
-      {showMentions && filteredEmployees.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 sm:left-4 sm:right-4 mb-1 border-0 bg-[var(--bg-tertiary)] rounded-[var(--radius-lg)] shadow-[var(--shadow-overlay)] max-h-40 overflow-y-auto z-10">
-          {filteredEmployees.slice(0, 8).map((emp, idx) => {
-            const isHighlighted = idx === mentionIndex
-            return (
-              <button
-                key={emp.name}
-                ref={(el) => {
-                  if (el) mentionItemRefs.current.set(idx, el)
-                  else mentionItemRefs.current.delete(idx)
-                  if (isHighlighted && el) el.scrollIntoView({ block: 'nearest' })
-                }}
-                onClick={() => handleMentionSelect(emp.name)}
-                className={`w-full text-left py-[var(--space-2)] px-[var(--space-3)] text-[length:var(--text-footnote)] ${isHighlighted ? 'bg-[var(--fill-secondary)]' : 'bg-transparent'} border-none cursor-pointer flex items-center gap-[var(--space-2)] text-[var(--text-primary)]`}
-              >
-                <EmployeeAvatar name={emp.name} avatar={emp.avatar} size={20} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-[var(--space-2)]">
-                    <span className="font-[var(--weight-semibold)]">{emp.displayName || emp.name}</span>
-                    <span className="font-[family-name:var(--font-mono)] text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">@{emp.name}</span>
-                  </div>
-                  {emp.department && (
-                    <div className="text-[length:var(--text-caption2)] text-[var(--text-quaternary)] flex gap-[var(--space-2)] mt-px">
-                      <span>{emp.department}</span>
-                      {emp.engine && (
-                        <span className="text-[var(--accent)] font-[var(--weight-medium)]">{emp.engine}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </button>
-            )
-          })}
-        </div>
+      {showMentions && (
+        <MentionSuggestions
+          employees={filteredEmployees}
+          highlightedIndex={mentionIndex}
+          itemRefs={mentionItemRefs}
+          onSelect={handleMentionSelect}
+        />
       )}
 
       {/* Pending attachments preview */}
@@ -603,175 +484,25 @@ export function ChatInput({
         </div>
       )}
 
-      {/* Composer card — borderless: soft fill + shadow do the separating, no
-          hairline at rest. A low-opacity accent ring (not a 1px border) marks
-          the streaming state. */}
-      <div
-        className="composer-card rounded-[22px] bg-[var(--bg-secondary)] px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2)] transition-shadow duration-200 ease-in-out"
-        style={
-          // While streaming, the inline accent ring overrides the CSS class so
-          // it always wins over the :focus-within ring. When idle, no inline
-          // boxShadow → the .composer-card stylesheet rule governs (base shadow
-          // + soft :focus-within accent ring).
-          loading
-            ? { boxShadow: 'var(--shadow-card), 0 0 0 1.5px color-mix(in srgb, var(--accent) 38%, transparent)' }
-            : undefined
-        }
-        onPointerDown={(e) => {
-          // Click-to-focus: tapping anywhere in the card (including the gaps
-          // between toolbar buttons) lands the caret in the textarea. Real
-          // controls stopPropagation so this never fires for them.
-          if (disabled) return
-          e.preventDefault() // don't steal/blur an existing selection
-          textareaRef.current?.focus()
-        }}
-      >
-        {/* Textarea */}
-        <textarea
-          id="chat-textarea"
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          onPointerDown={(e) => e.stopPropagation()}
-          placeholder={
-            disabled
-              ? 'Waiting for response...'
-              : 'Type a message...'
-          }
-          rows={1}
-          disabled={disabled}
-          className={`block w-full bg-transparent border-none outline-none resize-none overflow-y-auto text-[var(--text-primary)] text-[length:var(--text-subheadline)] leading-6 min-h-6 px-1 pt-1 pb-2 m-0 ${disabled ? 'opacity-50' : 'opacity-100'}`}
-          onInput={(e) => {
-            resize(e.target as HTMLTextAreaElement)
-          }}
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,audio/*,.pdf,.doc,.docx,.txt,.csv,.json,.zip"
-          multiple
-          className="hidden"
-          onChange={handleFileAttach}
-        />
-
-        {/* Toolbar: [+ attach] · [model chip] · spacer · [mic] · [send] */}
-        <div className="flex items-center gap-[var(--space-2)]">
-          {/* Attach */}
-          <button
-            aria-label="Attach file"
-            title="Attach file"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => fileInputRef.current?.click()}
-            className="w-[36px] h-[36px] shrink-0 rounded-full flex items-center justify-center bg-transparent border-none cursor-pointer text-[var(--text-secondary)] hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)] transition-colors"
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
-
-          {/* Model chip — the restyled selector trigger. Wrapped so clicks on
-              the trigger (and its inline popover) don't re-trigger card focus,
-              while the trigger's own behavior is preserved. */}
-          {selectorSlot && (
-            <div
-              className="min-w-0 flex items-center overflow-hidden"
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              {selectorSlot}
-            </div>
-          )}
-
-          <div className="flex-1" />
-
-          {/* Language picker — only shown when multiple STT languages configured */}
-          {stt.languages.length > 1 && (
-            <button
-              aria-label={`STT language: ${stt.selectedLanguage.toUpperCase()}. Click to switch.`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={stt.cycleLanguage}
-              className="h-7 px-2 shrink-0 rounded-full flex items-center justify-center bg-[var(--fill-tertiary)] border-none cursor-pointer text-[var(--text-secondary)] text-[11px] font-semibold font-[family-name:var(--font-mono)] tracking-[0.5px] uppercase hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)] transition-all duration-150 ease-in-out"
-              title={`Transcription language: ${stt.selectedLanguage.toUpperCase()}. Click to cycle.`}
-            >
-              {stt.selectedLanguage}
-            </button>
-          )}
-
-          {/* Voice input / STT button — tap-and-hold = push-to-talk, quick tap =
-              toggle. While recording the button morphs into a compact waveform. */}
-          <button
-            aria-label={
-              stt.state === 'recording' ? 'Stop recording'
-              : stt.state === 'transcribing' ? 'Transcribing…'
-              : 'Voice input'
-            }
-            onPointerDown={handleMicPointerDown}
-            onPointerUp={handleMicPointerUp}
-            onPointerCancel={handleMicPointerUp}
-            disabled={stt.state === 'transcribing'}
-            className={`w-[36px] h-[36px] shrink-0 flex items-center justify-center border-none transition-all duration-150 ease-in-out touch-none select-none ${stt.state === 'recording' ? 'rounded-full bg-[var(--system-red)] text-white cursor-pointer' : `rounded-full bg-transparent text-[var(--text-secondary)] hover:bg-[var(--fill-secondary)] hover:text-[var(--text-primary)] ${stt.state === 'transcribing' ? 'cursor-wait' : 'cursor-pointer'}`}`}
-            title={
-              stt.state === 'recording' ? 'Stop recording'
-              : stt.state === 'transcribing' ? 'Transcribing…'
-              : 'Hold to talk · tap to toggle'
-            }
-          >
-            {stt.state === 'recording' && stt.analyser ? (
-              <MicWaveform analyser={stt.analyser} />
-            ) : stt.state === 'transcribing' ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-[stt-spin_1s_linear_infinite]">
-                <path d="M12 2a10 10 0 0 1 10 10" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                <line x1="12" y1="19" x2="12" y2="23" />
-                <line x1="8" y1="23" x2="16" y2="23" />
-              </svg>
-            )}
-          </button>
-
-          {/* Send ↔ Stop — one persistent circular button. While a turn streams
-              (and an interrupt handler exists) it morphs to red and calls the
-              SAME stop handler; otherwise it sends. Background + icon crossfade
-              keyed on `loading` instead of an instant button swap. */}
-          {(() => {
-            const showStop = loading && !!onInterrupt
-            return (
-              <button
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={showStop ? onInterrupt : handleSubmit}
-                disabled={showStop ? false : (!hasContent || disabled)}
-                aria-label={showStop ? 'Stop' : 'Send message'}
-                title={showStop ? 'Stop' : 'Send message'}
-                className={`relative w-[38px] h-[38px] rounded-full border-none flex items-center justify-center shrink-0 transition-all duration-200 ease-in-out ${
-                  showStop
-                    ? 'bg-[var(--system-red)] text-white cursor-pointer'
-                    : hasContent
-                      ? 'bg-[var(--accent)] text-[var(--accent-contrast)] cursor-pointer'
-                      : 'bg-[var(--fill-tertiary)] text-[var(--text-quaternary)] cursor-default'
-                }`}
-              >
-                {/* Send arrow */}
-                <span className={`absolute inset-0 flex items-center justify-center transition-all duration-200 ease-in-out ${showStop ? 'opacity-0 scale-50' : 'opacity-100 scale-100'}`}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="19" x2="12" y2="5" />
-                    <polyline points="5 12 12 5 19 12" />
-                  </svg>
-                </span>
-                {/* Stop square */}
-                <span className={`absolute inset-0 flex items-center justify-center transition-all duration-200 ease-in-out ${showStop ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="4" y="4" width="16" height="16" rx="2" />
-                  </svg>
-                </span>
-              </button>
-            )
-          })()}
-        </div>
-      </div>
+      <ChatInputComposer
+        disabled={disabled}
+        loading={loading}
+        value={value}
+        hasContent={hasContent}
+        textareaRef={textareaRef}
+        fileInputRef={fileInputRef}
+        stt={stt}
+        selectorSlot={selectorSlot}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onInput={(e) => resize(e.target as HTMLTextAreaElement)}
+        onFileAttach={handleFileAttach}
+        onMicPointerDown={handleMicPointerDown}
+        onMicPointerUp={handleMicPointerUp}
+        onSubmit={handleSubmit}
+        onInterrupt={onInterrupt}
+      />
 
       {/* Slim helper row — shortcuts + terminal access (CLI view). Quiet; the
           command/mention hints were dropped (discoverable by typing / or @). */}
