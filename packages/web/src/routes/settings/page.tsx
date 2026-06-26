@@ -1,400 +1,41 @@
-
 import { useEffect, useState } from "react"
-import { RotateCcw, Trash2, Check, Save, Loader2 } from "lucide-react"
 import { PageLayout } from "@/components/page-layout"
-import { useSettings } from "@/routes/settings-provider"
 import { useBreadcrumbs } from "@/context/breadcrumb-context"
-import { useTheme } from "@/routes/providers"
-import { THEMES } from "@/lib/themes"
-import type { ThemeId } from "@/lib/themes"
-import { api } from "@/lib/api"
-import { EmojiPicker } from "@/components/ui/emoji-picker"
 import { useModelRegistry } from "@/hooks/use-model-registry"
-import { RemoteAccessPanel } from "@/components/auth/remote-access-panel"
+import { api } from "@/lib/api"
 import { useAuth } from "@/routes/auth-provider"
-import { formatLineList, parseLineList, formatFallbackChain, parseFallbackChain } from "./settings-config"
-import type { Config } from "./settings-constants"
+import { useTheme } from "@/routes/providers"
+import { useSettings } from "@/routes/settings-provider"
 import { SettingsConnectorsSection } from "./settings-connectors-section"
+import type { Config } from "./settings-constants"
+import {
+  AppearanceSection,
+  BrandingSection,
+  CooEmojiSection,
+  PairingSection,
+  ResetSection,
+} from "./settings-page-sections"
+import {
+  BoardWorkerSection,
+  ConfigActions,
+  ConfigFeedback,
+  ConfigLoadState,
+  CronSection,
+  EngineConfigurationSection,
+  GatewayWorkspacesSection,
+  LoggingSection,
+  RecoveryFallbacksSection,
+} from "./settings-config-sections"
+import { FieldRow, Section, SettingsInput, SettingsSelect, ToggleSwitch } from "./settings-fields"
+import { SttSettingsSection } from "./stt-section"
 
-// ---------------------------------------------------------------------------
-// Accent color presets
-// ---------------------------------------------------------------------------
-
-const ACCENT_PRESETS = [
-  { label: "Red", value: "#EF4444" },
-  { label: "Orange", value: "#F97316" },
-  { label: "Amber", value: "#F59E0B" },
-  { label: "Yellow", value: "#EAB308" },
-  { label: "Lime", value: "#84CC16" },
-  { label: "Green", value: "#22C55E" },
-  { label: "Emerald", value: "#10B981" },
-  { label: "Cyan", value: "#06B6D4" },
-  { label: "Blue", value: "#3B82F6" },
-  { label: "Indigo", value: "#6366F1" },
-  { label: "Violet", value: "#8B5CF6" },
-  { label: "Pink", value: "#EC4899" },
-]
-
-// Config type imported from settings-constants (see import above)
-
-// ---------------------------------------------------------------------------
-// Section wrapper using CSS variable styling
-// ---------------------------------------------------------------------------
-
-function Section({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
-}) {
-  return (
-    <section className="mb-[var(--space-6)]">
-      <div
-        className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] tracking-[var(--tracking-wide)] uppercase text-[var(--text-tertiary)] px-[var(--space-2)] pb-[var(--space-2)]"
-      >
-        {title}
-      </div>
-      <div
-        className="rounded-[var(--radius-lg)] bg-[var(--material-regular)] p-[var(--space-4)] shadow-[inset_0_0_0_1px_var(--separator)]"
-      >
-        {children}
-      </div>
-    </section>
-  )
-}
-
-function FieldRow({
-  label,
-  children,
-}: {
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className="flex flex-col items-stretch gap-[var(--space-2)] py-[var(--space-2)] sm:flex-row sm:items-center sm:justify-between sm:gap-[var(--space-4)]"
-    >
-      <label
-        className="shrink-0 text-[length:var(--text-subheadline)] text-[var(--text-secondary)]"
-      >
-        {label}
-      </label>
-      <div className="min-w-0 w-full sm:w-[240px] sm:shrink-0">{children}</div>
-    </div>
-  )
-}
-
-function SettingsInput({
-  value,
-  onChange,
-  type = "text",
-  placeholder,
-}: {
-  value: string
-  onChange: (v: string) => void
-  type?: string
-  placeholder?: string
-}) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      className="apple-input w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)]"
-    />
-  )
-}
-
-function SettingsSelect({
-  value,
-  onChange,
-  options,
-}: {
-  value: string
-  onChange: (v: string) => void
-  options: { value: string; label: string }[]
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)] cursor-pointer"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  )
-}
-
-function SettingsTextarea({
-  value,
-  onChange,
-  placeholder,
-  rows = 4,
-}: {
-  value: string
-  onChange: (v: string) => void
-  placeholder?: string
-  rows?: number
-}) {
-  return (
-    <textarea
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      rows={rows}
-      className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[8px] text-[length:var(--text-footnote)] text-[var(--text-primary)] resize-y"
-    />
-  )
-}
-
-function FieldHint({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-[4px] text-[length:var(--text-caption1)] text-[var(--label-secondary)]">
-      {children}
-    </div>
-  )
-}
-
-function ToggleSwitch({
-  checked,
-  onChange,
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="w-[44px] h-[24px] rounded-[12px] border-none cursor-pointer relative shrink-0 transition-[background] duration-200 ease-[var(--ease-smooth)]"
-      style={{
-        background: checked ? "var(--system-green)" : "var(--fill-primary)",
-      }}
-    >
-      <span
-        className="absolute top-[2px] w-[20px] h-[20px] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.2)] transition-[left] duration-200 ease-[var(--ease-spring)]"
-        style={{
-          left: checked ? 22 : 2,
-        }}
-      />
-    </button>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Whisper STT language list (curated top ~35)
-// ---------------------------------------------------------------------------
-
-const WHISPER_LANGUAGES: Record<string, string> = {
-  en: "English", bg: "Bulgarian", de: "German", fr: "French", es: "Spanish",
-  it: "Italian", pt: "Portuguese", ru: "Russian", zh: "Chinese", ja: "Japanese",
-  ko: "Korean", ar: "Arabic", hi: "Hindi", tr: "Turkish", pl: "Polish",
-  nl: "Dutch", sv: "Swedish", cs: "Czech", el: "Greek", ro: "Romanian",
-  uk: "Ukrainian", he: "Hebrew", da: "Danish", fi: "Finnish", hu: "Hungarian",
-  no: "Norwegian", sk: "Slovak", hr: "Croatian", ca: "Catalan", th: "Thai",
-  vi: "Vietnamese", id: "Indonesian", ms: "Malay", tl: "Filipino", sr: "Serbian",
-  lt: "Lithuanian", lv: "Latvian", sl: "Slovenian", et: "Estonian",
-}
-
-// ---------------------------------------------------------------------------
-// Voice Input (STT) settings section — self-contained state
-// ---------------------------------------------------------------------------
-
-function SttSettingsSection() {
-  const [status, setStatus] = useState<{
-    available: boolean
-    model: string | null
-    downloading: boolean
-    progress: number
-    languages: string[]
-  } | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [addLang, setAddLang] = useState("")
-
-  useEffect(() => {
-    api.sttStatus().then(setStatus).catch(() => {})
-  }, [])
-
-  // Poll for download progress
-  useEffect(() => {
-    if (!status?.downloading) return
-    const timer = setInterval(() => {
-      api.sttStatus().then(setStatus).catch(() => {})
-    }, 1500)
-    return () => clearInterval(timer)
-  }, [status?.downloading])
-
-  function handleRemoveLanguage(code: string) {
-    if (!status || status.languages.length <= 1) return
-    const next = status.languages.filter((l) => l !== code)
-    setSaving(true)
-    api.sttUpdateConfig(next)
-      .then(() => setStatus((prev) => prev ? { ...prev, languages: next } : prev))
-      .catch(() => {})
-      .finally(() => setSaving(false))
-  }
-
-  function handleAddLanguage() {
-    if (!addLang || !status || status.languages.includes(addLang)) return
-    const next = [...status.languages, addLang]
-    setSaving(true)
-    setAddLang("")
-    api.sttUpdateConfig(next)
-      .then(() => setStatus((prev) => prev ? { ...prev, languages: next } : prev))
-      .catch(() => {})
-      .finally(() => setSaving(false))
-  }
-
-  function handleDownload() {
-    api.sttDownload()
-      .then(() => setStatus((prev) => prev ? { ...prev, downloading: true, progress: 0 } : prev))
-      .catch(() => {})
-  }
-
-  if (!status) return null
-
-  const availableLangs = Object.entries(WHISPER_LANGUAGES)
-    .filter(([code]) => !status.languages.includes(code))
-    .sort((a, b) => a[1].localeCompare(b[1]))
-
-  return (
-    <Section title="Voice Input">
-      {/* Status row */}
-      <div className="flex items-center gap-[var(--space-3)] mb-[var(--space-4)]">
-        <div
-          className="w-[8px] h-[8px] rounded-full shrink-0"
-          style={{
-            background: status.available ? "var(--system-green)" : "var(--system-red)",
-          }}
-        />
-        <div className="flex-1">
-          <div className="text-[length:var(--text-subheadline)] font-[var(--weight-medium)] text-[var(--text-primary)]">
-            {status.available
-              ? `Whisper ${(status.model || "small").charAt(0).toUpperCase() + (status.model || "small").slice(1)}`
-              : "No model installed"}
-          </div>
-          <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
-            {status.available
-              ? "Offline speech recognition ready"
-              : "Download a model to enable voice input"}
-          </div>
-        </div>
-      </div>
-
-      {/* Download section */}
-      {!status.available && !status.downloading && (
-        <button
-          onClick={handleDownload}
-          className="w-full p-[var(--space-3)] rounded-[var(--radius-md)] bg-[var(--accent)] text-[var(--accent-contrast)] border-none cursor-pointer text-[length:var(--text-footnote)] font-[var(--weight-semibold)] mb-[var(--space-4)]"
-        >
-          Download Whisper Small (~500MB)
-        </button>
-      )}
-
-      {/* Download progress */}
-      {status.downloading && (
-        <div className="mb-[var(--space-4)]">
-          <div className="flex justify-between mb-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
-            <span>Downloading model…</span>
-            <span>{status.progress}%</span>
-          </div>
-          <div className="h-[6px] rounded-[3px] bg-[var(--fill-tertiary)] overflow-hidden">
-            <div
-              className="h-full rounded-[3px] bg-[var(--accent)] transition-[width] duration-300 ease-out"
-              style={{
-                width: `${status.progress}%`,
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Languages section — only when model is available */}
-      {status.available && (
-        <>
-          <div className="border-t border-[var(--separator)] mt-[var(--space-2)] pt-[var(--space-3)]">
-            <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
-              Transcription Languages
-            </div>
-            <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mb-[var(--space-3)]">
-              First language is the default. Add multiple to show a language picker in chat.
-            </div>
-
-            {/* Language chips */}
-            <div className="flex flex-wrap gap-[var(--space-2)] mb-[var(--space-3)]">
-              {status.languages.map((code) => (
-                <div
-                  key={code}
-                  className="inline-flex items-center gap-[var(--space-1)] px-[8px] py-[3px] rounded-[var(--radius-sm)] bg-[var(--fill-secondary)] text-[length:var(--text-caption1)] font-[var(--weight-medium)] text-[var(--text-primary)]"
-                >
-                  <span className="font-[family-name:var(--font-mono)] uppercase text-[length:var(--text-caption2)] font-[var(--weight-semibold)] text-[var(--accent)] mr-[2px]">
-                    {code}
-                  </span>
-                  {WHISPER_LANGUAGES[code] || code}
-                  {status.languages.length > 1 && (
-                    <button
-                      onClick={() => handleRemoveLanguage(code)}
-                      disabled={saving}
-                      aria-label={`Remove ${WHISPER_LANGUAGES[code] || code}`}
-                      className="bg-none border-none cursor-pointer p-0 ml-[2px] text-[var(--text-quaternary)] text-[14px] leading-none flex items-center"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Add language */}
-            <div className="flex gap-[var(--space-2)]">
-              <select
-                value={addLang}
-                onChange={(e) => setAddLang(e.target.value)}
-                className="flex-1 bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] cursor-pointer"
-                style={{
-                  color: addLang ? "var(--text-primary)" : "var(--text-tertiary)",
-                }}
-              >
-                <option value="">Add a language…</option>
-                {availableLangs.map(([code, name]) => (
-                  <option key={code} value={code}>
-                    {code.toUpperCase()} — {name}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={handleAddLanguage}
-                disabled={!addLang || saving}
-                className="px-[14px] py-[6px] rounded-[var(--radius-sm)] border-none text-[length:var(--text-footnote)] font-[var(--weight-semibold)] shrink-0"
-                style={{
-                  background: addLang ? "var(--accent)" : "var(--fill-tertiary)",
-                  color: addLang ? "var(--accent-contrast)" : "var(--text-quaternary)",
-                  cursor: addLang ? "pointer" : "default",
-                }}
-              >
-                Add
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-    </Section>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Main settings page
-// ---------------------------------------------------------------------------
+type FeedbackState = {
+  type: "success" | "error"
+  message: string
+} | null
 
 export default function SettingsPage() {
-  useBreadcrumbs([{ label: 'Settings' }])
+  useBreadcrumbs([{ label: "Settings" }])
   const {
     settings,
     setAccentColor,
@@ -408,7 +49,6 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme()
   const auth = useAuth()
 
-  // Local branding inputs
   const [nameValue, setNameValue] = useState(settings.portalName ?? "")
   const [subtitleValue, setSubtitleValue] = useState(settings.portalSubtitle ?? "")
   const [operatorNameValue, setOperatorNameValue] = useState(settings.operatorName ?? "")
@@ -417,7 +57,6 @@ export default function SettingsPage() {
   const [customHex, setCustomHex] = useState(settings.accentColor ?? "")
   const [showCooEmojiPicker, setShowCooEmojiPicker] = useState(false)
 
-  // Model/capability registry — drives the model + effort dropdowns (no hardcoded lists).
   const { data: modelRegistry } = useModelRegistry()
   const modelOptions = (engine: string, fallback: Array<{ value: string; label: string }>) => {
     const models = modelRegistry?.engines?.[engine]?.models ?? []
@@ -430,32 +69,27 @@ export default function SettingsPage() {
       : fallback
   }
 
-  // Gateway config state
   const [config, setConfig] = useState<Config>({})
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [feedback, setFeedback] = useState<{
-    type: "success" | "error"
-    message: string
-  } | null>(null)
-
-  // WhatsApp QR code state
+  const [feedback, setFeedback] = useState<FeedbackState>(null)
   const [waQr, setWaQr] = useState<string | null>(null)
-  const [waStatus, setWaStatus] = useState<string>("unknown")
-
-  // Employees list for instance binding
-  const [employees, setEmployees] = useState<Array<{name: string, displayName: string}>>([])
+  const [waStatus, setWaStatus] = useState("unknown")
+  const [employees, setEmployees] = useState<Array<{ name: string; displayName: string }>>([])
 
   useEffect(() => {
     api.getOrg().then((org: any) => {
       if (org?.employees) {
-        setEmployees(org.employees.map((e: any) => typeof e === 'string' ? { name: e, displayName: e } : { name: e.name, displayName: e.displayName || e.name }))
+        setEmployees(org.employees.map((e: any) => (
+          typeof e === "string"
+            ? { name: e, displayName: e }
+            : { name: e.name, displayName: e.displayName || e.name }
+        )))
       }
     }).catch(() => {})
   }, [])
 
-  // Sync local values when settings change externally (e.g., reset)
   useEffect(() => {
     setNameValue(settings.portalName ?? "")
     setSubtitleValue(settings.portalSubtitle ?? "")
@@ -472,11 +106,9 @@ export default function SettingsPage() {
     settings.accentColor,
   ])
 
-  // Load gateway config
   function loadConfig() {
     setConfigLoading(true)
-    api
-      .getConfig()
+    api.getConfig()
       .then((data) => {
         setConfig(data as Config)
         setConfigError(null)
@@ -489,7 +121,6 @@ export default function SettingsPage() {
     loadConfig()
   }, [])
 
-  // Poll for WhatsApp QR code when WhatsApp connector is configured
   useEffect(() => {
     if (!config.connectors?.whatsapp) return
 
@@ -506,8 +137,8 @@ export default function SettingsPage() {
           const qrRes = await fetch("/api/connectors/whatsapp/qr")
           const data = await qrRes.json()
           if (!cancelled) setWaQr(data.qr)
-        } else {
-          if (!cancelled) setWaQr(null)
+        } else if (!cancelled) {
+          setWaQr(null)
         }
       } catch {
         // non-fatal
@@ -515,7 +146,10 @@ export default function SettingsPage() {
     }
 
     void checkQr()
-    const interval = setInterval(() => { void checkQr() }, 10000)
+    const interval = setInterval(() => {
+      void checkQr()
+    }, 10000)
+
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -525,7 +159,7 @@ export default function SettingsPage() {
   function updateConfig(path: string[], value: unknown) {
     setConfig((prev) => {
       const next = structuredClone(prev)
-      let obj: Record<string, unknown> = next as unknown as Record<string, unknown>
+      let obj: Record<string, unknown> = next as Record<string, unknown>
       for (let i = 0; i < path.length - 1; i++) {
         if (!obj[path[i]] || typeof obj[path[i]] !== "object") {
           obj[path[i]] = {}
@@ -545,714 +179,92 @@ export default function SettingsPage() {
   function handleSave() {
     setSaving(true)
     setFeedback(null)
-    api
-      .updateConfig(config as unknown as Record<string, unknown>)
-      .then(() =>
-        setFeedback({ type: "success", message: "Settings saved successfully" })
-      )
-      .catch((err) =>
+    api.updateConfig(config as Record<string, unknown>)
+      .then(() => setFeedback({ type: "success", message: "Settings saved successfully" }))
+      .catch((err) => {
         setFeedback({
           type: "error",
           message: `Failed to save: ${err.message}`,
         })
-      )
+      })
       .finally(() => setSaving(false))
   }
 
   return (
     <PageLayout>
-      <div
-        className="h-full overflow-y-auto bg-[var(--bg)]"
-      >
-        <div
-          className="max-w-[640px] mx-auto px-[var(--space-4)] py-[var(--space-6)] pb-[var(--space-12)]"
-        >
-          {/* Page header */}
-          <h1
-            className="text-[length:var(--text-title1)] font-[var(--weight-bold)] tracking-[var(--tracking-tight)] text-[var(--text-primary)] mb-[var(--space-6)]"
-          >
+      <div className="h-full overflow-y-auto bg-[var(--bg)]">
+        <div className="max-w-[640px] mx-auto px-[var(--space-4)] py-[var(--space-6)] pb-[var(--space-12)]">
+          <h1 className="text-[length:var(--text-title1)] font-[var(--weight-bold)] tracking-[var(--tracking-tight)] text-[var(--text-primary)] mb-[var(--space-6)]">
             Settings
           </h1>
 
-          {/* -- Section 1: Appearance -- */}
-          <Section title="Appearance">
-            {/* Theme picker */}
-            <div
-              className="text-[length:var(--text-footnote)] font-[var(--weight-medium)] text-[var(--text-secondary)] mb-[var(--space-2)]"
-            >
-              Theme
-            </div>
-            <div
-              className="grid grid-cols-3 gap-[var(--space-2)] mb-[var(--space-4)]"
-            >
-              {THEMES.map((t) => {
-                const isActive = theme === t.id
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => setTheme(t.id)}
-                    className="flex flex-col items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-3)] rounded-[var(--radius-md)] bg-[var(--fill-quaternary)] cursor-pointer transition-all duration-150 ease-[var(--ease-smooth)]"
-                    style={{
-                      border: isActive
-                        ? "2px solid var(--accent)"
-                        : "2px solid var(--separator)",
-                    }}
-                  >
-                    <span className="text-[24px]">{t.emoji}</span>
-                    <span
-                      className="text-[length:var(--text-caption2)]"
-                      style={{
-                        fontWeight: isActive
-                          ? "var(--weight-semibold)"
-                          : "var(--weight-medium)",
-                        color: isActive
-                          ? "var(--accent)"
-                          : "var(--text-secondary)",
-                      }}
-                    >
-                      {t.label}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+          <AppearanceSection
+            accentColor={settings.accentColor}
+            customHex={customHex}
+            setAccentColor={setAccentColor}
+            setCustomHex={setCustomHex}
+            theme={theme}
+            setTheme={setTheme}
+          />
+          <CooEmojiSection
+            operatorName={settings.operatorName}
+            portalEmoji={settings.portalEmoji}
+            showEmojiPicker={showCooEmojiPicker}
+            setPortalEmoji={setPortalEmoji}
+            setShowEmojiPicker={setShowCooEmojiPicker}
+          />
+          <BrandingSection
+            emojiValue={emojiValue}
+            languageValue={languageValue}
+            nameValue={nameValue}
+            operatorNameValue={operatorNameValue}
+            setEmojiValue={setEmojiValue}
+            setLanguage={setLanguage}
+            setLanguageValue={setLanguageValue}
+            setNameValue={setNameValue}
+            setOperatorName={setOperatorName}
+            setOperatorNameValue={setOperatorNameValue}
+            setPortalEmoji={setPortalEmoji}
+            setPortalName={setPortalName}
+            setPortalSubtitle={setPortalSubtitle}
+            setSubtitleValue={setSubtitleValue}
+            subtitleValue={subtitleValue}
+          />
+          <PairingSection
+            authState={auth.authState}
+            createPairingCode={auth.createPairingCode}
+            devices={auth.devices}
+            logout={auth.logout}
+            unpairDevice={auth.unpairDevice}
+          />
 
-            {/* Accent color */}
-            <div
-              className="text-[length:var(--text-footnote)] font-[var(--weight-medium)] text-[var(--text-secondary)] mb-[var(--space-2)]"
-            >
-              Accent Color
-            </div>
-            <div
-              className="flex flex-wrap gap-[var(--space-2)] mb-[var(--space-3)]"
-            >
-              {ACCENT_PRESETS.map((preset) => {
-                const isActive = settings.accentColor === preset.value
-                return (
-                  <button
-                    key={preset.value}
-                    onClick={() => setAccentColor(preset.value)}
-                    aria-label={preset.label}
-                    title={preset.label}
-                    className="w-[32px] h-[32px] rounded-full cursor-pointer transition-all duration-100 ease-[var(--ease-smooth)] flex items-center justify-center"
-                    style={{
-                      background: preset.value,
-                      border: isActive
-                        ? "2px solid var(--text-primary)"
-                        : "2px solid transparent",
-                      outline: isActive
-                        ? `2px solid ${preset.value}`
-                        : "none",
-                      outlineOffset: 2,
-                    }}
-                  >
-                    {isActive && (
-                      <Check size={14} color="#fff" strokeWidth={3} />
-                    )}
-                  </button>
-                )
-              })}
-            </div>
+          <ConfigFeedback feedback={feedback} />
+          <ConfigLoadState configError={configError} configLoading={configLoading} />
 
-            {/* Custom hex input */}
-            <div
-              className="flex items-center gap-[var(--space-3)]"
-            >
-              <label
-                className="flex items-center gap-[var(--space-2)] text-[length:var(--text-footnote)] text-[var(--text-secondary)] cursor-pointer"
-              >
-                Custom:
-                <input
-                  type="color"
-                  value={settings.accentColor ?? "#3B82F6"}
-                  onChange={(e) => setAccentColor(e.target.value)}
-                  className="w-[28px] h-[28px] border-none rounded-full cursor-pointer bg-transparent p-0"
-                />
-              </label>
-              <input
-                type="text"
-                placeholder="#3B82F6"
-                value={customHex}
-                onChange={(e) => {
-                  setCustomHex(e.target.value)
-                  if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
-                    setAccentColor(e.target.value)
-                  }
-                }}
-                className="apple-input w-[90px] px-[8px] py-[4px] text-[length:var(--text-caption1)] bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] text-[var(--text-primary)] font-mono"
-              />
-              {settings.accentColor && (
-                <button
-                  onClick={() => setAccentColor(null)}
-                  className="text-[length:var(--text-footnote)] text-[var(--system-blue)] bg-none border-none cursor-pointer p-0 inline-flex items-center gap-[4px]"
-                >
-                  <RotateCcw size={12} />
-                  Reset
-                </button>
-              )}
-            </div>
-          </Section>
-
-          {/* -- COO Emoji -- */}
-          <Section title="COO Emoji">
-            <div>
-              <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mb-[var(--space-3)]">
-                Choose an emoji for the COO shown in the sidebar.
-              </div>
-              <div className="relative flex items-center gap-[var(--space-4)]">
-                <button
-                  onClick={() => setShowCooEmojiPicker(!showCooEmojiPicker)}
-                  className="text-4xl cursor-pointer bg-transparent border-none p-0"
-                >
-                  {settings.portalEmoji ?? "\u{1F9DE}"}
-                </button>
-                <div>
-                  <div className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
-                    {settings.operatorName || "Jimbo"}
-                  </div>
-                  <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
-                    Click emoji to change
-                  </div>
-                </div>
-                {showCooEmojiPicker && (
-                  <EmojiPicker
-                    current={settings.portalEmoji ?? "\u{1F9DE}"}
-                    onSelect={(emoji) => {
-                      setPortalEmoji(emoji)
-                      setShowCooEmojiPicker(false)
-                    }}
-                    onClose={() => setShowCooEmojiPicker(false)}
-                  />
-                )}
-              </div>
-            </div>
-          </Section>
-
-          {/* -- Section 2: Branding -- */}
-          <Section title="Branding">
-            <div
-              className="flex flex-col gap-[var(--space-3)]"
-            >
-              <div>
-                <label
-                  className="block text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mb-[var(--space-1)]"
-                >
-                  Portal Name
-                </label>
-                <input
-                  type="text"
-                  className="apple-input w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)]"
-                  placeholder="Jinn"
-                  value={nameValue}
-                  onChange={(e) => setNameValue(e.target.value)}
-                  onBlur={() => {
-                    setPortalName(nameValue || null)
-                    api.completeOnboarding({ portalName: nameValue || undefined }).catch(() => {})
-                  }}
-                />
-              </div>
-
-              <div>
-                <label
-                  className="block text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mb-[var(--space-1)]"
-                >
-                  Portal Subtitle
-                </label>
-                <input
-                  type="text"
-                  className="apple-input w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)]"
-                  placeholder="Command Centre"
-                  value={subtitleValue}
-                  onChange={(e) => setSubtitleValue(e.target.value)}
-                  onBlur={() => setPortalSubtitle(subtitleValue || null)}
-                />
-              </div>
-
-              <div>
-                <label
-                  className="block text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mb-[var(--space-1)]"
-                >
-                  Operator Name
-                </label>
-                <input
-                  type="text"
-                  className="apple-input w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)]"
-                  placeholder="Your Name"
-                  value={operatorNameValue}
-                  onChange={(e) => setOperatorNameValue(e.target.value)}
-                  onBlur={() => {
-                    setOperatorName(operatorNameValue || null)
-                    api.completeOnboarding({ operatorName: operatorNameValue || undefined }).catch(() => {})
-                  }}
-                />
-              </div>
-
-              <div>
-                <label
-                  className="block text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mb-[var(--space-1)]"
-                >
-                  Portal Emoji
-                </label>
-                <input
-                  type="text"
-                  className="apple-input w-[80px] text-center text-[length:var(--text-title2)] px-[8px] py-[6px] bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)]"
-                  placeholder="\ud83e\uddde"
-                  value={emojiValue}
-                  onChange={(e) => setEmojiValue(e.target.value)}
-                  onBlur={() => setPortalEmoji(emojiValue || null)}
-                />
-              </div>
-
-              <div>
-                <label
-                  className="block text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mb-[var(--space-1)]"
-                >
-                  Language
-                </label>
-                <select
-                  value={languageValue}
-                  onChange={(e) => setLanguageValue(e.target.value)}
-                  onBlur={() => {
-                    setLanguage(languageValue || "English")
-                    api.completeOnboarding({ language: languageValue || undefined }).catch(() => {})
-                  }}
-                  className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)] cursor-pointer"
-                >
-                  <option value="English">English</option>
-                  <option value="Spanish">Spanish</option>
-                  <option value="French">French</option>
-                  <option value="German">German</option>
-                  <option value="Portuguese">Portuguese</option>
-                  <option value="Italian">Italian</option>
-                  <option value="Dutch">Dutch</option>
-                  <option value="Russian">Russian</option>
-                  <option value="Chinese">Chinese</option>
-                  <option value="Japanese">Japanese</option>
-                  <option value="Korean">Korean</option>
-                  <option value="Arabic">Arabic</option>
-                  <option value="Hindi">Hindi</option>
-                  <option value="Bulgarian">Bulgarian</option>
-                </select>
-              </div>
-            </div>
-          </Section>
-
-          {/* -- Pairing -- */}
-          <Section title="Pairing">
-            <RemoteAccessPanel
-              authState={auth.authState}
-              devices={auth.devices}
-              onCreatePairingCode={auth.createPairingCode}
-              onLogout={auth.logout}
-              onUnpairDevice={auth.unpairDevice}
-            />
-          </Section>
-
-          {/* Gateway config feedback */}
-          {feedback && (
-            <div
-              className="mb-[var(--space-4)] px-[var(--space-4)] py-[var(--space-3)] rounded-[var(--radius-md)] text-[length:var(--text-footnote)]"
-              style={{
-                background:
-                  feedback.type === "success"
-                    ? "rgba(34,197,94,0.1)"
-                    : "rgba(239,68,68,0.1)",
-                border: `1px solid ${
-                  feedback.type === "success"
-                    ? "rgba(34,197,94,0.3)"
-                    : "rgba(239,68,68,0.3)"
-                }`,
-                color:
-                  feedback.type === "success"
-                    ? "var(--system-green)"
-                    : "var(--system-red)",
-              }}
-            >
-              {feedback.message}
-            </div>
-          )}
-
-          {configLoading ? (
-            <div
-              className="text-center p-[var(--space-8)] text-[var(--text-tertiary)] text-[length:var(--text-footnote)]"
-            >
-              <Loader2
-                size={20}
-                className="mx-auto mb-[var(--space-2)] animate-spin"
-              />
-              Loading gateway config...
-            </div>
-          ) : configError ? (
-            <div
-              className="mb-[var(--space-6)] px-[var(--space-4)] py-[var(--space-3)] rounded-[var(--radius-md)] text-[length:var(--text-footnote)] text-[var(--system-red)]"
-              style={{
-                background: "rgba(239,68,68,0.1)",
-                border: "1px solid rgba(239,68,68,0.3)",
-              }}
-            >
-              Failed to load config: {configError}
-            </div>
-          ) : (
+          {!configLoading && !configError && (
             <>
-              {/* -- Section 3: Gateway & Workspaces -- */}
-              <Section title="Gateway & Workspaces">
-                <FieldRow label="Port">
-                  <SettingsInput
-                    type="number"
-                    value={String(config.gateway?.port ?? "")}
-                    onChange={(v) => updateNumberConfig(["gateway", "port"], v)}
-                    placeholder="7777"
-                  />
-                </FieldRow>
-                <FieldRow label="Host">
-                  <SettingsInput
-                    value={config.gateway?.host ?? ""}
-                    onChange={(v) => updateConfig(["gateway", "host"], v)}
-                    placeholder="127.0.0.1"
-                  />
-                </FieldRow>
-                <FieldRow label="Default Engine">
-                  <SettingsSelect
-                    value={config.engines?.default ?? "claude"}
-                    onChange={(v) => updateConfig(["engines", "default"], v)}
-                    options={[
-                      { value: "claude", label: "Claude" },
-                      { value: "codex", label: "Codex" },
-                      { value: "grok", label: "Grok" },
-                    ]}
-                  />
-                </FieldRow>
-                <FieldRow label="Default Working Dir">
-                  <SettingsInput
-                    value={config.workspaces?.defaultCwd ?? ""}
-                    onChange={(v) => updateConfig(["workspaces", "defaultCwd"], v.trim() || undefined)}
-                    placeholder="~/.jinn"
-                  />
-                </FieldRow>
-                <FieldRow label="Workspace Roots">
-                  <SettingsTextarea
-                    value={formatLineList(config.workspaces?.roots)}
-                    onChange={(v) => updateConfig(["workspaces", "roots"], parseLineList(v))}
-                    placeholder={"/path/to/project-a\n/path/to/project-b"}
-                    rows={4}
-                  />
-                </FieldRow>
-                <FieldHint>
-                  One allowed root per line. Session working directories must resolve inside one of these roots when this list is set.
-                </FieldHint>
-
-                <div className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]" />
-
-                <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
-                  Turn Stall Watchdog
-                </div>
-                <FieldRow label="Inactivity (ms)">
-                  <SettingsInput
-                    type="number"
-                    value={String(config.gateway?.turnStallInactivityMs ?? "")}
-                    onChange={(v) => updateNumberConfig(["gateway", "turnStallInactivityMs"], v)}
-                    placeholder="180000"
-                  />
-                </FieldRow>
-                <FieldRow label="Hard Ceiling (ms)">
-                  <SettingsInput
-                    type="number"
-                    value={String(config.gateway?.turnStallCeilingMs ?? "")}
-                    onChange={(v) => updateNumberConfig(["gateway", "turnStallCeilingMs"], v)}
-                    placeholder="2700000"
-                  />
-                </FieldRow>
-                <FieldRow label="Same-Engine Retries">
-                  <SettingsInput
-                    type="number"
-                    value={String(config.gateway?.turnStallRetries ?? "")}
-                    onChange={(v) => updateNumberConfig(["gateway", "turnStallRetries"], v)}
-                    placeholder="1"
-                  />
-                </FieldRow>
-                <FieldHint>
-                  These watchdog settings control when a quiet turn is treated as stalled and whether Jinn retries once before escalating.
-                </FieldHint>
-              </Section>
-
-              {/* -- Section 4: Engine Configuration -- */}
-              <Section title="Engine Configuration">
-                <div
-                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
-                >
-                  Claude
-                </div>
-                <FieldRow label="Binary Path">
-                  <SettingsInput
-                    value={config.engines?.claude?.bin ?? ""}
-                    onChange={(v) =>
-                      updateConfig(["engines", "claude", "bin"], v)
-                    }
-                    placeholder="claude"
-                  />
-                </FieldRow>
-                <FieldRow label="Model">
-                  <SettingsSelect
-                    value={config.engines?.claude?.model ?? "opus"}
-                    onChange={(v) =>
-                      updateConfig(["engines", "claude", "model"], v)
-                    }
-                    options={modelOptions("claude", [
-                      { value: "claude-fable-5", label: "Fable 5" },
-                      { value: "opus", label: "Opus" },
-                      { value: "sonnet", label: "Sonnet" },
-                      { value: "haiku", label: "Haiku" },
-                    ])}
-                  />
-                </FieldRow>
-                <FieldRow label="Effort Level">
-                  <SettingsSelect
-                    value={config.engines?.claude?.effortLevel ?? "default"}
-                    onChange={(v) =>
-                      updateConfig(["engines", "claude", "effortLevel"], v)
-                    }
-                    options={effortOptions("claude", [
-                      { value: "default", label: "Default" },
-                      { value: "low", label: "Low" },
-                      { value: "medium", label: "Medium" },
-                      { value: "high", label: "High" },
-                    ])}
-                  />
-                </FieldRow>
-
-                <div
-                  className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
-                />
-
-                <div
-                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
-                >
-                  Codex
-                </div>
-                <FieldRow label="Binary Path">
-                  <SettingsInput
-                    value={config.engines?.codex?.bin ?? ""}
-                    onChange={(v) =>
-                      updateConfig(["engines", "codex", "bin"], v)
-                    }
-                    placeholder="codex"
-                  />
-                </FieldRow>
-                <FieldRow label="Model">
-                  <SettingsSelect
-                    value={config.engines?.codex?.model ?? "gpt-5.5"}
-                    onChange={(v) =>
-                      updateConfig(["engines", "codex", "model"], v)
-                    }
-                    options={modelOptions("codex", [
-                      { value: "gpt-5.5", label: "GPT-5.5" },
-                      { value: "gpt-5.4", label: "GPT-5.4" },
-                      { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
-                      { value: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
-                      { value: "gpt-5.2", label: "GPT-5.2" },
-                      { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
-                      { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini" },
-                    ])}
-                  />
-                </FieldRow>
-                <FieldRow label="Effort Level">
-                  <SettingsSelect
-                    value={config.engines?.codex?.effortLevel ?? "default"}
-                    onChange={(v) =>
-                      updateConfig(["engines", "codex", "effortLevel"], v)
-                    }
-                    options={effortOptions("codex", [
-                      { value: "default", label: "Default" },
-                      { value: "low", label: "Low" },
-                      { value: "medium", label: "Medium" },
-                      { value: "high", label: "High" },
-                      { value: "xhigh", label: "Extra High" },
-                    ])}
-                  />
-                </FieldRow>
-
-                <div
-                  className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
-                />
-
-                <div
-                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
-                >
-                  Grok
-                </div>
-                <FieldRow label="Binary Path">
-                  <SettingsInput
-                    value={config.engines?.grok?.bin ?? ""}
-                    onChange={(v) =>
-                      updateConfig(["engines", "grok", "bin"], v)
-                    }
-                    placeholder="grok"
-                  />
-                </FieldRow>
-                <FieldRow label="Model">
-                  <SettingsSelect
-                    value={config.engines?.grok?.model ?? "grok-build"}
-                    onChange={(v) =>
-                      updateConfig(["engines", "grok", "model"], v)
-                    }
-                    options={modelOptions("grok", [
-                      { value: "grok-build", label: "Grok Build" },
-                      { value: "grok-composer-2.5-fast", label: "Grok Composer 2.5 Fast" },
-                    ])}
-                  />
-                </FieldRow>
-              </Section>
-
-              {/* -- Section 5: Recovery & Fallbacks -- */}
-              <Section title="Recovery & Fallbacks">
-                <FieldRow label="Interrupt on New Message">
-                  <ToggleSwitch
-                    checked={config.sessions?.interruptOnNewMessage ?? true}
-                    onChange={(v) =>
-                      updateConfig(["sessions", "interruptOnNewMessage"], v)
-                    }
-                  />
-                </FieldRow>
-                <FieldHint>
-                  When enabled, sending a new message to a running session will stop the
-                  current agent and start processing your new message immediately. When
-                  disabled, messages are queued.
-                </FieldHint>
-
-                <div
-                  className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
-                />
-
-                <FieldRow label="Usage Limit Strategy">
-                  <SettingsSelect
-                    value={config.sessions?.rateLimitStrategy ?? "fallback"}
-                    onChange={(v) =>
-                      updateConfig(["sessions", "rateLimitStrategy"], v)
-                    }
-                    options={[
-                      { value: "wait", label: "Wait & Auto-Resume" },
-                      { value: "fallback", label: "Switch to GPT (Codex)" },
-                    ]}
-                  />
-                </FieldRow>
-                <FieldRow label="Fallback Engine">
-                  <SettingsSelect
-                    value={config.sessions?.fallbackEngine ?? "codex"}
-                    onChange={(v) => updateConfig(["sessions", "fallbackEngine"], v)}
-                    options={[
-                      { value: "claude", label: "Claude" },
-                      { value: "codex", label: "Codex" },
-                      { value: "antigravity", label: "Antigravity" },
-                      { value: "grok", label: "Grok" },
-                      { value: "pi", label: "Pi" },
-                      { value: "kiro", label: "Kiro" },
-                    ]}
-                  />
-                </FieldRow>
-                <FieldHint>
-                  "Wait" pauses the session and continues automatically when Claude resets.
-                  "Switch" answers immediately using GPT, then returns to Claude once the reset window passes.
-                </FieldHint>
-
-                <div className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]" />
-
-                <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
-                  Global Model Fallback
-                </div>
-                <FieldRow label="Enabled">
-                  <ToggleSwitch
-                    checked={config.modelFallback?.enabled ?? true}
-                    onChange={(v) => updateConfig(["modelFallback", "enabled"], v)}
-                  />
-                </FieldRow>
-                <FieldRow label="Mode">
-                  <SettingsSelect
-                    value={config.modelFallback?.defaultMode ?? "auto"}
-                    onChange={(v) => updateConfig(["modelFallback", "defaultMode"], v)}
-                    options={[
-                      { value: "auto", label: "Auto" },
-                      { value: "ask_user", label: "Ask User" },
-                      { value: "never", label: "Never" },
-                    ]}
-                  />
-                </FieldRow>
-                <FieldRow label="Fallback Chain">
-                  <SettingsTextarea
-                    value={formatFallbackChain(config.modelFallback?.globalChain)}
-                    onChange={(v) => updateConfig(["modelFallback", "globalChain"], parseFallbackChain(v))}
-                    placeholder={"codex | gpt-5.5 | high\nclaude | claude-sonnet-4-6 | medium | reviewer | balanced backup"}
-                    rows={4}
-                  />
-                </FieldRow>
-                <FieldHint>
-                  One fallback target per line: <code>engine | model | effort | employee | reason</code>. Later columns are optional.
-                </FieldHint>
-              </Section>
-
-              {/* -- Section 6: Board Worker -- */}
-              <Section title="Board Worker">
-                <FieldRow label="Enabled">
-                  <ToggleSwitch
-                    checked={config.boardWorker?.enabled ?? false}
-                    onChange={(v) => updateConfig(["boardWorker", "enabled"], v)}
-                  />
-                </FieldRow>
-                <FieldRow label="Idle Minutes">
-                  <SettingsInput
-                    type="number"
-                    value={String(config.boardWorker?.idleMinutes ?? "")}
-                    onChange={(v) => updateNumberConfig(["boardWorker", "idleMinutes"], v)}
-                    placeholder="30"
-                  />
-                </FieldRow>
-                <FieldRow label="Timezone">
-                  <SettingsInput
-                    value={config.boardWorker?.timezone ?? ""}
-                    onChange={(v) => updateConfig(["boardWorker", "timezone"], v.trim() || undefined)}
-                    placeholder="America/New_York"
-                  />
-                </FieldRow>
-                <FieldRow label="Min Remaining %">
-                  <SettingsInput
-                    type="number"
-                    value={String(config.boardWorker?.usage?.minRemainingPercent ?? "")}
-                    onChange={(v) => updateNumberConfig(["boardWorker", "usage", "minRemainingPercent"], v)}
-                    placeholder="15"
-                  />
-                </FieldRow>
-                <FieldRow label="Weekday Window">
-                  <div className="flex gap-[var(--space-2)]">
-                    <SettingsInput
-                      value={config.boardWorker?.schedule?.weekday?.start ?? ""}
-                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekday", "start"], v.trim() || undefined)}
-                      placeholder="22:00"
-                    />
-                    <SettingsInput
-                      value={config.boardWorker?.schedule?.weekday?.end ?? ""}
-                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekday", "end"], v.trim() || undefined)}
-                      placeholder="04:00"
-                    />
-                  </div>
-                </FieldRow>
-                <FieldRow label="Weekend Window">
-                  <div className="flex gap-[var(--space-2)]">
-                    <SettingsInput
-                      value={config.boardWorker?.schedule?.weekend?.start ?? ""}
-                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekend", "start"], v.trim() || undefined)}
-                      placeholder="22:00"
-                    />
-                    <SettingsInput
-                      value={config.boardWorker?.schedule?.weekend?.end ?? ""}
-                      onChange={(v) => updateConfig(["boardWorker", "schedule", "weekend", "end"], v.trim() || undefined)}
-                      placeholder="04:00"
-                    />
-                  </div>
-                </FieldRow>
-                <FieldHint>
-                  The board worker auto-dispatches TODO tickets only when chats are idle, the schedule window is open, and the selected engine still has headroom.
-                </FieldHint>
-              </Section>
-
+              <GatewayWorkspacesSection
+                config={config}
+                updateConfig={updateConfig}
+                updateNumberConfig={updateNumberConfig}
+              />
+              <EngineConfigurationSection
+                config={config}
+                effortOptions={effortOptions}
+                modelOptions={modelOptions}
+                updateConfig={updateConfig}
+                updateNumberConfig={updateNumberConfig}
+              />
+              <RecoveryFallbacksSection
+                config={config}
+                updateConfig={updateConfig}
+                updateNumberConfig={updateNumberConfig}
+              />
+              <BoardWorkerSection
+                config={config}
+                updateConfig={updateConfig}
+                updateNumberConfig={updateNumberConfig}
+              />
               <SettingsConnectorsSection
                 config={config}
                 updateConfig={updateConfig}
@@ -1265,136 +277,26 @@ export default function SettingsPage() {
                 SettingsSelect={SettingsSelect}
                 ToggleSwitch={ToggleSwitch}
               />
-
-              {/* -- Section 6: Cron -- */}
-              <Section title="Cron">
-                <div
-                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
-                >
-                  Default Delivery
-                </div>
-                <div
-                  className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mb-[var(--space-3)]"
-                >
-                  When a cron job has no delivery configured, results will be sent here.
-                </div>
-                <FieldRow label="Connector">
-                  <SettingsSelect
-                    value={config.cron?.defaultDelivery?.connector ?? ""}
-                    onChange={(v) =>
-                      updateConfig(["cron", "defaultDelivery", "connector"], v || undefined)
-                    }
-                    options={[
-                      { value: "", label: "None (fire & forget)" },
-                      { value: "web", label: "Web" },
-                      { value: "slack", label: "Slack" },
-                    ]}
-                  />
-                </FieldRow>
-                {config.cron?.defaultDelivery?.connector && (
-                  <FieldRow label="Channel">
-                    <SettingsInput
-                      value={config.cron?.defaultDelivery?.channel ?? ""}
-                      onChange={(v) =>
-                        updateConfig(["cron", "defaultDelivery", "channel"], v)
-                      }
-                      placeholder="#general"
-                    />
-                  </FieldRow>
-                )}
-              </Section>
-
-              {/* -- Section 7: Logging -- */}
-              <Section title="Logging">
-                <FieldRow label="Level">
-                  <SettingsSelect
-                    value={config.logging?.level ?? "info"}
-                    onChange={(v) => updateConfig(["logging", "level"], v)}
-                    options={[
-                      { value: "debug", label: "Debug" },
-                      { value: "info", label: "Info" },
-                      { value: "warn", label: "Warn" },
-                      { value: "error", label: "Error" },
-                    ]}
-                  />
-                </FieldRow>
-                <FieldRow label="Stdout">
-                  <ToggleSwitch
-                    checked={config.logging?.stdout ?? true}
-                    onChange={(v) => updateConfig(["logging", "stdout"], v)}
-                  />
-                </FieldRow>
-                <FieldRow label="File Logging">
-                  <ToggleSwitch
-                    checked={config.logging?.file ?? false}
-                    onChange={(v) => updateConfig(["logging", "file"], v)}
-                  />
-                </FieldRow>
-              </Section>
-
-              {/* -- Section 8: Voice Input (STT) -- */}
+              <CronSection
+                config={config}
+                updateConfig={updateConfig}
+                updateNumberConfig={updateNumberConfig}
+              />
+              <LoggingSection
+                config={config}
+                updateConfig={updateConfig}
+                updateNumberConfig={updateNumberConfig}
+              />
               <SttSettingsSection />
-
-              {/* Save button for gateway config */}
-              <div
-                className="flex justify-end gap-[var(--space-3)] mb-[var(--space-6)]"
-              >
-                <button
-                  onClick={() => loadConfig()}
-                  className="px-[var(--space-4)] py-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--fill-tertiary)] text-[var(--text-secondary)] border-none cursor-pointer text-[length:var(--text-footnote)] font-[var(--weight-medium)] inline-flex items-center gap-[6px]"
-                >
-                  <RotateCcw size={14} />
-                  Reload
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="px-[var(--space-5)] py-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--accent)] text-[var(--accent-contrast)] border-none text-[length:var(--text-footnote)] font-[var(--weight-semibold)] inline-flex items-center gap-[6px] transition-all duration-150 ease-[var(--ease-smooth)]"
-                  style={{
-                    cursor: saving ? "wait" : "pointer",
-                    opacity: saving ? 0.7 : 1,
-                  }}
-                >
-                  <Save size={14} />
-                  {saving ? "Saving..." : "Save Config"}
-                </button>
-              </div>
+              <ConfigActions
+                loadConfig={loadConfig}
+                saving={saving}
+                onSave={handleSave}
+              />
             </>
           )}
 
-          {/* -- Section 7: Reset -- */}
-          <Section title="Reset">
-            <div
-              className="flex items-center justify-center gap-[var(--space-3)] flex-wrap"
-            >
-              <button
-                onClick={() => {
-                  localStorage.removeItem("jinn-onboarded")
-                  window.location.reload()
-                }}
-                className="px-[var(--space-5)] py-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--accent)] text-[var(--accent-contrast)] border-none cursor-pointer text-[length:var(--text-footnote)] font-[var(--weight-semibold)] transition-all duration-150 ease-[var(--ease-spring)] inline-flex items-center gap-[var(--space-2)]"
-              >
-                <RotateCcw size={14} />
-                Re-run Onboarding Wizard
-              </button>
-              <button
-                onClick={() => {
-                  if (
-                    window.confirm("Reset all settings to defaults?")
-                  ) {
-                    localStorage.removeItem("jinn-settings")
-                    localStorage.removeItem("jinn-theme")
-                    resetAll()
-                    window.location.reload()
-                  }
-                }}
-                className="px-[var(--space-5)] py-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--system-red)] text-white border-none cursor-pointer text-[length:var(--text-footnote)] font-[var(--weight-semibold)] transition-all duration-150 ease-[var(--ease-spring)] inline-flex items-center gap-[var(--space-2)]"
-              >
-                <Trash2 size={14} />
-                Reset All Settings
-              </button>
-            </div>
-          </Section>
+          <ResetSection resetAll={resetAll} />
         </div>
       </div>
     </PageLayout>
