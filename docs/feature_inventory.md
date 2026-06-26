@@ -132,6 +132,24 @@
   manifest for artifacts produced by one run. It does not package bytes into an
   archive in this implementation.
 
+### Session run-resource attachments
+- `packages/jinn/src/gateway/run-attachments.ts`
+- `packages/jinn/src/gateway/api/routes/session-write.ts`
+- Sessions now support normalized run-resource attachments for local files,
+  folders, URLs, and previously registered artifacts.
+- Attachment metadata includes path or URL, artifact id when known, local-file
+  SHA256 when available, `read_only` vs `writable` access, intended use, and
+  producing run id when known.
+- `POST /api/sessions` and `POST /api/sessions/:id/message` accept legacy
+  attachment id arrays plus richer `resources` objects; normalized attachments
+  are persisted on the session and reused for handoffs/subsequent turns.
+- `GET /api/sessions/:id/resources` lists the session's normalized run resources.
+- `POST /api/sessions/:id/resources` attaches resources to an existing run
+  without sending a prompt.
+- Engine dispatch still receives exact local file paths when available, while
+  the prompt also includes a structured "Attached resources" block for folders,
+  URLs, access mode, intended use, artifact linkage, and producing-run context.
+
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
 - `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded

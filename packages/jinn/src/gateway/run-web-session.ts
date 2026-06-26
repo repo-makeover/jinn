@@ -76,6 +76,7 @@ export async function runWebSession(
   config: JinnConfig,
   context: ApiContext,
   attachments?: string[],
+  resourceContext?: string | null,
 ): Promise<void> {
   const currentSession = getSession(session.id);
   if (!currentSession) {
@@ -309,7 +310,7 @@ export async function runWebSession(
         });
       } catch { /* best effort */ }
       const fallbackPrompt = "You are taking over this task after a model fallback. Read the handoff packet below, preserve prior decisions and technical truth, then continue the original task.\n\n" + handoff.markdown;
-      await runWebSession(rolled ?? getSession(currentSession.id)!, fallbackPrompt, nextEngine, config, context, attachments);
+      await runWebSession(rolled ?? getSession(currentSession.id)!, fallbackPrompt, nextEngine, config, context, attachments, resourceContext);
       return true;
     };
 
@@ -369,7 +370,7 @@ export async function runWebSession(
     const syncSinceIso = (currentSession.transportMeta as any)?.claudeSyncSince;
     const syncSinceMs = typeof syncSinceIso === "string" ? new Date(syncSinceIso).getTime() : NaN;
     const syncRequested = currentSession.engine === "claude" && typeof syncSinceIso === "string" && Number.isFinite(syncSinceMs);
-    const promptToRun = syncRequested
+    const basePromptToRun = syncRequested
       ? (() => {
         const sinceMessages = getMessages(currentSession.id)
           .filter((m) => (m.role === "user" || m.role === "assistant") && m.timestamp >= syncSinceMs)
@@ -378,6 +379,7 @@ export async function runWebSession(
         return `We temporarily switched engines due to a usage limit on ${currentSession.engine}. Sync your context with this transcript (most recent last), then respond to the last USER message.\n\n${transcript}`;
       })()
       : prompt;
+    const promptToRun = resourceContext ? `${resourceContext}\n\n${basePromptToRun}` : basePromptToRun;
 
     const turnStartedAt = Date.now();
     let result!: Awaited<ReturnType<typeof engine.run>>;

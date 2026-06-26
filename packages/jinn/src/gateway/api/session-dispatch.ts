@@ -170,7 +170,7 @@ export function dispatchWebSessionRun(
   engine: Engine,
   config: JinnConfig,
   context: ApiContext,
-  opts?: { delayMs?: number; queueItemId?: string; attachments?: string[] },
+  opts?: { delayMs?: number; queueItemId?: string; attachments?: string[]; resourceContext?: string | null },
 ): Promise<void> {
   const run = async () => {
     const sessionKey = session.sessionKey || session.sourceRef;
@@ -178,7 +178,7 @@ export function dispatchWebSessionRun(
       await context.sessionManager.getQueue().enqueue(sessionKey, async () => {
         context.emit("session:started", { sessionId: session.id });
         if (opts?.queueItemId) context.emit("queue:updated", { sessionId: session.id, sessionKey });
-        await runWebSession(session, prompt, engine, config, context, opts?.attachments);
+        await runWebSession(session, prompt, engine, config, context, opts?.attachments, opts?.resourceContext);
       }, opts?.queueItemId);
     } finally {
       if (opts?.queueItemId) context.emit("queue:updated", { sessionId: session.id, sessionKey });

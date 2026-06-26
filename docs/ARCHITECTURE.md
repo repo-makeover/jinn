@@ -31,6 +31,9 @@ owning model reasoning.
 - Uploaded and attached artifacts: managed gateway storage with façade seam tests,
   SHA256 metadata, source/run annotations, validation helpers, and run-bundle
   manifest export.
+- Run-scoped resource attachments: persisted in session `transportMeta`, exposed
+  through session APIs, and normalized into exact file paths plus structured
+  prompt context at dispatch time.
 - Orchestration telemetry/recovery/worktrees: managed under Jinn runtime paths and bounded retention policies.
 
 ## Workflows
@@ -67,6 +70,9 @@ owning model reasoning.
 - Engine adapters own CLI invocation and stream normalization.
 - Orchestration runtime owns leases, continuations, holds, worktrees, and telemetry.
 - Local generated artifacts stay outside the tracked source tree.
+- Run attachment normalization lives in the gateway service layer; routes
+  translate request shapes and session storage keeps the durable run-level
+  resource roster.
 
 ## Extension Points
 

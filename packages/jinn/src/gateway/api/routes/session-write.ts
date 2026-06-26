@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import { validateCwd, validateNewSessionSelection, validateSessionPatch } from "../../../sessions/session-patch.js";
 import {
@@ -12,7 +10,6 @@ import {
   deleteSessions,
   duplicateSession,
   enqueueQueueItem,
-  getFile,
   getQueueItems,
   getSession,
   insertMessage,
@@ -20,7 +17,7 @@ import {
   updateSession,
 } from "../../../sessions/registry.js";
 import { forkEngineSession } from "../../../sessions/fork.js";
-import { FILES_DIR, JINN_HOME } from "../../../shared/paths.js";
+import { JINN_HOME } from "../../../shared/paths.js";
 import { getClaudeExpectedResetAt } from "../../../shared/usageAwareness.js";
 import { logger } from "../../../shared/logger.js";
 import { isInterruptibleEngine } from "../../../shared/types.js";
@@ -28,6 +25,13 @@ import { maybeEmitTalkGraph } from "../../../talk/graph.js";
 import { createPtyAccessToken } from "../../auth.js";
 import { fileIdsToMedia, handleSessionAttachment, rehomeAttachmentsToSession } from "../../files.js";
 import { readJsonBody } from "../../http-helpers.js";
+import {
+  buildResolvedRunAttachments,
+  listRunAttachments,
+  mergeRunAttachments,
+  resolveIncomingRunAttachments,
+  setRunAttachmentsOnTransportMeta,
+} from "../../run-attachments.js";
 import { supersedeRunningTurn } from "../../session-turn-state.js";
 import { resolveUserHeader } from "../../connector-reply.js";
 import type { ApiContext } from "../context.js";
@@ -36,26 +40,59 @@ import { badRequest, json, notFound, serverError } from "../responses.js";
 import { serializeSession } from "../serialize-session.js";
 import { dispatchWebSessionRun, killSessionEngines, maybeRevertEngineOverride } from "../session-dispatch.js";
 
-function resolveAttachmentPaths(fileIds: unknown): string[] {
-  if (!Array.isArray(fileIds)) return [];
-  const paths: string[] = [];
-  for (const id of fileIds) {
-    if (typeof id !== "string" || !id.trim()) continue;
-    const meta = getFile(id);
-    if (!meta) {
-      logger.warn(`Attachment file not found: ${id}`);
-      continue;
-    }
-    const filePath = path.join(FILES_DIR, meta.id, meta.filename);
-    if (fs.existsSync(filePath)) {
-      paths.push(filePath);
-    } else if (meta.path && fs.existsSync(meta.path)) {
-      paths.push(meta.path);
-    } else {
-      logger.warn(`Attachment file missing on disk: ${id} (${meta.filename})`);
-    }
+function combinedResourceSpecs(body: Record<string, unknown>): unknown[] {
+  const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+  const resources = Array.isArray(body.resources) ? body.resources : [];
+  return [...attachments, ...resources];
+}
+
+async function attachResourcesToSession(
+  session: import("../../../shared/types.js").Session,
+  body: Record<string, unknown>,
+  context: ApiContext,
+): Promise<{
+  session: import("../../../shared/types.js").Session;
+  promptBlock: string | null;
+  engineAttachments: string[];
+}> {
+  const existing = listRunAttachments(session);
+  const incomingSpecs = combinedResourceSpecs(body);
+  if (incomingSpecs.length === 0) {
+    const resolved = buildResolvedRunAttachments(existing);
+    return {
+      session,
+      promptBlock: resolved.promptBlock,
+      engineAttachments: resolved.engineAttachments,
+    };
   }
-  return paths;
+
+  const legacyFileIds = Array.isArray(body.attachments)
+    ? body.attachments.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+  if (legacyFileIds.length > 0) rehomeAttachmentsToSession(legacyFileIds, session.id);
+
+  const incoming = await resolveIncomingRunAttachments(incomingSpecs, context);
+  const merged = mergeRunAttachments(existing, incoming);
+  const updated = updateSession(session.id, {
+    transportMeta: setRunAttachmentsOnTransportMeta(session.transportMeta, merged),
+  }) ?? session;
+  const resolved = buildResolvedRunAttachments(merged);
+  return {
+    session: updated,
+    promptBlock: resolved.promptBlock,
+    engineAttachments: resolved.engineAttachments,
+  };
+}
+
+function describeSessionResources(session: import("../../../shared/types.js").Session): {
+  promptBlock: string | null;
+  engineAttachments: string[];
+} {
+  const resolved = buildResolvedRunAttachments(listRunAttachments(session));
+  return {
+    promptBlock: resolved.promptBlock,
+    engineAttachments: resolved.engineAttachments,
+  };
 }
 
 export async function handleSessionWriteRoutes(
@@ -405,7 +442,7 @@ export async function handleSessionWriteRoutes(
     const engineName = selection.engine || config.engines.default;
     const sessionKey = `web:${Date.now()}`;
     const userId = resolveUserHeader(req.headers, config.gateway.userHeader);
-    const session = createSession({
+    let session = createSession({
       engine: engineName,
       source: "web",
       sourceRef: sessionKey,
@@ -431,8 +468,15 @@ export async function handleSessionWriteRoutes(
       }
     }
     maybeEmitTalkGraph(session.id, "added", { getSession, emit: context.emit });
-    rehomeAttachmentsToSession(body.attachments, session.id);
     const newSessionMedia = fileIdsToMedia(body.attachments);
+    let attached;
+    try {
+      attached = await attachResourcesToSession(session, body, context);
+    } catch (err) {
+      badRequest(res, err instanceof Error ? err.message : "invalid resources");
+      return true;
+    }
+    session = attached.session;
     insertMessage(session.id, "user", prompt, newSessionMedia.length > 0 ? newSessionMedia : undefined);
 
     const ptyEngine = body.mode === "interactive" ? context.ptyViewEngines?.[engineName] : undefined;
@@ -452,13 +496,13 @@ export async function handleSessionWriteRoutes(
     });
     session.status = "running";
 
-    const attachmentPaths = resolveAttachmentPaths(body.attachments);
     const queueSessionKey = session.sessionKey || session.sourceRef || session.id;
     const queueItemId = enqueueQueueItem(session.id, queueSessionKey, prompt);
     context.emit("queue:updated", { sessionId: session.id, sessionKey: queueSessionKey });
     dispatchWebSessionRun(session, prompt, engine, config, context, {
       queueItemId,
-      attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
+      attachments: attached.engineAttachments.length > 0 ? attached.engineAttachments : undefined,
+      resourceContext: attached.promptBlock,
     });
 
     json(res, serializeSession(session, context), 201);
@@ -514,7 +558,17 @@ export async function handleSessionWriteRoutes(
     if (shouldInterruptRunningTurn) supersedeRunningTurn(session);
 
     const userMedia = isNotification ? [] : fileIdsToMedia(body.attachments);
-    if (!isNotification) rehomeAttachmentsToSession(body.attachments, session.id);
+    let attached;
+    if (isNotification) {
+      attached = { session, ...describeSessionResources(session) };
+    } else {
+      try {
+        attached = await attachResourcesToSession(session, body, context);
+      } catch (err) {
+        badRequest(res, err instanceof Error ? err.message : "invalid resources");
+        return true;
+      }
+    }
     insertMessage(
       session.id,
       messageRole,
@@ -557,7 +611,6 @@ export async function handleSessionWriteRoutes(
     }
 
     context.sessionManager.getQueue().clearCancelled(session.sessionKey || session.sourceRef || session.id);
-    const attachmentPaths = resolveAttachmentPaths(body.attachments);
     const sessionKey = session.sessionKey || session.sourceRef || session.id;
     let queueItemId: string | undefined;
     if (!isNotification) {
@@ -566,7 +619,8 @@ export async function handleSessionWriteRoutes(
     }
     dispatchWebSessionRun(session, prompt, engine, config, context, {
       queueItemId,
-      attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
+      attachments: attached.engineAttachments.length > 0 ? attached.engineAttachments : undefined,
+      resourceContext: attached.promptBlock,
     });
 
     json(res, { status: "queued", sessionId: session.id });
@@ -582,6 +636,34 @@ export async function handleSessionWriteRoutes(
     }
     await handleSessionAttachment(req, res, params.id, context);
     return true;
+  }
+
+  params = matchRoute("/api/sessions/:id/resources", pathname);
+  if (params) {
+    const session = getSession(params.id);
+    if (!session) {
+      notFound(res);
+      return true;
+    }
+    if (method === "GET") {
+      json(res, { attachments: serializeSession(session, context).attachments ?? [] });
+      return true;
+    }
+    if (method === "POST") {
+      const parsed = await readJsonBody(req, res);
+      if (!parsed.ok) return true;
+      const body = parsed.body as Record<string, unknown>;
+      let attached;
+      try {
+        attached = await attachResourcesToSession(session, body, context);
+      } catch (err) {
+        badRequest(res, err instanceof Error ? err.message : "invalid resources");
+        return true;
+      }
+      context.emit("session:updated", { sessionId: session.id });
+      json(res, { attachments: serializeSession(attached.session, context).attachments ?? [] }, 201);
+      return true;
+    }
   }
 
   return false;

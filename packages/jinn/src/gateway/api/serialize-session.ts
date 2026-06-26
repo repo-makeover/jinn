@@ -1,5 +1,6 @@
 import { isInterruptibleEngine, type Session } from "../../shared/types.js";
 import type { ApiContext } from "./context.js";
+import { enrichRunAttachmentsForSession } from "../run-attachments.js";
 
 const BACKGROUND_ACTIVITY_STALE_MS = 5 * 60 * 1000;
 
@@ -12,6 +13,7 @@ export function serializeSession(session: Session, context: ApiContext): Session
   if (bgIsStale) context.backgroundActivity?.delete(session.id);
   return {
     ...session,
+    attachments: enrichRunAttachmentsForSession(session),
     queueDepth,
     transportState,
     backgroundActivity: bg && !bgIsStale

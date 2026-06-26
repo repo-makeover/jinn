@@ -1,5 +1,23 @@
 import type { JsonObject } from "./json.js";
 
+export type RunAttachmentKind = "file" | "folder" | "url" | "artifact";
+export type RunAttachmentAccess = "read_only" | "writable";
+
+export interface RunAttachment {
+  id: string;
+  kind: RunAttachmentKind;
+  path: string | null;
+  url: string | null;
+  artifactId: string | null;
+  sha256: string | null;
+  access: RunAttachmentAccess;
+  intendedUse: string | null;
+  producingRunId: string | null;
+  createdAt: string;
+  resolvedPath?: string | null;
+  existsOnDisk?: boolean;
+}
+
 export interface Session {
   id: string;
   engine: string;
@@ -35,6 +53,8 @@ export interface Session {
    *  work — the CLI still has upstream API requests in flight (background
    *  subagents/tasks) after the turn settled. Null when none. */
   backgroundActivity?: { activeStreams: number; lastActivityAt: string } | null;
+  /** Serialize-time only: normalized run resources persisted in transportMeta. */
+  attachments?: RunAttachment[];
   createdAt: string;
   lastActivity: string;
   lastError: string | null;

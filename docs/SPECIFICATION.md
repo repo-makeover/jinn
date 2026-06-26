@@ -31,6 +31,8 @@ operator dashboards.
 - `Artifact`: uploaded, downloaded, generated, input, or manually attached file
   metadata with managed storage constraints, hash/source metadata, and optional
   producing run identity.
+- `Run attachment`: normalized run-scoped resource reference for a file, folder,
+  URL, or prior artifact, with access mode and intended-use metadata.
 
 ## Functional Requirements
 
@@ -42,6 +44,7 @@ operator dashboards.
 | REQ-CLAUDE-001 | Run Claude Code through the official CLI/PTTY path for subscription-friendly turns. | verified | `README.md`, Claude engine tests |
 | REQ-FILES-001 | Preserve managed upload/read/download/delete behavior through stable `/api/files` routes. | verified | `packages/jinn/src/gateway/__tests__/files-facade-seam.test.ts` |
 | REQ-ARTIFACTS-001 | Maintain a local artifact registry for files created, consumed, downloaded, or attached during Jinn runs, including hash, source, run, tag, validation, and bundle-manifest metadata. | verified | `packages/jinn/src/gateway/__tests__/artifact-registry.test.ts` |
+| REQ-ATTACH-001 | Provide a standard run-resource attachment contract for files, folders, URLs, and prior artifacts, including access mode, intended use, producing-run metadata, and run-scoped persistence. | verified | `packages/jinn/src/gateway/__tests__/run-attachments.test.ts` |
 | REQ-ORCH-001 | Route `/api/orchestration/*` through the canonical API router and support status/control surfaces. | verified | `packages/jinn/src/gateway/api.ts`, `api-orchestration-routing.test.ts` |
 | REQ-GOV-001 | Keep local generated governance/runtime artifacts out of the public tracked source tree. | verified | `.gitignore`, `docs/STRUCTURE_COMPLIANCE.md` |
 
@@ -69,6 +72,7 @@ operator dashboards.
 - Orchestration API: `packages/jinn/src/gateway/api/orchestration-routes.ts`.
 - Files API: `packages/jinn/src/gateway/files.ts` façade and sibling modules.
 - Artifact API: `packages/jinn/src/gateway/api/routes/artifacts.ts`.
+- Run attachment API: `packages/jinn/src/gateway/api/routes/session-write.ts`, `packages/jinn/src/gateway/run-attachments.ts`.
 
 ## Validation Requirements
 
@@ -95,3 +99,4 @@ operator dashboards.
 
 - 2026-06-25: Initial source-grounded specification created by documentation stewardship pass.
 - 2026-06-26: Added artifact registry requirement and API surface.
+- 2026-06-26: Added run-resource attachment requirement and session API surface.
