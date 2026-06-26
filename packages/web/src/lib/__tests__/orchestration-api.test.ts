@@ -46,7 +46,7 @@ describe("orchestration-api", () => {
   })
 
   it("posts every orchestration mutator with the expected path and body", async () => {
-    const fetchMock = vi.fn(async () => ok({ ok: true }))
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => ok({ ok: true }))
     vi.stubGlobal("fetch", fetchMock)
 
     const cases: Array<{

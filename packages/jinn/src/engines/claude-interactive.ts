@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { IPty } from "node-pty";
-import type { InterruptibleEngine, EngineRunOpts, EngineResult, EngineRateLimitInfo, StreamDelta } from "../shared/types.js";
+import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME, CLAUDE_SETTINGS_DIR, HOOK_RELAY_SCRIPT, CLAUDE_LIMITS_DIR } from "../shared/paths.js";
 import { cleanupSessionSettings, writeSessionSettings } from "../shared/claude-settings.js";
@@ -9,441 +8,35 @@ import { resolveBin } from "../shared/resolve-bin.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
 import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import type { PtyControlEvent, PtyViewEngine, PtyIdleSpawnOpts } from "./pty-view-engine.js";
-import type { HookRegistry, HookPayload } from "../gateway/hook-registry.js";
+import type { HookRegistry } from "../gateway/hook-registry.js";
 import { SsePtyProxy, MAIN_AGENT_SENTINEL, type SseDataEvent, type UpstreamActivityInfo } from "./sse-pty-proxy.js";
-import { neutralizeForPaste } from "../shared/skill-commands.js";
 import { findTranscriptForSession } from "./claude-transcript.js";
+import { buildInteractiveArgs, isNativeClaudeCommand, pasteAndSubmit } from "./claude-interactive-args.js";
+import {
+  computeInteractiveCost,
+  lastAssistantTextFromTranscript,
+  lastTurnContextTokens,
+  stripReasoningBlocks,
+} from "./claude-interactive-transcript.js";
+import { claudeHookToDeltas, rateLimitFromStopFailure, sseEventToDeltas } from "./claude-interactive-stream.js";
+import { TurnResolver } from "./claude-turn-resolver.js";
+import { ClaudeBackgroundActivity } from "./claude-background-activity.js";
+import { ClaudeLateRecovery } from "./claude-late-recovery.js";
+import { buildClaudePtyEnv, injectPrompt } from "./claude-pty-helpers.js";
+
 export { findTranscriptForSession } from "./claude-transcript.js";
+export { buildInteractiveArgs, isNativeClaudeCommand, pasteAndSubmit } from "./claude-interactive-args.js";
+export { lastAssistantTextFromTranscript, stripReasoningBlocks } from "./claude-interactive-transcript.js";
+export { claudeHookToDeltas, sseEventToDeltas } from "./claude-interactive-stream.js";
+export { TurnResolver, type TurnResolverOpts } from "./claude-turn-resolver.js";
 
 export type { PtyControlEvent } from "./pty-view-engine.js";
-
-interface InteractiveArgsOpts {
-  prompt: string;
-  settingsPath: string;
-  resumeSessionId?: string;
-  model?: string;
-  effortLevel?: string;
-  mcpConfigPath?: string;
-  cliFlags?: string[];
-  attachments?: string[];
-  /** Gateway system prompt (persona/org context) + main-agent sentinel, passed via
-   *  the CLI `--append-system-prompt` flag. The settings-file `appendSystemPrompt`
-   *  KEY is ignored by claude CLI ≥2.1.x, so this flag is the only path that
-   *  actually lands it in the request `system` (and thus lets the SSE proxy tee). */
-  appendSystemPrompt?: string;
-}
-
-interface TranscriptUsage { inputTokens: number; outputTokens: number; cacheTokens: number; assistantTurns: number; }
-
-// $/million tokens. Conservative defaults.
-const MODEL_PRICES: Record<string, { in: number; out: number }> = {
-  "claude-fable-5": { in: 10, out: 50 },
-  "claude-opus-4-7": { in: 15, out: 75 },
-  "claude-sonnet-4-6": { in: 3, out: 15 },
-  "claude-haiku-4-5": { in: 1, out: 5 },
-};
-const DEFAULT_PRICE = { in: 15, out: 75 };
-
-function sumTranscriptUsage(content: string): TranscriptUsage {
-  const u: TranscriptUsage = { inputTokens: 0, outputTokens: 0, cacheTokens: 0, assistantTurns: 0 };
-  const seen = new Set<string>();
-  for (const line of content.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    let msg: any;
-    try { msg = JSON.parse(t); } catch { continue; }
-    if (msg.type !== "assistant") continue;
-    const usage = msg?.message?.usage;
-    if (!usage) continue;
-    // Phase 0 finding: --effort high emits two assistant lines per response
-    // (thinking + text) with the same message.id and identical usage. Dedupe
-    // by message.id so tokens aren't double-counted. Lines without an id are
-    // always counted (can't dedupe what we can't key).
-    const id = msg?.message?.id;
-    if (typeof id === "string") {
-      if (seen.has(id)) continue;
-      seen.add(id);
-    }
-    u.assistantTurns += 1;
-    u.inputTokens += Number(usage.input_tokens ?? 0);
-    u.outputTokens += Number(usage.output_tokens ?? 0);
-    u.cacheTokens += Number(usage.cache_read_input_tokens ?? 0) + Number(usage.cache_creation_input_tokens ?? 0);
-  }
-  return u;
-}
-
-/** Most recent turn's input-context size (input + cache-read + cache-creation
- *  tokens) from the transcript — how full the window is. Undefined if no usage. */
-function lastTurnContextTokens(transcriptPath: string): number | undefined {
-  let content: string;
-  try { content = fs.readFileSync(transcriptPath, "utf-8"); } catch { return undefined; }
-  let last: number | undefined;
-  for (const line of content.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    let msg: any;
-    try { msg = JSON.parse(t); } catch { continue; }
-    if (msg.type !== "assistant") continue;
-    const u = msg?.message?.usage;
-    if (!u) continue;
-    last = Number(u.input_tokens ?? 0) + Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0);
-  }
-  return last && last > 0 ? last : undefined;
-}
-
-/** Last assistant text block from a Claude transcript — the turn's final
- *  message. Used to recover result text when the Stop hook (which normally
- *  carries last_assistant_message) was lost (gateway restart deleting
- *  gateway.json mid-turn, PTY crash, or SSE drop), so the parent-session
- *  callback shows real output instead of "(no output)". Exported for tests. */
-function transcriptLineTimestampMs(msg: any): number | undefined {
-  const raw = msg?.timestamp ?? msg?.created_at ?? msg?.createdAt;
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw !== "string" || !raw.trim()) return undefined;
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-export function lastAssistantTextFromTranscript(transcriptPath: string, afterMs?: number): string | undefined {
-  let raw: string;
-  try { raw = fs.readFileSync(transcriptPath, "utf-8"); } catch { return undefined; }
-  let last: string | undefined;
-  for (const line of raw.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    let msg: any;
-    try { msg = JSON.parse(t); } catch { continue; }
-    if (msg.type !== "assistant") continue;
-    if (afterMs !== undefined) {
-      const ts = transcriptLineTimestampMs(msg);
-      if (ts === undefined || ts < afterMs) continue;
-    }
-    const content = msg?.message?.content;
-    if (!Array.isArray(content)) continue;
-    const text = content.filter((b: any) => b?.type === "text").map((b: any) => String(b.text ?? "")).join("");
-    if (text.trim()) last = text;
-  }
-  return last;
-}
-
-export function stripReasoningBlocks(text: string): string {
-  return text
-    .replace(/<\s*(thinking|reasoning|thought)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
-    .replace(/```(?:thinking|reasoning|thought)\b[\s\S]*?```/gi, "")
-    .trim();
-}
-
-function computeInteractiveCost(transcriptPath: string, model?: string): { cost: number; turns: number } | null {
-  let content: string;
-  try { content = fs.readFileSync(transcriptPath, "utf-8"); } catch { return null; }
-  const u = sumTranscriptUsage(content);
-  if (u.assistantTurns === 0) return null;
-  const price = (model && MODEL_PRICES[model]) || DEFAULT_PRICE;
-  const cost = (u.inputTokens / 1_000_000) * price.in + (u.outputTokens / 1_000_000) * price.out;
-  return { cost, turns: u.assistantTurns };
-}
-
-/**
- * Map a StopFailure hook payload to an EngineRateLimitInfo.
- * Returns null unless the turn failed specifically with error === "rate_limit".
- * The shape matches what ClaudeEngine produces from `rate_limit_event` JSON, so
- * detectRateLimit() / the wait-retry machinery in manager.ts work unchanged.
- * (error_details may carry a reset time, but its format is unconfirmed — left
- * unparsed; manager.ts computes a default backoff when resetsAt is absent.)
- */
-function rateLimitFromStopFailure(payload: HookPayload | undefined): EngineRateLimitInfo | null {
-  if (!payload || payload.hook_event_name !== "StopFailure") return null;
-  if (payload.error !== "rate_limit") return null;
-  const isUsingOverage = payload.is_using_overage === true ? true : undefined;
-  const overageStatus = typeof payload.overage_status === "string" ? payload.overage_status : undefined;
-  const overageDisabledReason = typeof payload.overage_disabled_reason === "string" ? payload.overage_disabled_reason : undefined;
-  return { status: "rejected", rateLimitType: "interactive_detected", isUsingOverage, overageStatus, overageDisabledReason };
-}
-
-export function buildInteractiveArgs(o: InteractiveArgsOpts): string[] {
-  const args: string[] = [];
-  if (o.resumeSessionId) args.push("--resume", o.resumeSessionId);
-
-  let prompt = o.prompt;
-  if (o.attachments?.length) {
-    prompt += "\n\nAttached files:\n" + o.attachments.map((a) => `- ${a}`).join("\n");
-  }
-  args.push(prompt); // positional — MUST precede variadic --mcp-config
-
-  args.push("--chrome");
-  if (o.effortLevel && o.effortLevel !== "default") args.push("--effort", o.effortLevel);
-  if (o.model) args.push("--model", o.model);
-  args.push("--dangerously-skip-permissions");
-  args.push("--disallowedTools", "AskUserQuestion", "ExitPlanMode");
-  args.push("--settings", o.settingsPath);
-  if (o.appendSystemPrompt) args.push("--append-system-prompt", o.appendSystemPrompt);
-  if (o.cliFlags?.length) args.push(...o.cliFlags);
-  if (o.mcpConfigPath) args.push("--mcp-config", o.mcpConfigPath);
-  return args;
-}
-
-export function claudeHookToDeltas(h: Record<string, unknown>): StreamDelta[] {
-  if (h.hook_event_name !== "PostToolUse") return [];
-  const toolName = typeof h.tool_name === "string" ? h.tool_name : undefined;
-  return [{
-    type: "tool_result",
-    content: String(h.tool_name ?? ""),
-    toolName,
-  }];
-}
-
-/**
- * Translate one parsed Anthropic SSE `data:` event into StreamDeltas. This is the
- * live streaming source (replacing the old transcript tailer): word-by-word text
- * in true order, tool markers positioned correctly relative to text, and live
- * context tokens from message_start.usage.
- *  - message_start.usage         → `context` (input + cache_read + cache_creation)
- *  - content_block_start tool_use → `tool_use` marker (in-order with text)
- *  - content_block_delta text_delta → incremental `text` (word-by-word)
- * tool_result is NOT in the assistant SSE stream (tools run between messages); the
- * PostToolUse hook supplies that completion marker. input_json_delta / thinking
- * deltas are intentionally not surfaced to the chat pane.
- */
-export function sseEventToDeltas(e: SseDataEvent): StreamDelta[] {
-  switch (e.type) {
-    case "message_start": {
-      const u = (e as any).message?.usage;
-      if (!u) return [];
-      const ctx = Number(u.input_tokens ?? 0) + Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0);
-      return ctx > 0 ? [{ type: "context", content: String(ctx) }] : [];
-    }
-    case "content_block_start": {
-      const cb = (e as any).content_block;
-      if (cb?.type === "tool_use") {
-        return [{ type: "tool_use", content: String(cb.name ?? "tool"), toolName: String(cb.name ?? "tool"), toolId: String(cb.id ?? "") }];
-      }
-      return [];
-    }
-    case "content_block_delta": {
-      const d = (e as any).delta;
-      if (d?.type === "text_delta" && typeof d.text === "string" && d.text.length > 0) {
-        return [{ type: "text", content: d.text }];
-      }
-      return [];
-    }
-    default:
-      return [];
-  }
-}
-
-const STOP_FAILURE_GRACE_MS = 20_000;
-/** StopFailure errors that must settle immediately. Rate-limit/billing/auth
- *  need the manager fallback machinery right away; everything else gets a grace
- *  window because Claude Code can keep working after a sub-agent/API failure. */
-const IMMEDIATE_STOP_FAILURE_ERRORS = new Set(["rate_limit", "billing_error", "authentication_failed", "max_output_tokens"]);
-
-export interface TurnResolverOpts {
-  fallbackSessionId: string | undefined;
-  /** When true (warm-PTY reuse / post-idle-spawn), the resolver skips waiting for
-   *  SessionStart (it already fired once at process start) and pre-fills the
-   *  Claude session id from fallbackSessionId. */
-  assumeStarted?: boolean;
-  /** Test override for the StopFailure grace window (default 20s). */
-  stopFailureGraceMs?: number;
-  /** While true, a graced StopFailure keeps waiting instead of settling. */
-  shouldDeferStopFailure?: () => boolean;
-  /** This turn is a Claude-native local command (see isNativeClaudeCommand). Such
-   *  commands produce no new assistant message, so a Stop hook's
-   *  last_assistant_message is the PREVIOUS turn's stale text — maybeComplete must
-   *  settle empty rather than re-persist it as a duplicate. */
-  native?: boolean;
-}
-
-/** State machine for one interactive turn: resolves after BOTH SessionStart + Stop, or on StopFailure/interrupt. */
-export class TurnResolver {
-  readonly promise: Promise<EngineResult>;
-  private resolve!: (r: EngineResult) => void;
-  private settled = false;
-  private claudeSessionId: string | undefined;
-  private gotSessionStart = false;
-  private stopPayload: HookPayload | undefined;
-  private stopFailurePayload: HookPayload | undefined;
-  private graceTimer: NodeJS.Timeout | undefined;
-
-  constructor(private opts: TurnResolverOpts) {
-    this.promise = new Promise((res) => { this.resolve = res; });
-    if (opts.assumeStarted) {
-      this.gotSessionStart = true;
-      this.claudeSessionId = opts.fallbackSessionId;
-    }
-  }
-
-  onHook(h: HookPayload): void {
-    if (this.settled) return;
-    if (h.hook_event_name === "SessionStart") {
-      this.gotSessionStart = true;
-      if (typeof h.session_id === "string") this.claudeSessionId = h.session_id;
-      this.maybeComplete();
-    } else if (h.hook_event_name === "Stop") {
-      // A Stop supersedes any pending StopFailure — the CLI retried and finished.
-      this.clearGrace();
-      this.stopFailurePayload = undefined;
-      this.stopPayload = h;
-      if (typeof h.session_id === "string" && !this.claudeSessionId) this.claudeSessionId = h.session_id;
-      this.maybeComplete();
-    } else if (h.hook_event_name === "StopFailure") {
-      // API error ended the turn. In interactive mode the CLI survives
-      // invalid_request/server_error/unknown and usually retries — hold the
-      // failure in a grace window instead of settling: a later Stop supersedes
-      // it, activity re-arms it, the PTY-death watchdog still fails fast.
-      // Other error types (rate_limit, billing, auth) settle immediately.
-      // numTurns:1 keeps isDeadSessionError from false-positiving.
-      this.stopFailurePayload = h;
-      if (typeof h.session_id === "string" && !this.claudeSessionId) this.claudeSessionId = h.session_id;
-      if (!IMMEDIATE_STOP_FAILURE_ERRORS.has(String(h.error ?? "unknown"))) {
-        this.armGrace();
-      } else {
-        this.settleWithFailure();
-      }
-    } else {
-      // PreToolUse/PostToolUse/etc — proof of life while a failure is pending.
-      this.noteActivity();
-    }
-  }
-
-  /** Claude session id learned so far (for engineSessionId persistence on warm-PTY turns). */
-  get sessionId(): string | undefined { return this.claudeSessionId; }
-  get isSettled(): boolean { return this.settled; }
-  /** The StopFailure payload, if the turn ended in an API error (Task 5.3 maps it to rateLimit). */
-  get stopFailure(): HookPayload | undefined { return this.stopFailurePayload; }
-  /** transcript_path from whichever hook carried it. */
-  get transcriptPath(): string | undefined {
-    const p = this.stopPayload?.transcript_path ?? this.stopFailurePayload?.transcript_path;
-    return typeof p === "string" ? p : undefined;
-  }
-
-  private maybeComplete(): void {
-    if (!this.gotSessionStart || !this.stopPayload) return;
-    const sid = this.claudeSessionId ?? this.opts.fallbackSessionId;
-    if (!sid) {
-      this.settle({ sessionId: "", result: "", error: "Interactive turn produced no Claude session id" });
-      return;
-    }
-    // Native local commands (/usage, /limits, …) produce no new assistant
-    // message; the Stop hook's last_assistant_message is the prior turn's stale
-    // text. Settling with it would persist a duplicate chat echo — settle empty.
-    const text = this.opts.native ? "" : stripReasoningBlocks(String(this.stopPayload.last_assistant_message ?? ""));
-    this.settle({ sessionId: sid, result: text, error: undefined, numTurns: 1 });
-  }
-
-  interrupt(reason: string): void {
-    // PTY died while a StopFailure was held in grace — the API error is the
-    // real cause; report it instead of the generic "process exited". Other
-    // interrupt reasons (user abort, engine switch, preemption) keep their
-    // "Interrupted: …" text so the quiet-interrupt handling downstream engages.
-    if (this.stopFailurePayload && !this.settled && reason === "Interrupted: claude process exited") {
-      this.settleWithFailure();
-      return;
-    }
-    this.settle({ sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "", result: "", error: reason });
-  }
-
-  completeNativeCommand(): void {
-    this.settle({ sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "", result: "", numTurns: 1 });
-  }
-
-  completeRecovered(text: string, sessionId?: string): void {
-    if (sessionId && !this.claudeSessionId) this.claudeSessionId = sessionId;
-    this.settle({ sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "", result: stripReasoningBlocks(text), numTurns: 1 });
-  }
-
-  /** Proof of life (SSE delta / tool hook) while a StopFailure is pending —
-   *  re-arms the grace window. No-op when no failure is pending. */
-  noteActivity(): void {
-    if (this.graceTimer) this.armGrace();
-  }
-
-  private armGrace(): void {
-    this.clearGrace();
-    const ms = this.opts.stopFailureGraceMs ?? STOP_FAILURE_GRACE_MS;
-    this.graceTimer = setTimeout(() => {
-      if (this.opts.shouldDeferStopFailure?.()) {
-        this.armGrace();
-        return;
-      }
-      this.settleWithFailure();
-    }, ms);
-    this.graceTimer.unref?.();
-  }
-
-  private clearGrace(): void {
-    if (this.graceTimer) {
-      clearTimeout(this.graceTimer);
-      this.graceTimer = undefined;
-    }
-  }
-
-  private settleWithFailure(): void {
-    this.settle({
-      sessionId: this.claudeSessionId ?? this.opts.fallbackSessionId ?? "",
-      result: "",
-      error: `Interactive turn failed: ${this.stopFailurePayload?.error ?? "unknown"}`,
-      numTurns: 1,
-    });
-  }
-
-  private settle(r: EngineResult): void {
-    if (this.settled) return;
-    this.settled = true;
-    this.clearGrace();
-    this.resolve(r);
-  }
-}
-
-/** How long activeStreams must sit at 0 (post-settle) before the engine reports
- *  the session's background activity as cleared. Background subagents fire
- *  consecutive API requests with small gaps between them — a quiet window keeps
- *  the indicator from flapping null↔active on every inter-request beat. */
-const BACKGROUND_CLEAR_QUIET_MS = 10_000;
 
 const NATIVE_COMMAND_QUIET_MS = 1800;
 const NATIVE_COMMAND_MIN_MS = 3000;
 const NATIVE_COMMAND_MAX_MS = 90_000;
 const LOST_STOP_RECOVERY_QUIET_MS = 60_000;
 const LOST_STOP_RECOVERY_MIN_MS = 5 * 60_000;
-const LATE_RECOVERY_WINDOW_MS = 10 * 60 * 1000;
-
-/** Claude Code built-in slash commands that run locally and never produce a new
- *  assistant API turn. Two behaviours, both handled by the native-command path:
- *   - Context mutators (/compact, /clear, /model) end without firing a Stop hook;
- *     the native-command quiet-window timer settles them with an empty result.
- *   - Info/overlay commands (/usage, /limits, /cost, …) DO fire a Stop hook on
- *     dismiss, but its `last_assistant_message` still carries the PREVIOUS turn's
- *     text. Without native classification that stale text was persisted as a new
- *     assistant message — the duplicate-chat-echo bug. native-aware maybeComplete
- *     settles these empty instead.
- *  Only commands that genuinely yield no persistable assistant output belong here:
- *  misclassifying a real-turn command (/init, /review, skill commands) would drop
- *  its answer. */
-const NATIVE_CLAUDE_COMMANDS = new Set([
-  "/compact", "/clear", "/model",
-  "/usage", "/limits", "/cost", "/status", "/config", "/help", "/doctor",
-  "/release-notes", "/vim", "/terminal-setup", "/mcp", "/agents", "/permissions",
-  "/hooks", "/memory", "/export", "/login", "/logout", "/bug", "/resume",
-]);
-
-export function isNativeClaudeCommand(prompt: string): boolean {
-  const first = prompt.trim().split(/\s+/, 1)[0]?.toLowerCase();
-  return first !== undefined && NATIVE_CLAUDE_COMMANDS.has(first);
-}
-
-/** Bracketed-paste `text` into a PTY then submit with CR after a 150ms beat.
- *  Phase 0 finding: bracketed-paste does NOT neutralize a leading /, @, or ! —
- *  they still trigger the slash-command / mention / bash-mode handlers and the
- *  turn is never submitted. neutralizeForPaste() prepends a space for mentions,
- *  bash-mode, and jinn-skill slash commands, while letting engine-native commands
- *  (/compact, /clear, /model, …) pass through raw so the TUI actually runs them.
- *  Shared by injectPrompt() (warm-PTY first turn) and writeStdin() (raw WS input). */
-export function pasteAndSubmit(proc: Pick<IPty, "write">, text: string): void {
-  const payload = neutralizeForPaste(text);
-  proc.write(`\x1b[200~${payload}\x1b[201~`);
-  setTimeout(() => proc.write("\r"), 150);
-}
 
 export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngine {
   name = "claude" as const;
@@ -475,23 +68,23 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  apply only at spawn, so a mid-chat switch must cold-respawn rather than reuse
    *  the warm PTY (which would keep running the old model). */
   private spawnParams = new Map<string, { model?: string; effortLevel?: string; appendApplied?: boolean }>();
-  /** Sessions with a post-failure recovery listener armed (turn settled as an
-   *  API error, but the CLI may still finish — a late Stop supersedes). */
-  private lateRecovery = new Map<string, { timer: NodeJS.Timeout }>();
-  /** Post-settle background work per session: the CLI's SSE proxy still has
-   *  upstream requests in flight (background subagents/tasks) after the Stop
-   *  hook settled the turn. `emitted` tracks whether the gateway was told, so a
-   *  cleared (null) notification is only sent when there's something to clear. */
-  private bgActivity = new Map<string, { info: UpstreamActivityInfo; clearTimer?: NodeJS.Timeout; emitted: boolean }>();
-  private backgroundActivityCb?: (jinnSessionId: string, info: UpstreamActivityInfo | null) => void;
+  private lateRecovery: ClaudeLateRecovery;
+  private background = new ClaudeBackgroundActivity((id) => this.active.has(id));
+
   /** Test override for the post-settle clear quiet window (default 10s). */
-  backgroundClearQuietMs = BACKGROUND_CLEAR_QUIET_MS;
+  get backgroundClearQuietMs(): number {
+    return this.background.quietMs;
+  }
+  set backgroundClearQuietMs(ms: number) {
+    this.background.quietMs = ms;
+  }
 
   constructor(
     private lifecycle: PtyLifecycleManager,
     private hookRegistry: HookRegistry,
   ) {
     this.streams = new PtyStreamManager("PTY", (id) => this.lifecycle.getWarm(id) !== undefined);
+    this.lateRecovery = new ClaudeLateRecovery(this.hookRegistry);
     // Purge per-PTY bookkeeping whenever the session's PTY is released (kill,
     // LRU eviction, sweep reap, cold respawn) so these maps don't grow forever
     // in a long-running daemon. Both are meaningful only while a PTY is live and
@@ -505,83 +98,13 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     });
   }
 
-  /** Single-registration callback for post-settle background activity. `info` is
-   *  the live in-flight snapshot; `null` means cleared (quiet for
-   *  backgroundClearQuietMs, or the session's PTY was released). Never fires
-   *  while a run() is in flight for the session — the turn is already "running";
-   *  only post-settle activity matters. */
   onBackgroundActivity(cb: (jinnSessionId: string, info: UpstreamActivityInfo | null) => void): void {
-    this.backgroundActivityCb = cb;
+    this.background.onBackgroundActivity(cb);
   }
-
-  /** Per-PTY SSE proxy reported an in-flight change. Always record it (counts
-   *  must stay truthful across the run boundary); emission is gated downstream. */
-  private handleUpstreamActivity(jinnSessionId: string, info: UpstreamActivityInfo): void {
-    let st = this.bgActivity.get(jinnSessionId);
-    if (!st) {
-      st = { info, emitted: false };
-      this.bgActivity.set(jinnSessionId, st);
-    } else {
-      st.info = info;
-    }
-    this.maybeEmitBackground(jinnSessionId);
-  }
-
-  /** Emit the session's background state if it's post-settle and changed:
-   *  active streams emit immediately (cancelling any pending clear); zero
-   *  streams arm a quiet-window timer that emits `null` once, only if activity
-   *  was previously reported. Suppressed entirely while a run() is in flight. */
-  private maybeEmitBackground(jinnSessionId: string): void {
-    const st = this.bgActivity.get(jinnSessionId);
-    if (!st) return;
-    if (this.active.has(jinnSessionId)) return; // in-flight turn — already "running"
-    if (st.info.activeStreams > 0) {
-      if (st.clearTimer) { clearTimeout(st.clearTimer); st.clearTimer = undefined; }
-      st.emitted = true;
-      this.backgroundActivityCb?.(jinnSessionId, { ...st.info });
-      return;
-    }
-    if (!st.emitted) {
-      // Reached 0 without ever being reported post-settle — nothing to clear.
-      this.bgActivity.delete(jinnSessionId);
-      return;
-    }
-    if (st.clearTimer) return; // quiet window already armed
-    st.clearTimer = setTimeout(() => {
-      const cur = this.bgActivity.get(jinnSessionId);
-      if (cur !== st) return; // state was recreated/cleared since arming
-      if (cur.info.activeStreams > 0) { cur.clearTimer = undefined; return; }
-      this.bgActivity.delete(jinnSessionId);
-      this.backgroundActivityCb?.(jinnSessionId, null);
-    }, this.backgroundClearQuietMs);
-    st.clearTimer.unref?.();
-  }
-
-  /** A new run() is taking the session: retract any reported background state
-   *  (the session is about to be "running") but KEEP the live counts — the proxy
-   *  persists across turns, and run()'s finally re-checks them post-settle. */
-  private suppressBackground(jinnSessionId: string): void {
-    const st = this.bgActivity.get(jinnSessionId);
-    if (!st) return;
-    if (st.clearTimer) { clearTimeout(st.clearTimer); st.clearTimer = undefined; }
-    const wasEmitted = st.emitted;
-    st.emitted = false;
-    if (wasEmitted) this.backgroundActivityCb?.(jinnSessionId, null);
-  }
-
-  /** Drop all background state for a session (PTY released / killed), emitting
-   *  the cleared notification if activity had been reported. */
-  private clearBackground(jinnSessionId: string): void {
-    const st = this.bgActivity.get(jinnSessionId);
-    if (!st) return;
-    if (st.clearTimer) clearTimeout(st.clearTimer);
-    this.bgActivity.delete(jinnSessionId);
-    if (st.emitted) this.backgroundActivityCb?.(jinnSessionId, null);
-  }
-
-  private hasActiveUpstream(jinnSessionId: string): boolean {
-    return (this.bgActivity.get(jinnSessionId)?.info.activeStreams ?? 0) > 0;
-  }
+  private handleUpstreamActivity(jinnSessionId: string, info: UpstreamActivityInfo): void { this.background.handleUpstreamActivity(jinnSessionId, info); }
+  private maybeEmitBackground(jinnSessionId: string): void { this.background.maybeEmit(jinnSessionId); }
+  private suppressBackground(jinnSessionId: string): void { this.background.suppress(jinnSessionId); }
+  private clearBackground(jinnSessionId: string): void { this.background.clear(jinnSessionId); }
 
   async run(opts: EngineRunOpts): Promise<EngineResult> {
     const jinnSessionId = opts.sessionId;
@@ -644,7 +167,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       fallbackSessionId: opts.resumeSessionId,
       assumeStarted: !!warm, // warm PTY = SessionStart already fired (turn 1 or idle spawn)
       native: nativeCommand,
-      shouldDeferStopFailure: () => this.hasActiveUpstream(jinnSessionId),
+      shouldDeferStopFailure: () => this.background.hasActive(jinnSessionId),
     });
     const entry: { resolver: TurnResolver; onStream?: (d: StreamDelta) => void; boundProc?: IPty; activeTools: number } = {
       resolver,
@@ -680,7 +203,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
         // between getWarm() above and the proc.write() inside injectPrompt.
         this.lifecycle.turnStarted(jinnSessionId);
         turnMarkedStarted = true;
-        this.injectPrompt(warm, opts);
+        injectPrompt(warm, opts);
         entry.boundProc = (warm as any)._proc as IPty | undefined;
       } else {
         const handle = await this.spawn(jinnSessionId, opts, settingsPath);
@@ -729,7 +252,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
           // Missing-Stop recovery is only safe when the model stream and local
           // tool hooks are quiet; otherwise a long-running turn can be mistaken
           // for a completed one just because transcript text exists.
-          if (entry.activeTools > 0 || this.hasActiveUpstream(jinnSessionId)) return;
+          if (entry.activeTools > 0 || this.background.hasActive(jinnSessionId)) return;
           const now = Date.now();
           const elapsed = now - startedAt;
           const quietFor = now - (this.lastOutputAt.get(jinnSessionId) ?? startedAt);
@@ -802,32 +325,6 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       this.armLateRecovery(jinnSessionId, opts);
     }
     return result;
-  }
-
-  /** Build the env passed to the claude PTY: inherits process.env but strips
-   *  CLAUDECODE / CLAUDE_CODE_* so the child doesn't think it's nested, then
-   *  enables fullscreen rendering. Shared by spawn() and ensureIdleSpawn().
-   *  When `proxyPort` is given, points ANTHROPIC_BASE_URL at the per-PTY SSE
-   *  forward proxy on 127.0.0.1 — subscription OAuth token is passed separately
-   *  by claude, so this stays cc_entrypoint=cli / subsidy-safe (verified Item A). */
-  private buildPtyEnv(proxyPort?: number): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      // Belt-and-suspenders: a stray API key/token would flip the child to metered
-      // API billing instead of the Max subscription. Strip both so the PTY session
-      // always resolves to subscription auth (cc_entrypoint=cli).
-      if (k === "ANTHROPIC_API_KEY" || k === "ANTHROPIC_AUTH_TOKEN") continue;
-      if (v !== undefined) env[k] = v;
-    }
-    // Use claude's main-screen renderer (NOT the alt-screen fullscreen one).
-    // xterm.js's `scrollback` ring only applies to the main buffer — the alt
-    // screen has no scrollback at all, so wheel-scroll in our CLI view is
-    // impossible while NO_FLICKER is on. Trading mild flicker for usable scroll.
-    env.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN = "1";
-    env.CLAUDE_CODE_RESUME_TOKEN_THRESHOLD = "999999999"; // suppress "resume from summary?" picker — always full-resume
-    if (proxyPort) env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
-    return env;
   }
 
   /** Translate parsed SSE events from a PTY's proxy into StreamDeltas and route
@@ -924,7 +421,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
         : MAIN_AGENT_SENTINEL,
     });
     const { proxy, port } = await this.startProxy(jinnSessionId);
-    const env = this.buildPtyEnv(port || undefined);
+    const env = buildClaudePtyEnv(port || undefined);
     const bin = resolveBin("claude", opts.bin);
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`InteractiveClaudeEngine spawning ${bin} (resume: ${opts.resumeSessionId || "none"}, geom: ${geom ? `${geom.cols}×${geom.rows}` : "default"}, sseProxy: ${port || "off"})`);
@@ -981,7 +478,7 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
           proxy.stop();
           return;
         }
-        const env = this.buildPtyEnv(port || undefined);
+        const env = buildClaudePtyEnv(port || undefined);
         logger.info(`InteractiveClaudeEngine ensureIdleSpawn for session ${jinnSessionId} (resume ${opts.engineSessionId || "none — fresh"}, geom ${cols}×${rows}, sseProxy: ${port || "off"})`);
         const proc = await spawnPty(bin, args, {
           name: "xterm-256color",
@@ -1001,17 +498,6 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
         this.idleSpawning.delete(jinnSessionId);
       }
     })();
-  }
-
-  /** Inject a follow-up prompt into a warm PTY via bracketed-paste + CR. */
-  private injectPrompt(handle: PtyHandle, opts: EngineRunOpts): void {
-    const proc = (handle as any)._proc as IPty | undefined;
-    if (!proc) return;
-    let text = opts.prompt;
-    if (opts.attachments?.length) {
-      text += "\n\nAttached files:\n" + opts.attachments.map((a) => `- ${a}`).join("\n");
-    }
-    pasteAndSubmit(proc, text);
   }
 
   /** Append-only capped output buffer for the session's current/most-recent PTY (for xterm.js reconnect replay).
@@ -1102,32 +588,11 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  is for tests; used by run() and kill(). No-op when the caller didn't provide
    *  onLateRecovery. */
   armLateRecovery(jinnSessionId: string, opts: EngineRunOpts): void {
-    if (!opts.onLateRecovery) return;
-    this.cancelLateRecovery(jinnSessionId);
-    const timer = setTimeout(() => this.cancelLateRecovery(jinnSessionId), LATE_RECOVERY_WINDOW_MS);
-    timer.unref?.();
-    this.lateRecovery.set(jinnSessionId, { timer });
-    this.hookRegistry.register(jinnSessionId, (h) => {
-      if (h.hook_event_name !== "Stop") return;
-      const text = String(h.last_assistant_message ?? "");
-      const sid = typeof h.session_id === "string" ? h.session_id : "";
-      this.cancelLateRecovery(jinnSessionId);
-      const safeText = stripReasoningBlocks(text);
-      if (safeText.trim()) {
-        logger.info(`InteractiveClaudeEngine: late Stop superseded failed turn for ${jinnSessionId}`);
-        opts.onLateRecovery?.({ result: safeText, sessionId: sid });
-      } else {
-        logger.info(`InteractiveClaudeEngine: late Stop with no text for ${jinnSessionId} — recovery abandoned`);
-      }
-    });
+    this.lateRecovery.arm(jinnSessionId, opts);
   }
 
   /** Tear down a pending late-recovery listener (new turn starting / kill / expiry). */
   cancelLateRecovery(jinnSessionId: string): void {
-    const lr = this.lateRecovery.get(jinnSessionId);
-    if (!lr) return;
-    clearTimeout(lr.timer);
-    this.lateRecovery.delete(jinnSessionId);
-    this.hookRegistry.unregister(jinnSessionId);
+    this.lateRecovery.cancel(jinnSessionId);
   }
 }
