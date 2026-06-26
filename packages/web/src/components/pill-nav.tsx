@@ -304,6 +304,8 @@ export function NavRibbon({
       onToggleList()
     }
   }
+  const primaryNavItems = NAV_ITEMS.filter((item) => item.href !== "/talk")
+  const talkNavItem = NAV_ITEMS.find((item) => item.href === "/talk")
   return (
     // The placeholder reserves the rail width (w-14 = 56px) in the flex row; the
     // real rail floats above it so the per-icon label pills can escape to the
@@ -368,7 +370,7 @@ export function NavRibbon({
         </div>
 
         {/* Nav icons — per-icon piano reveal. */}
-        {NAV_ITEMS.map((item) => (
+        {primaryNavItems.map((item) => (
           <RibbonRow
             key={item.href}
             Icon={item.icon}
@@ -379,8 +381,16 @@ export function NavRibbon({
           />
         ))}
 
-        {/* Footer — theme toggle, pinned to the bottom. */}
-        <div className="mt-auto pt-1">
+        {/* Footer utilities — Talk stays docked just above the theme control. */}
+        <div className="mt-auto flex flex-col gap-0.5 pt-1">
+          {talkNavItem && (
+            <RibbonRow
+              Icon={talkNavItem.icon}
+              label={talkNavItem.label}
+              href={talkNavItem.href}
+              isActive={isNavItemActive(talkNavItem.href, pathname)}
+            />
+          )}
           <RibbonRow Icon={themeGlyph(theme)} label={`Theme: ${theme}`} onClick={cycleTheme} />
         </div>
       </nav>

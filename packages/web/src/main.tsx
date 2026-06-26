@@ -8,6 +8,8 @@ import './routes/globals.css'
 const ChatPage = lazyRoute(() => import('./routes/chat/page'), 'chat')
 const CronPage = lazyRoute(() => import('./routes/cron/page'), 'cron')
 const KanbanPage = lazyRoute(() => import('./routes/kanban/page'), 'kanban')
+const ApprovalsPage = lazyRoute(() => import('./routes/approvals/page'), 'approvals')
+const ArchivePage = lazyRoute(() => import('./routes/archive/page'), 'archive')
 const LogsPage = lazyRoute(() => import('./routes/logs/page'), 'logs')
 const LimitsPage = lazyRoute(() => import('./routes/limits/page'), 'limits')
 const OrgPage = lazyRoute(() => import('./routes/org/page'), 'org')
@@ -63,6 +65,8 @@ function App() {
               <Route path="/chat" element={<Navigate to="/" replace />} />
               <Route path="/cron" element={<CronPage />} />
               <Route path="/kanban" element={<KanbanPage />} />
+              <Route path="/approvals" element={<ApprovalsPage />} />
+              <Route path="/archive" element={<ArchivePage />} />
               <Route path="/logs" element={<LogsPage />} />
               <Route path="/limits" element={<LimitsPage />} />
               <Route path="/org" element={<OrgPage />} />

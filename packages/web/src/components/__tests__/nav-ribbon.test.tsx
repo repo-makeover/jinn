@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import { render, screen, fireEvent } from "@testing-library/react"
+import { within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { NavRibbon } from "../pill-nav"
 import { NAV_ITEMS } from "@/lib/nav"
@@ -45,6 +46,15 @@ describe("NavRibbon", () => {
       const link = screen.getByLabelText(item.label)
       expect(link.getAttribute("href")).toBe(item.href)
     }
+  })
+
+  it("keeps Talk in the bottom utility cluster above Theme instead of in the main nav list", () => {
+    const { container } = renderRibbon({ listOpen: true })
+    const nav = container.querySelector('nav[aria-label="Primary"]')
+    expect(nav).toBeTruthy()
+    const links = within(nav as HTMLElement).getAllByRole("link")
+    const labels = links.map((node) => node.getAttribute("aria-label"))
+    expect(labels.indexOf("Talk")).toBeGreaterThan(labels.indexOf("Settings"))
   })
 
   it("marks the active route with aria-current and a non-accent fill", () => {
