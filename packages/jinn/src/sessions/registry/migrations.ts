@@ -56,3 +56,30 @@ export function migrateSessionsSchema(database: Database.Database): void {
     database.exec(`UPDATE sessions SET connector = COALESCE(connector, source) WHERE connector IS NULL OR connector = ''`);
   }
 }
+
+export function migrateFilesSchema(database: Database.Database): void {
+  const cols = database.prepare('PRAGMA table_info(files)').all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map((c) => c.name));
+  const missingColumns: Array<[string, string, string?]> = [
+    ['sha256', 'TEXT'],
+    ['artifact_kind', 'TEXT', "'input'"],
+    ['producing_run_id', 'TEXT'],
+    ['source_url', 'TEXT'],
+    ['source_path', 'TEXT'],
+    ['tags', 'TEXT'],
+    ['notes', 'TEXT'],
+  ];
+
+  for (const [name, type, defaultVal] of missingColumns) {
+    if (!colNames.has(name)) {
+      const defaultClause = defaultVal !== undefined ? ` DEFAULT ${defaultVal}` : '';
+      database.exec(`ALTER TABLE files ADD COLUMN ${name} ${type}${defaultClause}`);
+    }
+  }
+
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_files_kind_created ON files (artifact_kind, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_files_producing_run ON files (producing_run_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files (sha256);
+  `);
+}

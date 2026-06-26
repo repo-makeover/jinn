@@ -27,8 +27,10 @@ owning model reasoning.
 
 - Instance home: `~/.jinn` by default, or `~/.<instance>` when using `jinn -i`.
 - Config/org/skills/templates: initialized and migrated from package templates.
-- Sessions/messages/files/queue/archive/approval state: SQLite-backed registry modules.
-- Uploaded files: managed gateway storage with façade seam tests.
+- Sessions/messages/files/artifacts/queue/archive/approval state: SQLite-backed registry modules.
+- Uploaded and attached artifacts: managed gateway storage with façade seam tests,
+  SHA256 metadata, source/run annotations, validation helpers, and run-bundle
+  manifest export.
 - Orchestration telemetry/recovery/worktrees: managed under Jinn runtime paths and bounded retention policies.
 
 ## Workflows
@@ -72,6 +74,8 @@ owning model reasoning.
 - Add connectors under `packages/jinn/src/connectors/`.
 - Add dashboard routes in `packages/web/src/main.tsx` and route modules.
 - Add orchestration controls through `orchestration-routes.ts`, web API helpers, and contract tests.
+- Add artifact workflows through `api/routes/artifacts.ts` while keeping file
+  persistence semantics in `sessions/registry/files.ts`.
 - Add skills through the `jinn skills` CLI and instance `skills.json`.
 
 ## Known Architecture Risks

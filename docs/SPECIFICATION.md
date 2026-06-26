@@ -28,7 +28,9 @@ operator dashboards.
 - `Employee`: YAML org role with persona, department, rank, engine, model, and reporting metadata.
 - `Ticket`: kanban board item that may dispatch into a Jinn session.
 - `Orchestration task`: scheduler-owned work request with roles, leases, continuations, holds, worktrees, telemetry, and optional dual-lane artifacts.
-- `File`: uploaded or attached file metadata with managed storage constraints.
+- `Artifact`: uploaded, downloaded, generated, input, or manually attached file
+  metadata with managed storage constraints, hash/source metadata, and optional
+  producing run identity.
 
 ## Functional Requirements
 
@@ -39,6 +41,7 @@ operator dashboards.
 | REQ-ENGINE-001 | Dispatch work through installed engine CLIs rather than internal model providers. | verified | `README.md`, `packages/jinn/src/engines/*` |
 | REQ-CLAUDE-001 | Run Claude Code through the official CLI/PTTY path for subscription-friendly turns. | verified | `README.md`, Claude engine tests |
 | REQ-FILES-001 | Preserve managed upload/read/download/delete behavior through stable `/api/files` routes. | verified | `packages/jinn/src/gateway/__tests__/files-facade-seam.test.ts` |
+| REQ-ARTIFACTS-001 | Maintain a local artifact registry for files created, consumed, downloaded, or attached during Jinn runs, including hash, source, run, tag, validation, and bundle-manifest metadata. | verified | `packages/jinn/src/gateway/__tests__/artifact-registry.test.ts` |
 | REQ-ORCH-001 | Route `/api/orchestration/*` through the canonical API router and support status/control surfaces. | verified | `packages/jinn/src/gateway/api.ts`, `api-orchestration-routing.test.ts` |
 | REQ-GOV-001 | Keep local generated governance/runtime artifacts out of the public tracked source tree. | verified | `.gitignore`, `docs/STRUCTURE_COMPLIANCE.md` |
 
@@ -54,7 +57,7 @@ operator dashboards.
 ## Persistence / Data Contract
 
 - Runtime user state lives under `~/.jinn` or the active instance home.
-- Sessions, messages, queue items, files, archives, approvals, and orchestration state use SQLite-backed registries and related managed file paths.
+- Sessions, messages, queue items, files/artifacts, archives, approvals, and orchestration state use SQLite-backed registries and related managed file paths.
 - Generated web output is copied into `packages/jinn/dist/web` during build but remains untracked.
 - Local audit/session/Giles/runtime artifacts are ignored unless explicitly published as curated summaries.
 
@@ -65,6 +68,7 @@ operator dashboards.
 - HTTP API: routed through `packages/jinn/src/gateway/api.ts`.
 - Orchestration API: `packages/jinn/src/gateway/api/orchestration-routes.ts`.
 - Files API: `packages/jinn/src/gateway/files.ts` façade and sibling modules.
+- Artifact API: `packages/jinn/src/gateway/api/routes/artifacts.ts`.
 
 ## Validation Requirements
 
@@ -90,3 +94,4 @@ operator dashboards.
 ## Version History
 
 - 2026-06-25: Initial source-grounded specification created by documentation stewardship pass.
+- 2026-06-26: Added artifact registry requirement and API surface.

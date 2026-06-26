@@ -29,7 +29,7 @@ import { getMessages, type SessionMessage } from './registry/messages.js';
 import { getSession } from './registry/sessions.js';
 
 export { initDb } from './registry/core.js';
-export { migrateMessagesSchema, migrateSessionsSchema } from './registry/migrations.js';
+export { migrateFilesSchema, migrateMessagesSchema, migrateSessionsSchema } from './registry/migrations.js';
 export {
   backfillFtsSync,
   disableFtsForProcess,
@@ -103,7 +103,12 @@ export {
   getFile,
   insertFile,
   listFiles,
+  findArtifactsByPaths,
+  listArtifacts,
+  updateArtifactMetadata,
   setFilePath,
+  type ArtifactKind,
+  type ArtifactListFilter,
   type FileMeta,
 } from './registry/files.js';
 

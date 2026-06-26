@@ -9,6 +9,8 @@ import {
   getFile,
   insertMessage,
   setFilePath,
+  updateArtifactMetadata,
+  type ArtifactKind,
   type MessageMedia,
 } from "../../sessions/registry.js";
 import type { ApiContext } from "../api/context.js";
@@ -60,6 +62,7 @@ export function rehomeAttachmentsToSession(fileIds: unknown, sessionId: string):
     } catch {
     }
     setFilePath(meta.id, dest);
+    updateArtifactMetadata(meta.id, { sourcePath: meta.sourcePath ?? current });
     logger.info(`Re-homed attachment ${meta.filename} (${id}) into session ${sessionId} uploads`);
   }
 }
@@ -71,6 +74,13 @@ async function finalizeAttachment(
   buffer: Buffer,
   caption: string,
   context: ApiContext,
+  opts: {
+    artifactKind?: ArtifactKind;
+    sourceUrl?: string | null;
+    sourcePath?: string | null;
+    tags?: string[];
+    notes?: string | null;
+  } = {},
 ): Promise<void> {
   const meta = await saveFile({
     id: crypto.randomUUID(),
@@ -79,6 +89,12 @@ async function finalizeAttachment(
     customPath: null,
     open: false,
     sessionId,
+    artifactKind: opts.artifactKind ?? "manual",
+    producingRunId: opts.artifactKind === "generated" ? sessionId : null,
+    sourceUrl: opts.sourceUrl ?? null,
+    sourcePath: opts.sourcePath ?? null,
+    tags: opts.tags,
+    notes: opts.notes ?? null,
   }, context);
   const media = buildMessageMedia(meta);
   const messageId = insertMessage(sessionId, "assistant", caption, [media]);
@@ -100,6 +116,9 @@ async function handleAttachmentMultipart(
     let filename = "";
     let fileBuffer: Buffer | null = null;
     let caption = "";
+    let artifactKind: ArtifactKind | undefined;
+    let tags: string[] | undefined;
+    let notes: string | null = null;
     let fileTruncated = false;
 
     busboy.on("file", (_f: string, file: NodeJS.ReadableStream, info: { filename: string }) => {
@@ -111,6 +130,12 @@ async function handleAttachmentMultipart(
     });
     busboy.on("field", (name: string, val: string) => {
       if (name === "text" || name === "caption") caption = val;
+      if (name === "artifactKind") artifactKind = val as ArtifactKind;
+      if (name === "tag" || name === "tags") {
+        const parsed = name === "tags" ? val.split(",") : [val];
+        tags = [...(tags ?? []), ...parsed.map((tag) => tag.trim()).filter(Boolean)];
+      }
+      if (name === "notes") notes = val;
     });
     busboy.on("finish", async () => {
       if (fileTruncated) {
@@ -124,7 +149,11 @@ async function handleAttachmentMultipart(
         return;
       }
       try {
-        await finalizeAttachment(res, sessionId, filename, fileBuffer, caption, context);
+        await finalizeAttachment(res, sessionId, filename, fileBuffer, caption, context, {
+          artifactKind: artifactKind ?? "manual",
+          tags,
+          notes,
+        });
       } catch (err) {
         serverError(res, err instanceof Error ? err.message : "Attachment failed");
       }
@@ -156,6 +185,9 @@ async function handleAttachmentJson(
   const url = body.url as string | undefined;
   const caption = typeof body.text === "string" ? body.text : (typeof body.caption === "string" ? body.caption : "");
   let filename = body.filename as string | undefined;
+  const artifactKind = body.artifactKind as ArtifactKind | undefined;
+  const tags = Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === "string") : undefined;
+  const notes = typeof body.notes === "string" ? body.notes : null;
 
   const provided = [localPath, content, url].filter(Boolean).length;
   if (provided === 0) return badRequest(res, "one of path, content (base64), or url is required");
@@ -191,7 +223,13 @@ async function handleAttachmentJson(
   }
 
   try {
-    await finalizeAttachment(res, sessionId, filename!, buffer, caption, context);
+    await finalizeAttachment(res, sessionId, filename!, buffer, caption, context, {
+      artifactKind: artifactKind ?? (localPath ? "generated" : (url ? "downloaded" : "manual")),
+      sourceUrl: url ?? null,
+      sourcePath: localPath ? expandPath(localPath) : null,
+      tags,
+      notes,
+    });
   } catch (err) {
     serverError(res, err instanceof Error ? err.message : "Attachment failed");
   }

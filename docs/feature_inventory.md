@@ -110,6 +110,28 @@
 
 ## API
 
+### Artifact registry routes
+- `packages/jinn/src/gateway/api/routes/artifacts.ts`
+- `packages/jinn/src/sessions/registry/files.ts`
+- Uploaded files, downloaded files, session attachments, and explicitly
+  registered local outputs are persisted in the SQLite file/artifact registry
+  with artifact id, path, MIME/type, size, SHA256, created time, producing run id
+  when known, source URL/path, tags, notes, and artifact kind.
+- Supported artifact kinds are `generated`, `input`, `downloaded`, and `manual`.
+- `GET /api/artifacts` lists registry entries with optional `runId`, `kind`,
+  `tag`, `q`, `sourceUrl`, `sourcePath`, and `limit` filters.
+- `GET /api/artifacts/:id` returns one artifact plus current on-disk existence
+  and its `/api/files/:id` download URL.
+- `POST /api/artifacts/register` records an existing local file as an artifact,
+  computes its SHA256, and stores optional run/source/tags/notes metadata.
+- `PATCH /api/artifacts/:id` updates mutable metadata fields without moving the
+  file.
+- `POST /api/artifacts/validate` checks expected artifact ids and paths against
+  registry records and current disk existence.
+- `GET /api/artifacts/bundle?runId=<id>` returns an exportable run-bundle
+  manifest for artifacts produced by one run. It does not package bytes into an
+  archive in this implementation.
+
 ### Provider-neutral matrix orchestration observe routes
 - `packages/jinn/src/gateway/api/orchestration-routes.ts`
 - `GET /api/orchestration/status` returns enabled/runtime-bound state, degraded

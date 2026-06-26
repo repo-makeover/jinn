@@ -9,6 +9,7 @@ import type { ApiContext } from "./api/context.js";
 import { json, notFound, serverError } from "./api/responses.js";
 import { handleSessionQueryRoutes } from "./api/session-query-routes.js";
 import { handleApprovalRoutes } from "./api/routes/approvals.js";
+import { handleArtifactRoutes } from "./api/routes/artifacts.js";
 import { handleArchiveRoutes } from "./api/routes/archives.js";
 import { handleAuthRoutes } from "./api/routes/auth.js";
 import { handleConnectorRoutes } from "./api/routes/connectors.js";
@@ -52,6 +53,7 @@ export async function handleApiRequest(
     if (await handleSessionQueryRoutes(method, pathname, url, res, context, SESSION_LIST_PER_GROUP)) return;
     if (await handleArchiveRoutes(method, pathname, req, res, context)) return;
     if (await handleSessionWriteRoutes(method, pathname, req, res, context)) return;
+    if (await handleArtifactRoutes(method, pathname, req, url, res, context)) return;
     if (await handleFsRoutes(method, pathname, url, res, context)) return;
     if (await handleApprovalRoutes(method, pathname, req, url, res, context)) return;
     if (await handleCronRoutes(method, pathname, req, url, res, context)) return;

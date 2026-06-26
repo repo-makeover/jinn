@@ -56,6 +56,13 @@ CREATE TABLE IF NOT EXISTS files (
   size INTEGER NOT NULL,
   mimetype TEXT,
   path TEXT,
+  sha256 TEXT,
+  artifact_kind TEXT NOT NULL DEFAULT 'input',
+  producing_run_id TEXT,
+  source_url TEXT,
+  source_path TEXT,
+  tags TEXT,
+  notes TEXT,
   created_at TEXT NOT NULL
 )
 `;

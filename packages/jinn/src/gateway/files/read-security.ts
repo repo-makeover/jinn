@@ -103,7 +103,7 @@ export function isAllowedReadPath(
   absPath: string,
   context: Pick<ApiContext, "getConfig">,
 ): boolean {
-  const gateway = context.getConfig().gateway as Record<string, unknown> & {
+  const gateway = (context.getConfig().gateway ?? {}) as Record<string, unknown> & {
     allowArbitraryFileRead?: boolean;
     fileReadRoots?: string[];
   };

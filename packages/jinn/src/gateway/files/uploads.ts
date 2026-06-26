@@ -7,7 +7,7 @@ import { readJsonBody } from "../http-helpers.js";
 import type { ApiContext } from "../api/context.js";
 import { checkPublicUrl } from "../../shared/ssrf-guard.js";
 import { logger } from "../../shared/logger.js";
-import { insertFile, type FileMeta } from "../../sessions/registry.js";
+import { insertFile, type ArtifactKind, type FileMeta } from "../../sessions/registry.js";
 import { badRequest, FileRequestError, json, serverError } from "./responses.js";
 import {
   FILES_DIR,
@@ -94,6 +94,12 @@ interface UploadResult {
   customPath: string | null;
   open: boolean;
   sessionId?: string | null;
+  artifactKind?: ArtifactKind;
+  producingRunId?: string | null;
+  sourceUrl?: string | null;
+  sourcePath?: string | null;
+  tags?: string[];
+  notes?: string | null;
 }
 
 export async function saveFile(result: UploadResult, context: ApiContext): Promise<FileMeta> {
@@ -112,12 +118,20 @@ export async function saveFile(result: UploadResult, context: ApiContext): Promi
   await fs.promises.writeFile(storagePath, result.buffer);
 
   const mimetype = mimeFromFilename(safeName);
+  const sha256 = crypto.createHash("sha256").update(result.buffer).digest("hex");
   const meta = insertFile({
     id: result.id,
     filename: safeName,
     size: result.buffer.length,
     mimetype,
     path: sessionScoped ? storagePath : customPath,
+    sha256,
+    artifactKind: result.artifactKind,
+    producingRunId: result.producingRunId ?? null,
+    sourceUrl: result.sourceUrl ?? null,
+    sourcePath: result.sourcePath ?? null,
+    tags: result.tags,
+    notes: result.notes ?? null,
   });
 
   if (customPath) {
@@ -145,6 +159,9 @@ export async function handleMultipartUpload(req: HttpRequest, res: ServerRespons
     let customPath: string | null = null;
     let open = false;
     let sessionId: string | null = null;
+    let artifactKind: ArtifactKind | undefined;
+    let tags: string[] | undefined;
+    let notes: string | null = null;
     let fileTruncated = false;
 
     busboy.on("file", (_fieldname: string, file: NodeJS.ReadableStream, info: { filename: string }) => {
@@ -159,6 +176,12 @@ export async function handleMultipartUpload(req: HttpRequest, res: ServerRespons
       if (name === "path") customPath = val;
       if (name === "open") open = val === "true" || val === "1";
       if (name === "sessionId") sessionId = val;
+      if (name === "artifactKind") artifactKind = val as ArtifactKind;
+      if (name === "tag" || name === "tags") {
+        const parsed = name === "tags" ? val.split(",") : [val];
+        tags = [...(tags ?? []), ...parsed.map((tag) => tag.trim()).filter(Boolean)];
+      }
+      if (name === "notes") notes = val;
     });
 
     busboy.on("finish", async () => {
@@ -180,6 +203,10 @@ export async function handleMultipartUpload(req: HttpRequest, res: ServerRespons
           customPath,
           open,
           sessionId,
+          artifactKind: artifactKind ?? "input",
+          sourcePath: customPath,
+          tags,
+          notes,
         }, context);
         json(res, meta, 201);
       } catch (err) {
@@ -217,6 +244,9 @@ export async function handleJsonUpload(req: HttpRequest, res: ServerResponse, co
   const customPath = (body.path as string) || null;
   const open = !!body.open;
   const sessionId = (body.sessionId as string) || null;
+  const artifactKind = body.artifactKind as ArtifactKind | undefined;
+  const tags = Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === "string") : undefined;
+  const notes = typeof body.notes === "string" ? body.notes : null;
 
   if (!filename) return badRequest(res, "filename is required");
   if (content && url) return badRequest(res, "content and url are mutually exclusive");
@@ -264,6 +294,11 @@ export async function handleJsonUpload(req: HttpRequest, res: ServerResponse, co
       customPath,
       open,
       sessionId,
+      artifactKind: artifactKind ?? (url ? "downloaded" : "input"),
+      sourceUrl: url ?? null,
+      sourcePath: customPath,
+      tags,
+      notes,
     }, context);
     json(res, meta, 201);
   } catch (err) {
