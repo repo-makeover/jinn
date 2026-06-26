@@ -15,7 +15,8 @@ monorepo**. It declares `family: application`, `repo_type: service`,
 
 - Packages: `packages/jinn` (core gateway daemon + CLI, published as `jinn-cli`)
   and `packages/web` (Vite + React dashboard served by the daemon).
-- Canonical control surfaces: `AGENTS.md`, `governance/`, `control/`, and `docs/`.
+- Canonical control surfaces: `AGENTS.md`, `governance/`, `schemas/`,
+  `control/`, and `docs/`.
 - Purpose: wrap battle-tested engine CLIs behind one daemon and add only routing,
   scheduling, connectors, and the org system — "a bus, not a brain".
 - Allowed automation behavior: inspect all repo files; propose or apply scoped
@@ -24,6 +25,37 @@ monorepo**. It declares `family: application`, `repo_type: service`,
   silently widening scope, adding fake feature behavior, breaking the Claude
   subscription / interactive-PTY billing path (see README "How the Claude engine
   works"), or committing secrets / `~/.jinn` runtime state.
+
+<!-- GILES:DOCS-GOVERNANCE:START -->
+## Giles Compliance
+
+- README.md and docs/INDEX.md are required read-order surfaces for repository
+  orientation.
+- Mermaid diagrams must follow `docs/agent/mermaid-diagram-guidance.md`.
+- Documentation patch rules: documentation must be source-grounded; no invented
+  or fabricated facts, claims, or docs; verify before writing.
+- Treat `.giles/*.yaml` as advisory/discovery-only until validated by a fresh
+  Giles scan.
+- `.giles` artifacts are local advisory sidecar outputs that may not be
+  available without Giles. Canonical compliance data lives under
+  `governance/logs/`, while governing repo policy lives under `governance/`,
+  `docs/`, and this `AGENTS.md` contract.
+- Agents record evidence and do not declare compliance. Only Giles writes or
+  refreshes canonical compliance status, and agents must report residual risks,
+  skipped checks, and validation failures plainly.
+- Cloud/remote agents or agents without local Giles/Dory access may ignore Giles
+  and Dory requirements; those requirements are waived when the tools are
+  unavailable, and the agent should continue with the repo contract plus visible
+  disclosure.
+- orchestrator/router file contract: router files are allowed to grow in number
+  of registrations, but not in domain behavior.
+- Orchestrator/router file contract: orchestrator/router files may only
+  register routes/commands, parse shallow adapter inputs, call domain services,
+  sequence high-level workflow steps, and translate service outputs. They must
+  not host business rules, persistence mutation, validation algorithms,
+  lifecycle/state machines, dedup/merge/repair logic, or archive/file parsing;
+  new non-routing behavior belongs in focused domain modules.
+<!-- GILES:DOCS-GOVERNANCE:END -->
 
 ## Agent Operating Rules
 

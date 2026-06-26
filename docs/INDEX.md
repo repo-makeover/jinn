@@ -8,6 +8,8 @@ artifacts unless explicitly published.
 
 - `README.md`: public overview and install/use workflow.
 - `docs/feature_inventory.md`: implemented CLI/API/UI surfaces and fidelity gaps.
+- `docs/agent/mermaid-diagram-guidance.md`: local guidance for Mermaid diagrams
+  in architecture and workflow docs.
 - `docs/known-diagnostics.md`: accepted non-actionable diagnostics that future
   audits should not re-report unless explicitly scoped.
 - `docs/script-surface-map.md`: authoritative classification of npm scripts and CLI

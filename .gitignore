@@ -12,5 +12,14 @@ packages/jinn/.npmrc
 .worktrees/
 .DS_Store
 
+# Giles and local audit/runtime artifacts. These stay local in this public repo
+# so they do not confuse readers browsing the source tree.
+.giles/
+governance/logs/
+docs/audits/
+docs/logs/
+state/
+logs/
+
 # Superpowers SDD scratch (briefs, reports, ledger, diffs)
 .superpowers/

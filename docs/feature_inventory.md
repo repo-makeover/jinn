@@ -2,6 +2,23 @@
 
 ## Web UI
 
+### Dashboard route shell
+- `packages/web/src/main.tsx`
+- The public dashboard is a Vite React app served by the gateway daemon.
+- Implemented routes are:
+  - `/` for the primary chat workspace; `/chat` redirects to `/`.
+  - `/talk` for multi-agent talk sessions.
+  - `/kanban` for department ticket boards and dispatch controls.
+  - `/orchestration` for matrix orchestration operations.
+  - `/cron` for scheduled job management.
+  - `/logs` for runtime log inspection.
+  - `/limits` for usage/rate-limit visibility.
+  - `/org` for organization and employee configuration.
+  - `/settings` for gateway, engine, connector, and feature configuration.
+  - `/skills` for local skill browsing/management.
+  - `/file` for file viewing.
+- `/redesign` is development-only and is not part of the public operator surface.
+
 ### Kanban ticket live session inspector
 - `packages/web/src/components/kanban/ticket-detail-panel.tsx`
 - In-progress tickets can show a live session summary in the detail panel:
