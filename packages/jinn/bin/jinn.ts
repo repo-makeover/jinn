@@ -4,6 +4,22 @@ import path from "node:path";
 import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
 
+/**
+ * Parse a `--port` CLI value, exiting with a clear message on garbage input.
+ * Without this, `parseInt("abc", 10)` yields NaN, which then silently falls back
+ * to the config port (start) or scans for `tcp:NaN` (stop) — a confusing no-op
+ * instead of an error. `Number()` (not `parseInt`) so "80abc" is rejected too.
+ */
+function parsePortOption(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`Invalid --port "${raw}": expected an integer between 1 and 65535.`);
+    process.exit(1);
+  }
+  return port;
+}
+
 const program = new Command();
 program
   .name("jinn")
@@ -36,7 +52,7 @@ program
   .option("-p, --port <port>", "Override the gateway port from config")
   .action(async (opts) => {
     const { runStart } = await import("../src/cli/start.js");
-    await runStart({ daemon: opts.daemon, port: opts.port ? parseInt(opts.port, 10) : undefined });
+    await runStart({ daemon: opts.daemon, port: parsePortOption(opts.port) });
   });
 
 program
@@ -45,7 +61,7 @@ program
   .option("-p, --port <port>", "Port to kill the process on (default: from config or 7777)")
   .action(async (opts: { port?: string }) => {
     const { runStop } = await import("../src/cli/stop.js");
-    await runStop(opts.port ? parseInt(opts.port, 10) : undefined);
+    await runStop(parsePortOption(opts.port));
   });
 
 program
@@ -98,7 +114,7 @@ program
   .option("-p, --port <port>", "Set gateway port (auto-assigned if omitted)")
   .action(async (name: string, opts: { port?: string }) => {
     const { runCreate } = await import("../src/cli/create.js");
-    await runCreate(name, opts.port ? parseInt(opts.port, 10) : undefined);
+    await runCreate(name, parsePortOption(opts.port));
   });
 
 program

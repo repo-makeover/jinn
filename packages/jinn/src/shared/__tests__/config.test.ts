@@ -6,6 +6,7 @@ import yaml from "js-yaml";
 import {
   normalizeBoardWorkerConfig,
   normalizeClaudeEngineConfig,
+  normalizeGatewayConfig,
   saveConfigAtomic,
   validateConfigShape,
 } from "../config.js";
@@ -20,6 +21,31 @@ describe("normalizeClaudeEngineConfig", () => {
   it("preserves a configured maxLivePtys", () => {
     const out = normalizeClaudeEngineConfig({ bin: "claude", model: "opus", maxLivePtys: 16 });
     expect(out.maxLivePtys).toBe(16);
+  });
+});
+
+describe("normalizeGatewayConfig", () => {
+  it("fills defaults when the gateway block is missing", () => {
+    // The schema treats gateway as optional, but runtime paths dereference
+    // config.gateway.port/.host — normalization must guarantee they exist.
+    expect(normalizeGatewayConfig(undefined)).toMatchObject({ port: 7777, host: "127.0.0.1" });
+  });
+
+  it("fills defaults for a partial gateway block and preserves other keys", () => {
+    const out = normalizeGatewayConfig({ streaming: true } as never);
+    expect(out).toMatchObject({ port: 7777, host: "127.0.0.1", streaming: true });
+  });
+
+  it("preserves a valid configured port and host", () => {
+    expect(normalizeGatewayConfig({ port: 8080, host: "0.0.0.0" })).toMatchObject({
+      port: 8080,
+      host: "0.0.0.0",
+    });
+  });
+
+  it("falls back to the default port for an invalid configured port", () => {
+    expect(normalizeGatewayConfig({ port: Number.NaN, host: "127.0.0.1" }).port).toBe(7777);
+    expect(normalizeGatewayConfig({ port: -1 as never, host: "127.0.0.1" }).port).toBe(7777);
   });
 });
 
@@ -117,6 +143,15 @@ describe("validateConfigShape", () => {
   it("rejects a non-numeric gateway.port", () => {
     const problems = validateConfigShape({ gateway: { port: "7777" }, engines: { claude: {} } });
     expect(problems.some((p) => p.includes("gateway.port"))).toBe(true);
+  });
+
+  it("rejects an out-of-range or non-integer gateway.port", () => {
+    for (const port of [0, -1, 70000, 3.5, Number.NaN]) {
+      const problems = validateConfigShape({ gateway: { port }, engines: { claude: {} } });
+      expect(problems.some((p) => p.includes("gateway.port"))).toBe(true);
+    }
+    // A valid in-range integer port is still accepted.
+    expect(validateConfigShape({ gateway: { port: 8080 }, engines: { claude: {} } })).toEqual([]);
   });
 
   it("rejects unknown top-level config keys", () => {

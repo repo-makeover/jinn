@@ -17,6 +17,8 @@ type NormalizedBoardWorkerConfig = Required<NonNullable<JinnConfig["boardWorker"
 
 const DEFAULT_BOARD_WORKER_WINDOW = { start: "22:00", end: "04:00" } as const;
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const DEFAULT_GATEWAY_PORT = 7777;
+const DEFAULT_GATEWAY_HOST = "127.0.0.1";
 
 function systemTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -45,6 +47,24 @@ export function normalizeClaudeEngineConfig(raw: ClaudeEngineConfig): Required<P
     ...raw,
     maxLivePtys: raw.maxLivePtys ?? 8,
   };
+}
+
+/**
+ * Guarantee a fully-populated gateway block. The config schema treats the whole
+ * `gateway` block (and `gateway.port`/`gateway.host`) as optional — "downstream
+ * defaults apply" — but several runtime paths (e.g. `jinn start`) dereference
+ * `config.gateway.port` / `.host` directly. Without this normalization a config
+ * that omits the gateway block crashes at startup with a TypeError instead of
+ * running on the defaults. Any port present here has already passed schema
+ * validation; the guards are belt-and-suspenders.
+ */
+export function normalizeGatewayConfig(raw: JinnConfig["gateway"] | undefined): JinnConfig["gateway"] {
+  const port =
+    typeof raw?.port === "number" && Number.isInteger(raw.port) && raw.port >= 1 && raw.port <= 65535
+      ? raw.port
+      : DEFAULT_GATEWAY_PORT;
+  const host = typeof raw?.host === "string" && raw.host.trim() ? raw.host : DEFAULT_GATEWAY_HOST;
+  return { ...raw, port, host };
 }
 
 export function normalizeBoardWorkerConfig(raw: BoardWorkerConfig | undefined): NormalizedBoardWorkerConfig {
@@ -80,6 +100,7 @@ export function loadConfig(): JinnConfig {
   }
   const config = parsed as JinnConfig;
   config.engines.claude = normalizeClaudeEngineConfig(config.engines.claude);
+  config.gateway = normalizeGatewayConfig(config.gateway);
   config.boardWorker = normalizeBoardWorkerConfig(config.boardWorker);
   return config;
 }

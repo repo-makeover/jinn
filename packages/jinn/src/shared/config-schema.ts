@@ -42,6 +42,18 @@ function validateNumber(problems: string[], path: string, value: unknown): void 
   if (typeof value !== "number") problems.push(`${path} must be a number (got ${typeof value})`);
 }
 
+/**
+ * A TCP port: a finite integer in [1, 65535]. Rejects NaN (which is `typeof
+ * "number"` and so slips past validateNumber), non-integers, and out-of-range
+ * values — a malformed port must fail at loadConfig() before any daemon work.
+ */
+function validatePort(problems: string[], path: string, value: unknown): void {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 65535) {
+    const got = typeof value === "number" ? String(value) : typeof value;
+    problems.push(`${path} must be an integer between 1 and 65535 (got ${got})`);
+  }
+}
+
 function validateString(problems: string[], path: string, value: unknown): void {
   if (typeof value !== "string") problems.push(`${path} must be a string (got ${typeof value})`);
 }
@@ -84,7 +96,7 @@ function validateGateway(problems: string[], value: unknown): void {
     "exposeResolvedFilePaths",
     "userHeader",
   ], "gateway");
-  if (value.port !== undefined) validateNumber(problems, "gateway.port", value.port);
+  if (value.port !== undefined) validatePort(problems, "gateway.port", value.port);
   if (value.host !== undefined) validateString(problems, "gateway.host", value.host);
   if (value.streaming !== undefined) validateBoolean(problems, "gateway.streaming", value.streaming);
   if (value.turnStallInactivityMs !== undefined) validateNumber(problems, "gateway.turnStallInactivityMs", value.turnStallInactivityMs);

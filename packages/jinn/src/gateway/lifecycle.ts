@@ -184,8 +184,17 @@ export function restartDetached(): void {
 }
 
 /**
- * Send SIGTERM to the running gateway. Returns the PID that was signaled (or
- * was found already gone), or null if nothing was running.
+ * Send SIGTERM to the gateway THIS INSTANCE OWNS — i.e. the process named in our
+ * PID file. Returns the PID that was signaled (or was found already gone and the
+ * stale file cleaned up), or null if we do not own a running gateway.
+ *
+ * Ownership is the PID file, never a port scan. Side-by-side installs can share
+ * a host and (through misconfiguration) a port; the process "listening on the
+ * port" may be an unrelated Jinn instance — or an entirely unrelated service.
+ * SIGTERMing it by port would kill someone else's process, so we refuse. When
+ * the port is held by a process we don't own we log it and return null;
+ * getStatus() surfaces the same condition as an operator-visible error so the
+ * operator can resolve it (free the port, or kill the stray process directly).
  *
  * Deliberately does NOT delete the PID file after a successful SIGTERM: the
  * gateway keeps shutting down (gracefully, up to ~5s) after the signal, and
@@ -196,45 +205,44 @@ export function restartDetached(): void {
  * overwrites the file. stopAndWait() removes it once the process has exited.
  */
 function signalGateway(port?: number): number | null {
-  // Try PID file first
   if (fs.existsSync(PID_FILE)) {
     const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
-
-    try {
-      process.kill(pid, "SIGTERM");
-      logger.info(`Sent SIGTERM to gateway process ${pid}`);
-      return pid;
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH") {
-        logger.warn(`Process ${pid} not found. Cleaning up stale PID file.`);
-        fs.unlinkSync(PID_FILE);
-      } else {
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, "SIGTERM");
+        logger.info(`Sent SIGTERM to gateway process ${pid}`);
+        return pid;
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ESRCH") {
+          logger.warn(`Process ${pid} not found. Cleaning up stale PID file.`);
+          fs.unlinkSync(PID_FILE);
+          return null;
+        }
         throw err;
       }
     }
-    // PID file existed but was stale; fall through to kill by port.
+    // Corrupt PID file (non-numeric / non-positive) — it owns nothing we can
+    // trust. Remove it and fall through to the unowned-port path below.
+    logger.warn(`PID file ${PID_FILE} is corrupt. Cleaning up.`);
+    fs.unlinkSync(PID_FILE);
   }
 
-  // No PID file — try to kill whatever is listening on the port
+  // No PID file (absent, stale-and-removed, or corrupt): this instance does NOT
+  // own a running gateway. Crucially, we do NOT kill whatever is listening on
+  // the port — for side-by-side installs that could be an unrelated instance or
+  // an unrelated service. Surface it for the operator and stop.
   const targetPort = port ?? resolvePort();
-  const pid = findPidOnPort(targetPort);
-  if (pid) {
-    try {
-      process.kill(pid, "SIGTERM");
-      logger.info(`Killed process ${pid} on port ${targetPort}`);
-      return pid;
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH") {
-        logger.warn(`Process ${pid} already gone.`);
-        return pid;
-      }
-      throw err;
-    }
+  const portPid = findPidOnPort(targetPort);
+  if (portPid) {
+    logger.warn(
+      `Port ${targetPort} is in use by process ${portPid}, but no PID file owns it. ` +
+      `Refusing to SIGTERM a process this instance does not own. ` +
+      `If it is a stray gateway, stop it directly (kill ${portPid}).`,
+    );
+  } else {
+    logger.warn(`No PID file found and nothing listening on port ${targetPort}.`);
   }
-
-  logger.warn(`No PID file found and nothing listening on port ${targetPort}.`);
   return null;
 }
 
@@ -365,6 +373,27 @@ export interface GatewayStatus {
   error?: string;
 }
 
+/**
+ * Build a status for "the configured port is occupied, but no PID file of ours
+ * owns the process holding it." We must NOT report this as running:true — that
+ * would let stop/restart adopt and SIGTERM a process this instance never
+ * started (e.g. a side-by-side install or unrelated service). Report it as an
+ * operator-visible error instead.
+ */
+function unownedPortStatus(port: number, portPid: number, stalePid: number | null): GatewayStatus {
+  const detail = stalePid !== null
+    ? `our PID file pointed at process ${stalePid}, which is gone`
+    : `no PID file is present`;
+  return {
+    running: false,
+    pid: null,
+    error:
+      `Port ${port} is in use by process ${portPid}, but ${detail}. ` +
+      `This instance does not own that process and will not stop or restart it. ` +
+      `If it is a stray gateway, stop it directly (kill ${portPid}); otherwise change this instance's gateway.port.`,
+  };
+}
+
 export function getStatus(): GatewayStatus {
   let targetPort: number;
   try {
@@ -376,18 +405,22 @@ export function getStatus(): GatewayStatus {
 
   if (fs.existsSync(PID_FILE)) {
     const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
-    try {
-      process.kill(pid, 0);
-      return { running: true, pid };
-    } catch {
-      // Process not alive, stale PID file — fall back to port check.
-      const portPid = findPidOnPort(targetPort);
-      if (portPid) return { running: true, pid: portPid };
-      return { running: false, pid };
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+        return { running: true, pid };
+      } catch {
+        // Our process is gone (stale PID file). Whatever holds the port now is
+        // NOT ours to claim — surface it as an error rather than adopting it.
+        const portPid = findPidOnPort(targetPort);
+        if (portPid) return unownedPortStatus(targetPort, portPid, pid);
+        return { running: false, pid };
+      }
     }
+    // Corrupt PID file — fall through; a busy port is still reported as unowned.
   }
 
   const portPid = findPidOnPort(targetPort);
-  if (portPid) return { running: true, pid: portPid };
+  if (portPid) return unownedPortStatus(targetPort, portPid, null);
   return { running: false, pid: null };
 }
