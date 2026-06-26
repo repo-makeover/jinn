@@ -3,6 +3,7 @@ import { withTempJinnHome } from "../../test-utils/jinn-home.js";
 import type { ServerResponse } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 const scheduleOnLoadTailSync = vi.fn();
 const scheduleTranscriptBackfill = vi.fn();
@@ -51,6 +52,19 @@ function makeReq(method: string, urlPath: string) {
     url: urlPath,
     headers: { host: "localhost" },
   } as any;
+}
+
+function makeJsonReq(method: string, urlPath: string, body: unknown) {
+  const req = Readable.from([Buffer.from(JSON.stringify(body))]) as any;
+  Object.assign(req, {
+    method,
+    url: urlPath,
+    headers: {
+      host: "localhost",
+      "content-type": "application/json",
+    },
+  });
+  return req;
 }
 
 async function setup() {
@@ -121,6 +135,32 @@ describe("session query routes", () => {
       }),
     );
   }, 15_000);
+
+  it("persists a selected cwd for POST /api/sessions", async () => {
+    const { api, reg } = await setup();
+    const ctx = makeCtx(api);
+    const config = {
+      gateway: {},
+      engines: {
+        default: "claude",
+        claude: { bin: "claude", model: "opus" },
+      },
+      portal: {},
+    };
+    ctx.getConfig = () => config as any;
+    const cwd = fs.mkdtempSync(path.join(tmpHome, "chat-cwd-"));
+
+    const cap = makeRes();
+    await api.handleApiRequest(
+      makeJsonReq("POST", "/api/sessions", { prompt: "use this folder", cwd }),
+      cap.res,
+      ctx,
+    );
+
+    expect(cap.status).toBe(201);
+    expect(cap.body).toEqual(expect.objectContaining({ cwd }));
+    expect(reg.getSession(cap.body.id)?.cwd).toBe(cwd);
+  });
 
   it("preserves q/group/offset/limit list behavior for GET /api/sessions", async () => {
     const { api, reg } = await setup();

@@ -73,6 +73,7 @@ export function buildContext(opts: {
   channel: string;
   thread?: string;
   user: string;
+  cwd?: string;
   employee?: Employee;
   connectors?: string[];
   config?: JinnConfig;
@@ -109,6 +110,7 @@ export function buildContext(opts: {
   const operatorName = opts.operatorName || opts.config?.portal?.operatorName;
   const language = opts.language || opts.config?.portal?.language || "English";
   const noToolEmployee = opts.employee?.mcp === false;
+  const sessionCwd = opts.cwd || JINN_HOME;
 
   // ── ESSENTIAL: Identity ─────────────────────────────────────
   if (opts.employee) {
@@ -119,6 +121,7 @@ export function buildContext(opts: {
         opts.employee,
         portalName,
         language,
+        sessionCwd,
         opts.hierarchy?.nodes[opts.employee.name],
         opts.hierarchy,
       ),
@@ -129,7 +132,7 @@ export function buildContext(opts: {
       tier: Tier.ESSENTIAL,
       marker: "# You are",
       content: buildIdentity(portalName, operatorName, language),
-      summary: `# You are ${portalName}\nYour working directory is \`~/.jinn\` (${JINN_HOME}).`,
+      summary: `# You are ${portalName}\nYour working directory is \`${sessionCwd}\`.`,
     });
   }
 
@@ -312,6 +315,7 @@ function buildEmployeeIdentity(
   employee: Employee,
   portalName: string,
   language: string,
+  sessionCwd: string,
   node?: import("../shared/types.js").OrgNode,
   hierarchy?: import("../shared/types.js").OrgHierarchy,
 ): string {
@@ -328,7 +332,7 @@ You must not claim to read files, run shell commands, browse websites, call APIs
 
 Use only the persona, current session metadata, and user-supplied prompt content. If the task requires external data or tool execution, say that another tool-enabled worker must handle that step.`
     : `## System context
-You are part of the ${portalName} AI gateway — a system that orchestrates AI workers. You have access to the filesystem, can run commands, call APIs, and send messages via connectors. Your working directory is \`~/.jinn\` (${JINN_HOME}).
+You are part of the ${portalName} AI gateway — a system that orchestrates AI workers. You have access to the filesystem, can run commands, call APIs, and send messages via connectors. Your working directory is \`${sessionCwd}\`.
 
 You can:
 - Read and write files in the home directory
@@ -433,6 +437,7 @@ function buildSessionContext(opts: {
   channel: string;
   thread?: string;
   user: string;
+  cwd?: string;
   sessionId?: string;
   channelName?: string;
 }): string {
@@ -448,7 +453,7 @@ function buildSessionContext(opts: {
   }
   if (opts.thread) ctx += `- Thread: ${opts.thread}\n`;
   ctx += `- User: ${opts.user}\n`;
-  ctx += `- Working directory: ${JINN_HOME}`;
+  ctx += `- Working directory: ${opts.cwd || JINN_HOME}`;
   return ctx;
 }
 

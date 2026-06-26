@@ -301,6 +301,7 @@ export class SessionManager {
         channel: msg.channel,
         thread: msg.thread,
         user: msg.user,
+        cwd: session.cwd || JINN_HOME,
         employee,
         connectors: this.connectorNames,
         config: this.config,

@@ -147,6 +147,7 @@ export async function runWebSession(
       source: currentSession.source,
       channel: currentSession.sourceRef,
       user: currentSession.userId ?? "web-user",
+      cwd: currentSession.cwd || JINN_HOME,
       employee,
       connectors: Array.from(context.connectors.keys()),
       config,

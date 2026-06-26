@@ -119,6 +119,15 @@ describe("buildContext — Current session reflects passed opts", () => {
     expect(out).toContain("C123");
   });
 
+  it("reflects the provided working directory instead of defaulting to JINN_HOME", () => {
+    const out = buildContext({
+      ...baseOpts,
+      cwd: "/tmp/project-alpha",
+    });
+    expect(out).toContain("- Working directory: /tmp/project-alpha");
+    expect(out).not.toContain("- Working directory: ~/.jinn");
+  });
+
   it("renders a named channel when channelName is provided", () => {
     const out = buildContext({
       ...baseOpts,

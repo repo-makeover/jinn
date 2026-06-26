@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
-import { validateNewSessionSelection, validateSessionPatch } from "../../../sessions/session-patch.js";
+import { validateCwd, validateNewSessionSelection, validateSessionPatch } from "../../../sessions/session-patch.js";
 import {
   cancelAllPendingQueueItems,
   cancelQueueItemForSession,
@@ -393,6 +393,15 @@ export async function handleSessionWriteRoutes(
       badRequest(res, selection.error || "invalid engine/model/effort");
       return true;
     }
+    let cwd: string | undefined;
+    if (body.cwd !== undefined) {
+      const validatedCwd = validateCwd(body.cwd, { roots: config.workspaces?.roots });
+      if (!validatedCwd.ok) {
+        badRequest(res, validatedCwd.error || "invalid cwd");
+        return true;
+      }
+      cwd = validatedCwd.cwd;
+    }
     const engineName = selection.engine || config.engines.default;
     const sessionKey = `web:${Date.now()}`;
     const userId = resolveUserHeader(req.headers, config.gateway.userHeader);
@@ -410,6 +419,7 @@ export async function handleSessionWriteRoutes(
       model: selection.model,
       prompt,
       promptExcerpt: typeof body.promptExcerpt === "string" ? body.promptExcerpt : undefined,
+      cwd,
       portalName: config.portal?.portalName,
     });
     logger.info(`Web session created: ${session.id} (model=${selection.model || "default"})`);
