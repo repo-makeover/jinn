@@ -28,9 +28,11 @@ describe("synthesizeFromEngineConfig (backward-compat fallback)", () => {
     expect(reg.grok.defaultModel).toBe("grok-build");
     expect(reg.grok.models.map((m) => m.id)).toEqual(["grok-build", "grok-composer-2.5-fast"]);
     expect(reg.grok.models.map((m) => m.label)).toEqual(["Grok Build", "Grok Composer 2.5 Fast"]);
+    expect(reg.ollama.models[0].id).toBe("gemma4");
+    expect(reg.kilo.models[0].id).toBe("kilo-auto/free");
   });
 
-  it("uses per-engine effort semantics: claude flag, codex config, grok flag, antigravity none", () => {
+  it("uses per-engine effort semantics: claude flag, codex config, grok flag, antigravity/ollama none", () => {
     const reg = synthesizeFromEngineConfig(cfg({}));
     expect(reg.claude.effortMechanism).toBe("claude-flag");
     expect(reg.claude.models[0].effortLevels).toEqual(["low", "medium", "high"]);
@@ -41,6 +43,10 @@ describe("synthesizeFromEngineConfig (backward-compat fallback)", () => {
     expect(reg.antigravity.effortMechanism).toBe("none");
     expect(reg.antigravity.models[0].supportsEffort).toBe(false);
     expect(reg.antigravity.models[0].effortLevels).toEqual([]);
+    expect(reg.ollama.effortMechanism).toBe("none");
+    expect(reg.ollama.models[0].supportsEffort).toBe(false);
+    expect(reg.kilo.effortMechanism).toBe("none");
+    expect(reg.kilo.models[0].supportsEffort).toBe(false);
   });
 
   it("uses the pinned Grok model as default while keeping the known Grok catalog", () => {

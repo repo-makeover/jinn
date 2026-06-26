@@ -92,8 +92,18 @@ function writeClaudeMigrateSettings(): { settingsPath: string; tempDir: string }
   return { settingsPath, tempDir };
 }
 
-function buildMigrateArgs(engine: string, prompt: string, claudeSettingsPath?: string): string[] {
+function buildMigrateArgs(engine: string, prompt: string, model?: string, claudeSettingsPath?: string): string[] {
   switch (engine) {
+    case "kilo":
+      return [
+        "run",
+        "--auto",
+        "--dangerously-skip-permissions",
+        ...(model ? ["--model", model] : []),
+        prompt,
+      ];
+    case "ollama":
+      return ["run", model || "gemma4", prompt];
     case "codex":
       // `codex exec` is Codex's own non-interactive mode (not a claude `-p`).
       return ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", prompt];
@@ -213,7 +223,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
       `Clean up the migrations/ directory when done.`,
     ].join("\n");
 
-    const args = buildMigrateArgs(defaultEngine, prompt, claudeMigrateSettings?.settingsPath);
+    const args = buildMigrateArgs(defaultEngine, prompt, engineConfig.model, claudeMigrateSettings?.settingsPath);
     // `bin` may be absent for engines with optional config (e.g. antigravity);
     // fall back to the engine name so spawn resolves via PATH (or fails clearly).
     // Note: antigravity (`agy`) has no headless mode, so migrate is unsupported there.

@@ -210,7 +210,11 @@ export default function OrgPage() {
             </div>
           ) : (
             <Suspense fallback={OrgMapFallback}>
+              {/* Remount per department tab so React Flow's `fitView` re-runs and
+                  zoom-to-fits the selected team. The key is the active team only,
+                  so selecting a node (which doesn't change it) never re-zooms. */}
               <OrgMap
+                key={activeDepartment ?? ALL_DEPARTMENTS_TAB}
                 employees={visibleOrg.employees}
                 hierarchy={visibleOrg.hierarchy}
                 selectedName={selected?.name ?? null}

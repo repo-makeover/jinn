@@ -77,7 +77,7 @@ export interface JinnConfig {
     exposeResolvedFilePaths?: boolean;
   };
   engines: {
-    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "hermes" | "kiro";
+    default: "claude" | "codex" | "antigravity" | "grok" | "pi" | "hermes" | "kiro" | "ollama" | "kilo";
     claude: {
       bin: string;
       model: string;
@@ -89,6 +89,10 @@ export interface JinnConfig {
     antigravity?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     grok?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     pi?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
+    /** Ollama (`ollama` CLI) engine. `bin` optional — PATH-resolved. No effort. */
+    ollama?: { bin?: string; model?: string };
+    /** Kilo (`kilo` CLI) engine. `bin` optional — PATH-resolved. */
+    kilo?: { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string };
     /** Hermes (`hermes` CLI) engine. `bin` optional — PATH-resolved. No effort. */
     hermes?: { bin?: string; model?: string };
     /** Kiro engine. `bin` optional — PATH-resolved. */
@@ -112,7 +116,7 @@ export interface JinnConfig {
     maxCostUsd?: number;
     interruptOnNewMessage?: boolean;
     rateLimitStrategy?: "wait" | "fallback";
-    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro" | "hermes";
+    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro" | "hermes" | "ollama" | "kilo";
     autoResumeOnBoot?: boolean;
   };
   boardWorker?: BoardWorkerConfig;

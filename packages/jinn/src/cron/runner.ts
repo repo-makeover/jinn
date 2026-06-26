@@ -80,7 +80,7 @@ export async function runCronJob(
       {
         employee,
         engine: job.engine || employee?.engine || config.engines.default,
-        model: job.model || employee?.model || config.engines[(job.engine || config.engines.default) as "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro"]?.model,
+        model: job.model || employee?.model || config.engines[(job.engine || config.engines.default) as "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro" | "hermes" | "ollama" | "kilo"]?.model,
         title: job.name,
       },
     );

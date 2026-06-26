@@ -37,7 +37,7 @@ import {
  */
 
 /** Engines registered in this build (mirrors server.ts engine map). */
-const ENGINE_NAMES = ["claude", "codex", "antigravity", "grok", "pi", "kiro", "hermes"] as const;
+const ENGINE_NAMES = ["claude", "codex", "antigravity", "grok", "pi", "kiro", "hermes", "ollama", "kilo"] as const;
 export type EngineName = (typeof ENGINE_NAMES)[number];
 
 /** Binary name probed for each engine's availability (override via engines.<name>.bin). */
@@ -49,6 +49,8 @@ const ENGINE_BIN: Record<EngineName, string> = {
   pi: "pi",
   kiro: "kiro-cli",
   hermes: "hermes",
+  ollama: "ollama",
+  kilo: "kilo",
 };
 
 const EFFORT_MECHANISM: Record<EngineName, EffortMechanism> = {
@@ -59,6 +61,8 @@ const EFFORT_MECHANISM: Record<EngineName, EffortMechanism> = {
   pi: "pi-flag",
   kiro: "kiro-flag",
   hermes: "none",
+  ollama: "none",
+  kilo: "none",
 };
 
 export const CODEX_DEFAULT_MODEL = "gpt-5.5";
@@ -74,6 +78,8 @@ const SYNTH_DEFAULTS: Record<EngineName, { supportsEffort: boolean; effortLevels
   pi: { supportsEffort: false, effortLevels: [], fallbackModel: "ollama/gemma4:12b" },
   kiro: { supportsEffort: true, effortLevels: ["low", "medium", "high"], fallbackModel: "auto" },
   hermes: { supportsEffort: false, effortLevels: HERMES_EFFORT_LEVELS, fallbackModel: "openai-codex:gpt-5.5" },
+  ollama: { supportsEffort: false, effortLevels: [], fallbackModel: "gemma4" },
+  kilo: { supportsEffort: false, effortLevels: [], fallbackModel: "kilo-auto/free" },
 };
 
 /** Optional per-engine `bin` override from config. */
@@ -103,6 +109,8 @@ const ENGINE_INSTALL_HINT: Record<EngineName, string> = {
   pi: "install the Pi CLI",
   kiro: "install kiro-cli, then authenticate it or set KIRO_API_KEY",
   hermes: "install the Hermes CLI: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+  ollama: "install Ollama from https://ollama.com/download and pull a model, e.g. `ollama pull gemma4`",
+  kilo: "npm install -g @kilocode/cli, then run `kilo` and use /connect to add a provider",
 };
 
 /** Actionable error message for a session blocked by a missing engine binary. */

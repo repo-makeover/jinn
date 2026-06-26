@@ -110,6 +110,8 @@ export function GatewayWorkspacesSection({
             { value: "claude", label: "Claude" },
             { value: "codex", label: "Codex" },
             { value: "grok", label: "Grok" },
+            { value: "ollama", label: "Ollama" },
+            { value: "kilo", label: "Kilo" },
           ]}
         />
       </FieldRow>
@@ -274,6 +276,50 @@ export function EngineConfigurationSection({
           ])}
         />
       </FieldRow>
+
+      <div className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]" />
+
+      <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
+        Ollama
+      </div>
+      <FieldRow label="Binary Path">
+        <SettingsInput
+          value={config.engines?.ollama?.bin ?? ""}
+          onChange={(v) => updateConfig(["engines", "ollama", "bin"], v)}
+          placeholder="ollama"
+        />
+      </FieldRow>
+      <FieldRow label="Model">
+        <SettingsSelect
+          value={config.engines?.ollama?.model ?? "gemma4"}
+          onChange={(v) => updateConfig(["engines", "ollama", "model"], v)}
+          options={modelOptions("ollama", [
+            { value: "gemma4", label: "Gemma 4" },
+          ])}
+        />
+      </FieldRow>
+
+      <div className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]" />
+
+      <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
+        Kilo
+      </div>
+      <FieldRow label="Binary Path">
+        <SettingsInput
+          value={config.engines?.kilo?.bin ?? ""}
+          onChange={(v) => updateConfig(["engines", "kilo", "bin"], v)}
+          placeholder="kilo"
+        />
+      </FieldRow>
+      <FieldRow label="Model">
+        <SettingsSelect
+          value={config.engines?.kilo?.model ?? "kilo-auto/free"}
+          onChange={(v) => updateConfig(["engines", "kilo", "model"], v)}
+          options={modelOptions("kilo", [
+            { value: "kilo-auto/free", label: "Kilo Auto Free" },
+          ])}
+        />
+      </FieldRow>
     </Section>
   )
 }
@@ -319,6 +365,8 @@ export function RecoveryFallbacksSection({
             { value: "grok", label: "Grok" },
             { value: "pi", label: "Pi" },
             { value: "kiro", label: "Kiro" },
+            { value: "ollama", label: "Ollama" },
+            { value: "kilo", label: "Kilo" },
           ]}
         />
       </FieldRow>

@@ -112,7 +112,7 @@ export function ChatMoreMenu({
               >
                 Copy Session ID
               </button>
-              {sessionMeta?.engineSessionId && (
+              {sessionMeta?.engineSessionId && (sessionMeta.engine === 'claude' || sessionMeta.engine === 'codex') && (
                 <button
                   onClick={() => {
                     const cli = sessionMeta.engine === 'codex' ? 'codex' : 'claude'

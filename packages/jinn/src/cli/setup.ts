@@ -276,6 +276,12 @@ engines:
   hermes:
     bin: hermes
     model: openai-codex:gpt-5.5
+  ollama:
+    bin: ollama
+    model: gemma4
+  kilo:
+    bin: kilo
+    model: kilo-auto/free
 # Model + capability registry — single source of truth for the UI selectors.
 # Add a model here (id + label + capability flags); no code change needed.
 # effortLevels gate the effort picker (empty = no effort support). Omit the block
@@ -300,6 +306,16 @@ models:
     models:
       - { id: grok-build, label: "Grok Build", supportsEffort: true, effortLevels: [low, medium, high, xhigh, max], contextWindow: 256000 }
       - { id: grok-composer-2.5-fast, label: "Grok Composer 2.5 Fast", supportsEffort: true, effortLevels: [low, medium, high, xhigh, max], contextWindow: 256000 }
+  ollama:
+    default: gemma4
+    effortMechanism: none
+    models:
+      - { id: gemma4, label: "Gemma 4", supportsEffort: false, effortLevels: [] }
+  kilo:
+    default: kilo-auto/free
+    effortMechanism: none
+    models:
+      - { id: kilo-auto/free, label: "Kilo Auto Free", supportsEffort: false, effortLevels: [] }
   antigravity:
     default: "Gemini 3.5 Flash (Medium)"
     effortMechanism: none
@@ -341,7 +357,7 @@ function defaultClaudeMd(portalName: string) {
   return `# ${portalName} AI Gateway
 
 This is the ${portalName} home directory (~/.jinn).
-${portalName} orchestrates Claude Code and Codex as AI engines.
+${portalName} orchestrates multiple AI engines.
 `;
 }
 
@@ -406,11 +422,29 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     info("Install the Hermes CLI: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash");
   }
 
+  // 4b. Check for ollama binary
+  const ollamaPath = whichBin("ollama");
+  if (ollamaPath) {
+    ok(`ollama found at ${ollamaPath}`);
+  } else {
+    fail("ollama not found");
+    info("Install from: https://ollama.com/download");
+  }
+
+  // 4c. Check for kilo binary
+  const kiloPath = whichBin("kilo");
+  if (kiloPath) {
+    ok(`kilo found at ${kiloPath}`);
+  } else {
+    fail("kilo not found");
+    info("Install with: npm install -g @kilocode/cli");
+  }
+
   // 5. Loudly warn if NO engine is installed — the gateway will start, but it
   //     cannot run any session until at least one engine CLI is on PATH.
-  if (!claudePath && !codexPath && !grokPath && !hermesPath) {
+  if (!claudePath && !codexPath && !grokPath && !hermesPath && !ollamaPath && !kiloPath) {
     console.log("");
-    warn("No AI engine CLI found (claude, codex, grok, or hermes).");
+    warn("No AI engine CLI found (claude, codex, grok, hermes, ollama, or kilo).");
     warn("The gateway will start, but sessions will fail until you install one above.");
   }
 
@@ -436,14 +470,26 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     if (ver) ok(`hermes --version: ${ver}`);
     else warn("hermes --version failed");
   }
+  if (ollamaPath) {
+    const ver = runVersion("ollama");
+    if (ver) ok(`ollama --version: ${ver}`);
+    else warn("ollama --version failed");
+  }
+  if (kiloPath) {
+    const ver = runVersion("kilo");
+    if (ver) ok(`kilo --version: ${ver}`);
+    else warn("kilo --version failed");
+  }
   // A successful --version does NOT mean the engine is authenticated — the #1
   // silent fresh-install failure. Nudge the login step explicitly.
-  if (claudePath || codexPath || grokPath || hermesPath) {
+  if (claudePath || codexPath || grokPath || hermesPath || ollamaPath || kiloPath) {
     warn("A successful --version does NOT mean the engine is logged in.");
     if (claudePath) info("First run? Launch `claude` once and use /login to authenticate.");
     if (codexPath) info("First run? Launch `codex` once and sign in to authenticate.");
     if (grokPath) info("First run? Launch `grok` once to authenticate, or configure XAI_API_KEY.");
     if (hermesPath) info("First run? Launch `hermes` once to authenticate, or configure your API key.");
+    if (ollamaPath) info("First run? Ensure Ollama is running and pull a model, e.g. `ollama pull gemma4`.");
+    if (kiloPath) info("First run? Launch `kilo` once and use /connect to add a provider and model.");
     info("Do this before `jinn start`, or sessions will fail silently.");
   }
 
@@ -475,7 +521,7 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     : "Jinn";
 
   let chosenName = defaultName;
-  type SetupEngine = "claude" | "codex" | "grok" | "hermes";
+  type SetupEngine = "claude" | "codex" | "grok" | "hermes" | "ollama" | "kilo";
   let chosenEngine: SetupEngine = "claude";
 
   if (isInteractive) {
@@ -488,9 +534,11 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     if (codexPath) engines.push("codex");
     if (grokPath) engines.push("grok");
     if (hermesPath) engines.push("hermes");
+    if (ollamaPath) engines.push("ollama");
+    if (kiloPath) engines.push("kilo");
 
     if (engines.length > 1) {
-      const defaultEngine = engines.includes("claude") ? "claude" : engines[0];
+      const defaultEngine = ["claude", "codex", "grok", "hermes"].find((engine) => engines.includes(engine)) ?? engines[0];
       const engineAnswer = await prompt(`Preferred engine? (${engines.join("/")})`, defaultEngine);
       chosenEngine = engines.includes(engineAnswer) ? engineAnswer as SetupEngine : defaultEngine as SetupEngine;
     } else if (engines.length === 1) {

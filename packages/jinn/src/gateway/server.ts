@@ -17,7 +17,9 @@ import { GrokEngine } from "../engines/grok.js";
 import { GrokInteractiveEngine } from "../engines/grok-interactive.js";
 import { HermesAcpEngine } from "../engines/hermes-acp.js";
 import { HermesInteractiveEngine } from "../engines/hermes-interactive.js";
+import { KiloEngine } from "../engines/kilo.js";
 import { KiroEngine } from "../engines/kiro.js";
+import { OllamaEngine } from "../engines/ollama.js";
 import { PiEngine } from "../engines/pi.js";
 import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
@@ -202,7 +204,9 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
   const hermesInteractiveEngine = new HermesInteractiveEngine(hermesLifecycle);
   const piEngine = new PiEngine();
   const kiroEngine = new KiroEngine({ configProvider: () => currentConfig });
-  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), hermes (headless + interactive PTY), pi, kiro (headless)");
+  const ollamaEngine = new OllamaEngine();
+  const kiloEngine = new KiloEngine();
+  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), hermes (headless + interactive PTY), pi, kiro (headless), ollama (headless), kilo (headless)");
 
   const codexEngine = new CodexEngine();
   const grokEngine = new GrokEngine();
@@ -216,6 +220,8 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
   engines.set("hermes", hermesEngine);
   engines.set("pi", piEngine);
   engines.set("kiro", kiroEngine);
+  engines.set("ollama", ollamaEngine);
+  engines.set("kilo", kiloEngine);
 
   const ptyViewEngines: Record<string, Engine & PtyViewEngine> = {
     claude: interactiveClaudeEngine,
@@ -496,6 +502,8 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
       hermesInteractiveEngine.killAll();
       piEngine.killAll();
       kiroEngine.killAll();
+      ollamaEngine.killAll();
+      kiloEngine.killAll();
     },
     orchestrationRuntime,
     ptyWss: transports.ptyWss,

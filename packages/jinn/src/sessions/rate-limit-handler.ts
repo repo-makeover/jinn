@@ -38,6 +38,8 @@ const ENGINE_LABELS: Record<string, string> = {
   grok: "Grok",
   pi: "Pi",
   kiro: "Kiro",
+  ollama: "Ollama",
+  kilo: "Kilo",
 };
 
 export function engineLabel(engine: string): string {

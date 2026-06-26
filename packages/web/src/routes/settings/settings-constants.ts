@@ -49,6 +49,8 @@ export interface Config {
     grok?: { bin?: string; model?: string; effortLevel?: string }
     pi?: { bin?: string; model?: string; effortLevel?: string }
     kiro?: { bin?: string; model?: string; effortLevel?: string; creditBudget?: number; billingAnchorDay?: number }
+    ollama?: { bin?: string; model?: string }
+    kilo?: { bin?: string; model?: string; effortLevel?: string }
   }
   modelFallback?: {
     enabled?: boolean
@@ -66,7 +68,7 @@ export interface Config {
     maxCostUsd?: number
     interruptOnNewMessage?: boolean
     rateLimitStrategy?: "wait" | "fallback"
-    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro"
+    fallbackEngine?: "claude" | "codex" | "antigravity" | "grok" | "pi" | "kiro" | "ollama" | "kilo"
   }
   connectors?: {
     slack?: {

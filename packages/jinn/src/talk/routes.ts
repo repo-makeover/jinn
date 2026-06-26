@@ -265,7 +265,7 @@ export async function handleTalkApi(
         }
         engine = body.engine.trim();
         if (!isKnownEngine(engine)) {
-          badRequest(res, `Unknown engine "${engine}" — expected one of claude, codex, antigravity, grok, pi, hermes.`);
+          badRequest(res, `Unknown engine "${engine}" — expected one of claude, codex, antigravity, grok, pi, hermes, ollama, kilo.`);
           return true;
         }
       }

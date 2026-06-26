@@ -473,6 +473,12 @@ function buildConfigContext(config: JinnConfig, gatewayUrl: string): string {
   if (config.engines.grok) {
     lines.push(`- Grok model: ${config.engines.grok.model ?? "grok-build"}`);
   }
+  if (config.engines.ollama) {
+    lines.push(`- Ollama model: ${config.engines.ollama.model ?? "gemma4"}`);
+  }
+  if (config.engines.kilo) {
+    lines.push(`- Kilo model: ${config.engines.kilo.model ?? "kilo-auto/free"}`);
+  }
   if (config.logging) {
     lines.push(`- Log level: ${config.logging.level || "info"}`);
   }
