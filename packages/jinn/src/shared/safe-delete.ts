@@ -70,12 +70,21 @@ export function assertSafeDestructivePath(target: string, opts: SafeDestructiveO
   }
 
   if (opts.within !== undefined) {
-    const base = path.resolve(opts.within);
-    if (resolved === base) {
+    // Compare in the real-path domain: resolve symlinks on the existing prefix of
+    // BOTH the base and the target's parent chain. This catches a symlinked
+    // intermediate directory that lexical containment would miss, while a base
+    // reached through a symlink (e.g. macOS /tmp -> /private/tmp) is still
+    // accepted because both sides resolve the same way. The final component is
+    // kept lexical so a symlinked leaf is rejected by the lstat check below
+    // (and deleted as the link, never followed).
+    const realBase = realpathDeepest(opts.within);
+    const parent = path.dirname(resolved);
+    const realTarget = parent === resolved ? resolved : path.join(realpathDeepest(parent), path.basename(resolved));
+    if (realTarget === realBase) {
       throw new Error(`${label} resolves to its containment root and will not be deleted: ${resolved}`);
     }
-    if (!resolved.startsWith(base + path.sep)) {
-      throw new Error(`${label} is outside its managed root ${base}: ${resolved}`);
+    if (!realTarget.startsWith(realBase + path.sep)) {
+      throw new Error(`${label} is outside its managed root ${realBase}: ${resolved}`);
     }
   }
 
@@ -93,6 +102,32 @@ export function assertSafeDestructivePath(target: string, opts: SafeDestructiveO
   }
 
   return resolved;
+}
+
+/**
+ * Resolve symlinks on the longest existing prefix of `p`, then re-append any
+ * not-yet-existing tail lexically. Unlike `fs.realpathSync` this does not throw
+ * when the target itself is absent (deletion of a missing path is a no-op), so
+ * containment can still be checked in the real-path domain.
+ */
+function realpathDeepest(p: string): string {
+  let cur = path.resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    if (fs.existsSync(cur)) {
+      let real: string;
+      try {
+        real = fs.realpathSync(cur);
+      } catch {
+        real = cur;
+      }
+      return tail.length ? path.join(real, ...tail) : real;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return path.resolve(p); // no existing ancestor (should not happen)
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
 }
 
 export interface SafeRmOptions extends SafeDestructiveOptions {

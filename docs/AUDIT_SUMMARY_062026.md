@@ -52,6 +52,14 @@ audit artifact.
   single-file `force` deletes in `orchestration/store-recovery.ts` (already
   containment-guarded via `isSameOrInside`) and `sessions/manager.ts` (a managed
   temp file) were reviewed and left as covered / out of recursive-delete scope.
+- Follow-up hardening of the residual low-severity items: `assertSafeDestructivePath`
+  containment now resolves symlinks on the existing path prefix (real-path domain)
+  so a symlinked intermediate directory cannot defeat lexical containment, while a
+  symlinked base (e.g. macOS `/tmp`) is still accepted; `parseWorktreeMarker` now
+  treats the worktree's on-disk location as authoritative instead of the marker's
+  self-reported `path`, neutralizing marker tampering for cleanup/diff/patch; and
+  `POST /api/artifacts/register` now sanitizes the stored `filename` to a flat
+  basename. Regression tests were added for each.
 
 ### Product findings (2026-06-26)
 

@@ -62,6 +62,23 @@ describe("assertSafeDestructivePath", () => {
       const sibling = path.join(os.tmpdir(), "bundle-evil");
       expect(() => assertSafeDestructivePath(sibling, { within: base })).toThrow(/outside its managed root/);
     });
+
+    it("rejects a target whose intermediate directory symlinks outside the base", () => {
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-safe-delete-base-"));
+      const evil = fs.mkdtempSync(path.join(os.tmpdir(), "jinn-safe-delete-evil-"));
+      try {
+        fs.writeFileSync(path.join(evil, "secret.txt"), "x");
+        // base/mid -> evil, so base/mid/secret.txt is lexically "inside" base but
+        // really lives in evil. Lexical containment alone would wrongly accept it.
+        fs.symlinkSync(evil, path.join(base, "mid"));
+        expect(() =>
+          assertSafeDestructivePath(path.join(base, "mid", "secret.txt"), { within: base }),
+        ).toThrow(/outside its managed root/);
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true });
+        fs.rmSync(evil, { recursive: true, force: true });
+      }
+    });
   });
 });
 

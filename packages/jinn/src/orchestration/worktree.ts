@@ -117,7 +117,7 @@ export function createImplementationWorktree(opts: {
     fs.writeFileSync(path.join(worktreePath, WORKTREE_MARKER), JSON.stringify(handle, null, 2));
     return { mode: "implementation_worktree", cwd: worktreePath, handle };
   } catch (err) {
-    fs.rmSync(worktreePath, { recursive: true, force: true });
+    safeRmSync(worktreePath, { within: root, label: "orchestration worktree" });
     throw new Error(`failed to create orchestration worktree: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
@@ -171,7 +171,7 @@ export function cleanupWorktree(handle: WorktreeHandle): WorktreeCleanupResult {
   try {
     runGit(["worktree", "remove", "--force", handle.path], handle.gitRoot);
   } catch {
-    fs.rmSync(handle.path, { recursive: true, force: true });
+    safeRmSync(handle.path, { label: "orchestration worktree" });
   }
   try {
     runGit(["branch", "-D", handle.branch], handle.gitRoot);
@@ -336,7 +336,10 @@ function parseWorktreeMarker(raw: string, fallbackPath: string): WorktreeHandle 
   return {
     taskId: parsed.taskId,
     lane: parsed.lane,
-    path: parsed.path,
+    // The worktree's path is authoritatively where its marker lives (a validated
+    // child of the managed root), never the marker's self-reported `path` — a
+    // tampered marker must not be able to point cleanup/git at an arbitrary dir.
+    path: fallbackPath,
     baseCwd: parsed.baseCwd,
     gitRoot: parsed.gitRoot,
     branch: parsed.branch,

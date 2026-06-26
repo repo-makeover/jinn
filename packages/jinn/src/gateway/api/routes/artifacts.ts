@@ -12,7 +12,7 @@ import {
   type FileMeta,
 } from "../../../sessions/registry.js";
 import { assessFileRead, isAllowedReadPath } from "../../files/read-security.js";
-import { expandPath, mimeFromFilename } from "../../files/storage.js";
+import { expandPath, mimeFromFilename, sanitizeUploadFilename } from "../../files/storage.js";
 import { readJsonBody } from "../../http-helpers.js";
 import type { ApiContext } from "../context.js";
 import { matchRoute } from "../match-route.js";
@@ -147,7 +147,9 @@ export async function handleArtifactRoutes(
     }
     const artifact = insertFile({
       id: providedId ?? crypto.randomUUID(),
-      filename: typeof body.filename === "string" && body.filename.trim() ? body.filename.trim() : path.basename(absPath),
+      // Persist a flat basename: meta.filename is later joined under FILES_DIR by
+      // the attachment re-home path, so a raw `../`-laden label must not survive.
+      filename: sanitizeUploadFilename(typeof body.filename === "string" && body.filename.trim() ? body.filename : path.basename(absPath)),
       size: stat.size,
       mimetype: typeof body.mimetype === "string" ? body.mimetype : mimeFromFilename(absPath),
       path: absPath,
