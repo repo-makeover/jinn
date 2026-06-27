@@ -2,7 +2,8 @@ import fs from "node:fs";
 import yaml from "js-yaml";
 import { CONFIG_PATH } from "./paths.js";
 import { safeWriteYaml } from "./safe-write.js";
-import type { BoardWorkerConfig, JinnConfig } from "./types.js";
+import { KNOWLEDGE_OUTBOX_JSONL } from "./paths.js";
+import type { BoardWorkerConfig, JinnConfig, KnowledgeConfig } from "./types.js";
 import { validateConfigShape } from "./config-schema.js";
 export { validateConfigShape } from "./config-schema.js";
 
@@ -79,12 +80,45 @@ export function normalizeBoardWorkerConfig(raw: BoardWorkerConfig | undefined): 
   };
 }
 
+export function normalizeKnowledgeConfig(raw: KnowledgeConfig | undefined): Required<KnowledgeConfig> {
+  return {
+    sink: {
+      type: raw?.sink?.type ?? "noop",
+      jsonl: {
+        path: raw?.sink?.jsonl?.path ?? KNOWLEDGE_OUTBOX_JSONL,
+      },
+      webhook: {
+        url: raw?.sink?.webhook?.url,
+        token: raw?.sink?.webhook?.token,
+        batchSize: raw?.sink?.webhook?.batchSize ?? 25,
+        timeoutMs: raw?.sink?.webhook?.timeoutMs ?? 10_000,
+        retry: {
+          baseDelayMs: raw?.sink?.webhook?.retry?.baseDelayMs ?? 1_000,
+          maxDelayMs: raw?.sink?.webhook?.retry?.maxDelayMs ?? 60_000,
+        },
+      },
+    },
+    readProvider: {
+      type: raw?.readProvider?.type ?? "none",
+      webhook: {
+        url: raw?.readProvider?.webhook?.url,
+        token: raw?.readProvider?.webhook?.token,
+        timeoutMs: raw?.readProvider?.webhook?.timeoutMs ?? 10_000,
+      },
+    },
+  };
+}
+
 export function loadConfig(): JinnConfig {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(
       `Jinn config not found at ${CONFIG_PATH}. Run "jinn setup" first.`
     );
   }
+  // config.yaml stores plaintext connector secrets (Slack/Discord/Telegram
+  // bot/app/proxy tokens), so it must not be group/world-readable. Repair perms
+  // on every load to harden installs created before this was enforced.
+  try { fs.chmodSync(CONFIG_PATH, 0o600); } catch { /* best-effort */ }
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
   let parsed: unknown;
   try {
@@ -102,6 +136,7 @@ export function loadConfig(): JinnConfig {
   config.engines.claude = normalizeClaudeEngineConfig(config.engines.claude);
   config.gateway = normalizeGatewayConfig(config.gateway);
   config.boardWorker = normalizeBoardWorkerConfig(config.boardWorker);
+  config.knowledge = normalizeKnowledgeConfig(config.knowledge);
   return config;
 }
 
@@ -112,6 +147,8 @@ export function loadConfig(): JinnConfig {
  * `dumpOptions` is forwarded to yaml.dump so call sites keep their formatting.
  */
 export function saveConfigAtomic(config: unknown, dumpOptions?: yaml.DumpOptions): void {
-  // Atomic + fsync-durable + audited (canonical config; hot-reloaded by a watcher).
-  safeWriteYaml(CONFIG_PATH, config, { dumpOptions, audit: { actor: "gateway", op: "config.save" } });
+  // Atomic + fsync-durable + audited (canonical config; hot-reloaded by a
+  // watcher). mode 0o600: the file holds plaintext connector secrets and must
+  // not be group/world-readable.
+  safeWriteYaml(CONFIG_PATH, config, { mode: 0o600, dumpOptions, audit: { actor: "gateway", op: "config.save" } });
 }

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import yaml from "js-yaml";
 import {
+  loadConfig,
   normalizeBoardWorkerConfig,
   normalizeClaudeEngineConfig,
   normalizeGatewayConfig,
@@ -123,7 +124,37 @@ describe("validateConfigShape", () => {
         fetch: { enabled: true },
         gateway: { enabled: true },
       },
+      knowledge: {
+        sink: {
+          type: "webhook",
+          webhook: { url: "http://127.0.0.1:9999/events", batchSize: 10 },
+        },
+        readProvider: {
+          type: "webhook",
+          webhook: { url: "http://127.0.0.1:9999/search", timeoutMs: 1234 },
+        },
+      },
     })).toEqual([]);
+  });
+
+  it("validates provider-neutral knowledge config", () => {
+    expect(validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      knowledge: {
+        sink: { type: "jsonl", jsonl: { path: "/tmp/outbox.jsonl" } },
+        readProvider: { type: "none" },
+      },
+    })).toEqual([]);
+
+    const problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      knowledge: {
+        sink: { type: "webhook" },
+        readProvider: { type: "webhook" },
+      },
+    });
+    expect(problems).toContain("knowledge.sink.webhook.url is required when knowledge.sink.type=webhook");
+    expect(problems).toContain("knowledge.readProvider.webhook.url is required when knowledge.readProvider.type=webhook");
   });
 
   it("accepts a config without a gateway block (downstream defaults apply)", () => {
@@ -364,5 +395,23 @@ describe("saveConfigAtomic", () => {
     saveConfigAtomic({ fresh: 1 });
 
     expect(yaml.load(fs.readFileSync(configPath, "utf-8"))).toEqual({ fresh: 1 });
+  });
+
+  // config.yaml holds plaintext connector secrets (Slack/Discord/Telegram
+  // tokens) — it must be owner-only (0o600), never group/world-readable.
+  it("writes config.yaml with owner-only (0o600) permissions", () => {
+    const configPath = path.join(tmpHome, "config.yaml");
+    saveConfigAtomic({ connectors: { slack: { botToken: "xoxb-secret" } } });
+    expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("repairs an over-permissive existing config.yaml on load", () => {
+    const configPath = path.join(tmpHome, "config.yaml");
+    fs.writeFileSync(configPath, "engines:\n  claude: {}\n");
+    fs.chmodSync(configPath, 0o644); // simulate a pre-hardening world-readable install
+
+    loadConfig();
+
+    expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
   });
 });
