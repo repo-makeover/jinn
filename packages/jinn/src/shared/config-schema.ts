@@ -1,4 +1,5 @@
 import type { EngineFailureReason } from "./types.js";
+import { validateKnowledge } from "./config-schema-knowledge.js";
 
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const ENGINE_NAMES = new Set(["claude", "codex", "antigravity", "grok", "pi", "kiro", "hermes", "ollama", "kilo"]);
@@ -776,6 +777,7 @@ export function validateConfigShape(config: unknown): string[] {
     "context",
     "stt",
     "talk",
+    "knowledge",
     "remotes",
   ], "config");
 
@@ -804,6 +806,7 @@ export function validateConfigShape(config: unknown): string[] {
   if (c.context !== undefined) validateContext(problems, c.context);
   if (c.stt !== undefined) validateStt(problems, c.stt);
   if (c.talk !== undefined) validateTalk(problems, c.talk);
+  if (c.knowledge !== undefined) validateKnowledge(problems, c.knowledge, { pushUnknownKeys, validateString, validateNumber });
   if (c.remotes !== undefined) validateRemotes(problems, c.remotes);
 
   return problems;

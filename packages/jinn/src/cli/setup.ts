@@ -95,9 +95,9 @@ function ensureDir(dir: string): boolean {
   return true;
 }
 
-function ensureFile(filePath: string, content: string): boolean {
+function ensureFile(filePath: string, content: string, mode?: number): boolean {
   if (fs.existsSync(filePath)) return false;
-  safeWriteFile(filePath, content); // atomic + fsync (setup bootstrap)
+  safeWriteFile(filePath, content, mode !== undefined ? { mode } : undefined); // atomic + fsync (setup bootstrap)
   return true;
 }
 
@@ -570,7 +570,7 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     if (chosenName !== "Jinn") {
       source = source.replace("portal: {}", `portal:\n  portalName: "${chosenName}"`);
     }
-    ensureFile(CONFIG_PATH, source);
+    ensureFile(CONFIG_PATH, source, 0o600); // holds plaintext connector secrets
     created.push(CONFIG_PATH);
   }
 
