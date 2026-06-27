@@ -134,6 +134,13 @@ export default function OrgPage() {
     [loadData],
   );
 
+  // After a delete: reload the org and close the detail panel.
+  const handleEmployeeDeleted = useCallback(() => {
+    loadData();
+    setSelected(null);
+    setCreating(false);
+  }, [loadData]);
+
   const visibleOrg = useMemo(
     () => buildVisibleOrgView(employees, hierarchy, activeDepartment),
     [activeDepartment, employees, hierarchy],
@@ -270,6 +277,7 @@ export default function OrgPage() {
                     name={selected.name}
                     prefetched={selected.rank === "executive" ? selected : undefined}
                     onUpdated={handleEmployeeUpdated}
+                    onDeleted={handleEmployeeDeleted}
                   />
                 ) : null}
               </div>
