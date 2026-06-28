@@ -37,7 +37,9 @@ export function loadSettings(): JinnSettings {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return { ...DEFAULTS }
     const parsed = JSON.parse(raw)
-    return { ...DEFAULTS, ...parsed }
+    // Per-employee icon overrides are now inert — the canonical icon is the org's
+    // persisted avatar/emoji. Prune any stale entries so they don't linger.
+    return { ...DEFAULTS, ...parsed, employeeOverrides: {} }
   } catch {
     return { ...DEFAULTS }
   }

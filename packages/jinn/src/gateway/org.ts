@@ -112,6 +112,11 @@ export interface EmployeeUpdate {
   alwaysNotify?: boolean;
   /** UI convenience field persisted into modelPolicy.fallback_chain[0]. */
   fallbackModel?: string | null;
+  /** Canonical icon: an office avatar id ("office:id"). "" clears it. Mutually
+   *  exclusive with `emoji` — setting one clears the other on merge. */
+  avatar?: string;
+  /** Canonical icon: a plain emoji. "" clears it. See `avatar`. */
+  emoji?: string;
 }
 
 export interface EmployeeCreate {
@@ -127,6 +132,8 @@ export interface EmployeeCreate {
   cliFlags?: string[];
   alwaysNotify?: boolean;
   fallbackModel?: string | null;
+  avatar?: string;
+  emoji?: string;
 }
 
 /** The set of YAML keys the update path is allowed to write. `name` is never here. */
@@ -143,7 +150,9 @@ const WRITABLE_FIELDS = [
   "alwaysNotify",
 ] as const;
 
-const ACCEPTED_UPDATE_FIELDS = [...WRITABLE_FIELDS, "fallbackModel"] as const;
+// `avatar`/`emoji` are accepted but not in WRITABLE_FIELDS — like `fallbackModel`,
+// they are merged via dedicated XOR logic (see mergeEmployeeUpdateData).
+const ACCEPTED_UPDATE_FIELDS = [...WRITABLE_FIELDS, "fallbackModel", "avatar", "emoji"] as const;
 
 const VALID_RANKS: ReadonlyArray<Employee["rank"]> = [
   "executive",
@@ -331,6 +340,16 @@ export function validateEmployeeUpdate(
     }
   }
 
+  // --- canonical icon fields (avatar | emoji); "" is the explicit clear signal ---
+  for (const key of ["avatar", "emoji"] as const) {
+    if (body[key] !== undefined) {
+      if (typeof body[key] !== "string") {
+        return { ok: false, error: `${key} must be a string` };
+      }
+      updates[key] = body[key] as string;
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     return { ok: false, error: "no recognized fields to update" };
   }
@@ -360,6 +379,8 @@ export function validateEmployeeCreate(
     "cliFlags",
     "alwaysNotify",
     "fallbackModel",
+    "avatar",
+    "emoji",
   ]);
   const unknownKeys = Object.keys(body).filter((key) => !known.has(key));
   if (unknownKeys.length > 0) {
@@ -416,6 +437,8 @@ export function validateEmployeeCreate(
     cliFlags: body.cliFlags,
     alwaysNotify: body.alwaysNotify,
     fallbackModel: body.fallbackModel,
+    avatar: body.avatar,
+    emoji: body.emoji,
   });
   if (!updates.ok || !updates.updates) {
     return { ok: false, error: updates.error || "invalid employee body" };
@@ -436,6 +459,8 @@ export function validateEmployeeCreate(
       cliFlags: updates.updates.cliFlags,
       alwaysNotify: updates.updates.alwaysNotify,
       fallbackModel: updates.updates.fallbackModel,
+      avatar: updates.updates.avatar,
+      emoji: updates.updates.emoji,
     },
   };
 }
@@ -462,6 +487,20 @@ export function updateEmployeeYaml(
       const value = (updates as Record<string, unknown>)[key];
       if (value !== undefined) {
         data[key] = value;
+      }
+    }
+    // Canonical icon: exactly one of avatar/emoji persists. An explicit "" clears
+    // that key; setting one to a non-empty value clears the sibling so legacy YAML
+    // carrying both fields normalizes to a single field on save.
+    for (const key of ["avatar", "emoji"] as const) {
+      if (!Object.prototype.hasOwnProperty.call(updates, key)) continue;
+      const raw = (updates as Record<string, unknown>)[key];
+      const value = typeof raw === "string" ? raw.trim() : "";
+      if (value) {
+        data[key] = value;
+        delete data[key === "avatar" ? "emoji" : "avatar"];
+      } else {
+        delete data[key];
       }
     }
     const effectiveEngine = String(updates.engine ?? data.engine ?? "claude").trim() || "claude";
@@ -528,6 +567,11 @@ export function createEmployeeYaml(employee: EmployeeCreate): boolean {
         fallback_chain: [{ engine: employee.engine, model: employee.fallbackModel.trim() }],
       };
     }
+    // Canonical icon: avatar wins if both somehow set; never write empty keys.
+    const avatar = (employee.avatar ?? "").trim();
+    const emoji = (employee.emoji ?? "").trim();
+    if (avatar) data.avatar = avatar;
+    else if (emoji) data.emoji = emoji;
     safeWriteYaml(filePath, data, { dumpOptions: { lineWidth: -1 }, audit: { actor: "gateway", op: "org.employee.create" } });
     return true;
   } catch (err) {

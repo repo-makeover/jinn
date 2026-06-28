@@ -52,6 +52,8 @@ export interface FlatItem {
 export interface FlatRow {
   session: Session
   avatarName: string
+  avatar?: string
+  emoji?: string
   displayName: string
 }
 

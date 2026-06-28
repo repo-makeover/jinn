@@ -101,6 +101,8 @@ export function SidebarListSurface({
           <FlatSessionRow
             session={item.row.session}
             avatarName={item.row.avatarName}
+            avatar={item.row.avatar}
+            emoji={item.row.emoji}
             displayName={item.row.displayName}
             {...sharedRowProps}
           />

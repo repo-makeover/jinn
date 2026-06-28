@@ -41,6 +41,10 @@ export interface EmployeeUpdate {
   cliFlags?: string[]
   alwaysNotify?: boolean
   fallbackModel?: string | null
+  /** Canonical icon: office avatar id ("office:id"). "" clears it. Mutually exclusive with `emoji`. */
+  avatar?: string
+  /** Canonical icon: plain emoji. "" clears it. Mutually exclusive with `avatar`. */
+  emoji?: string
 }
 
 export interface EmployeeCreate extends EmployeeUpdate {
