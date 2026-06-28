@@ -23,6 +23,23 @@
 
 ---
 
+## Migration notice — Cuttlefish
+
+This repository has migrated to [**Cuttlefish**](https://github.com/e3742526/cuttlefish).
+
+Cuttlefish preserves the full Jinn capability set — multi-engine orchestration, org hierarchy, cron, skills, and connectors — and layers on hardened security, artifact provenance, and LLM-agent traceability:
+
+- **Agent identity & hierarchy** — YAML-defined personas with executive/manager/senior/employee ranks and real reporting relationships; role-based delegation with durable decision trails (Slack reactions, dashboard approvals, COO-review filters).
+- **Artifact provenance** — SHA-256 content hashing on every uploaded file; an artifact registry tracking hash, source identity, run context, validation state, and bundle-manifest membership so every output is attributable to the agent and run that produced it.
+- **Audit & traceability** — durable session records with conversation history, engine state, cost metadata, and run-bundle archives; cron run history with failure alerts and manual requeue; orchestration recovery manifests requiring operator sign-off before resuming paused work.
+- **Security hardening** — confused-deputy mitigations (sender allowlist + untrusted-input envelope on all connector routes); `fileReadRoots` boundaries with unsafe-escape-hatch flagging; remote-image click-to-reveal gates; Node.js 24 pinned with native-module ABI-locking for process integrity.
+- **Cost governance** — per-employee monthly budgets and per-session caps enforced at the gateway; subscription-based billing against your own Claude Max/Pro account (flat monthly cost, not per-token metering).
+- **Provider neutrality** — PTY-based execution of official CLI binaries (not API-wrapped), so authentication and billing remain fully separated; 10+ engines detected from `PATH` with no lock-in.
+
+New work is happening in Cuttlefish. This repo is maintained for reference and backwards-compatibility.
+
+---
+
 ## Why Jinn?
 
 You've already installed the best agent CLIs. Jinn turns that pile of terminals into a coordinated team.
