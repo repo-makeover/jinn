@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Archive, CalendarDays, MessageSquareText, Trash2 } from 'lucide-react'
 import { PageLayout } from '@/components/page-layout'
 import { useBreadcrumbs } from '@/context/breadcrumb-context'
+import { safeHttpUrl } from '@/lib/safe-url'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -57,15 +58,24 @@ function MessageBubble({ message }: { message: ArchivedMessage }) {
         ) : null}
         {message.media && message.media.length > 0 ? (
           <div className="mt-2 flex flex-col gap-1 text-xs">
-            {message.media.map((media, index) => (
-              <a
-                key={`${media.url}-${index}`}
-                href={media.url}
-                className={cn('underline-offset-2 hover:underline', isUser ? 'text-primary-foreground' : 'text-foreground')}
-              >
-                {media.name || media.url}
-              </a>
-            ))}
+            {message.media.map((media, index) => {
+              // Archived media URLs are attacker-influenced (agent/email content);
+              // only render a clickable link for safe schemes, else plain text —
+              // blocks javascript:/data: href XSS in the dashboard origin.
+              const safeUrl = safeHttpUrl(media.url)
+              return safeUrl ? (
+                <a
+                  key={`${media.url}-${index}`}
+                  href={safeUrl}
+                  rel="noopener noreferrer"
+                  className={cn('underline-offset-2 hover:underline', isUser ? 'text-primary-foreground' : 'text-foreground')}
+                >
+                  {media.name || media.url}
+                </a>
+              ) : (
+                <span key={`${media.url}-${index}`} className="opacity-70">{media.name || media.url}</span>
+              )
+            })}
           </div>
         ) : null}
       </div>

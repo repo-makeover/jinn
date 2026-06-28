@@ -4,6 +4,7 @@ import { FileAttachment } from './file-attachment'
 import { VoiceMessage } from './voice-message'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { safeHttpUrl } from '@/lib/safe-url'
 
 /**
  * Thumbnail image with a shimmer skeleton while it loads/decodes, a cross-fade in
@@ -99,7 +100,7 @@ function ImageLightbox({
       {/* Controls */}
       <div className="absolute top-[var(--space-4)] right-[var(--space-4)] flex gap-[var(--space-2)]">
         <a
-          href={url}
+          href={safeHttpUrl(url) ?? undefined}
           download={name || 'image'}
           aria-label="Download image"
           onClick={(e) => e.stopPropagation()}
