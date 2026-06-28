@@ -7,6 +7,15 @@ import { THEMES, type ThemeId } from "@/lib/themes"
 import { NAV_ITEMS } from "@/lib/nav"
 import { useBreadcrumbs } from "@/context/breadcrumb-context"
 import { cn } from "@/lib/utils"
+import { officeAvatarPath } from "@/lib/office-avatar-pool"
+
+function BrandMark({ emoji, size }: { emoji: string; size: number }) {
+  if (emoji.startsWith("office:")) {
+    const src = officeAvatarPath(emoji.slice("office:".length))
+    if (src) return <img src={src} alt="" width={size} height={size} style={{ objectFit: "contain", display: "block" }} draggable={false} />
+  }
+  return <>{emoji}</>
+}
 
 // ---------------------------------------------------------------------------
 // Frosted pill primitives (mockup _shared.css `.pill` recipe)
@@ -342,7 +351,7 @@ export function NavRibbon({
                 aria-hidden
                 className="absolute inset-0 flex items-center justify-center text-[26px] leading-none text-[var(--text-primary)] [font-variant-emoji:emoji] transition-opacity duration-150 group-hover/sidebar:opacity-0 group-focus-within/logo:opacity-0"
               >
-                {emoji}
+                <BrandMark emoji={emoji} size={26} />
               </span>
               <PanelLeft
                 size={22}
@@ -363,7 +372,7 @@ export function NavRibbon({
                 aria-hidden
                 className="flex items-center justify-center text-[26px] leading-none text-[var(--text-primary)] [font-variant-emoji:emoji]"
               >
-                {emoji}
+                <BrandMark emoji={emoji} size={26} />
               </span>
             </Link>
           )}
@@ -476,7 +485,7 @@ export function PillNav({ actions }: { actions?: ReactNode }) {
                 aria-hidden
                 className="absolute inset-0 hidden items-center justify-center text-[14px] leading-none text-[var(--text-primary)] [font-variant-emoji:emoji] transition-opacity duration-150 lg:flex lg:group-hover/brand:opacity-0"
               >
-                {emoji}
+                <BrandMark emoji={emoji} size={14} />
               </span>
               <Menu
                 size={17}

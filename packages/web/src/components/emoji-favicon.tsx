@@ -1,12 +1,29 @@
 
 import { useEffect } from "react"
 import { useSettings } from "@/routes/settings-provider"
+import { officeAvatarPath } from "@/lib/office-avatar-pool"
 
 export function EmojiFavicon() {
   const { settings } = useSettings()
   const emoji = settings.portalEmoji ?? "\u{1F9DE}"
 
   useEffect(() => {
+    // For office: avatar ids, use the PNG directly as the favicon.
+    if (emoji.startsWith("office:")) {
+      const src = officeAvatarPath(emoji.slice("office:".length))
+      if (src) {
+        let link = document.querySelector<HTMLLinkElement>("link[rel='icon']")
+        if (!link) {
+          link = document.createElement("link")
+          link.rel = "icon"
+          document.head.appendChild(link)
+        }
+        link.type = "image/png"
+        link.href = src
+        return
+      }
+    }
+
     const canvas = document.createElement("canvas")
     canvas.width = 64
     canvas.height = 64
