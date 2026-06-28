@@ -1,5 +1,6 @@
 // packages/jinn/src/engines/hermes-acp.ts
 import { spawn, type ChildProcess } from "node:child_process";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { resolveBin } from "../shared/resolve-bin.js";
@@ -38,7 +39,10 @@ export class HermesAcpEngine implements InterruptibleEngine {
       stdio: ["pipe", "pipe", "ignore"],
       cwd,
       detached: process.platform !== "win32",
-      env: { ...process.env, HERMES_YOLO_MODE: "1", HERMES_ACCEPT_HOOKS: "1" },
+      env: buildEngineEnv(
+        { HERMES_YOLO_MODE: "1", HERMES_ACCEPT_HOOKS: "1" },
+        { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_", "CODEX"] },
+      ),
     });
     const rpc = new HermesRpc(child.stdin!, child.stdout!);
     return {

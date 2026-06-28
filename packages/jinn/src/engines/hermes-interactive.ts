@@ -3,6 +3,7 @@ import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { PtyLifecycleManager } from "./pty-lifecycle.js";
 import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
@@ -107,14 +108,12 @@ export class HermesInteractiveEngine implements InterruptibleEngine, PtyViewEngi
   // ── Private spawn ─────────────────────────────────────────────────────────
 
   private buildEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined) env[k] = v;
-    }
-    env.TERM = "xterm-256color";
-    env.HERMES_YOLO_MODE = "1";
-    env.HERMES_ACCEPT_HOOKS = "1";
-    return env;
+    // Route through the shared scrubber so cross-provider secrets and the JINN
+    // gateway/internal tokens never reach the engine subprocess (H7).
+    return buildEngineEnv(
+      { TERM: "xterm-256color", HERMES_YOLO_MODE: "1", HERMES_ACCEPT_HOOKS: "1" },
+      { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_", "CODEX"] },
+    );
   }
 
   private spawn(jinnSessionId: string, opts: PtyIdleSpawnOpts): ReturnType<typeof createPtyHandle> {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as pty from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared/types.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
@@ -336,19 +337,19 @@ export class GrokInteractiveEngine implements InterruptibleEngine, PtyViewEngine
   }
 
   private buildEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      if (k === "CODEX" || k.startsWith("CODEX_")) continue;
-      if (v !== undefined) env[k] = v;
-    }
-    env.TERM = "xterm-256color";
+    // Route through the shared scrubber so cross-provider secrets and the JINN
+    // gateway/internal tokens never reach the engine subprocess (H7).
     // The TUI blocks prompt execution while inherited MCP compatibility servers
     // initialize. Jinn exposes its own MCP/connectors; keep the Grok PTY clean
     // and deterministic unless the operator explicitly opts back in.
-    env.GROK_CLAUDE_MCPS_ENABLED = "false";
-    env.GROK_CURSOR_MCPS_ENABLED = "false";
-    return env;
+    return buildEngineEnv(
+      {
+        TERM: "xterm-256color",
+        GROK_CLAUDE_MCPS_ENABLED: "false",
+        GROK_CURSOR_MCPS_ENABLED: "false",
+      },
+      { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_", "CODEX"] },
+    );
   }
 
   private spawnParamsChanged(jinnSessionId: string, opts: EngineRunOpts | PtyIdleSpawnOpts, sessionId?: string): boolean {

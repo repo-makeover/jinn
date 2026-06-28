@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import type { IPty } from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
+import { buildEngineEnv } from "../shared/engine-env.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
@@ -371,13 +372,11 @@ export class CodexInteractiveEngine implements InterruptibleEngine, PtyViewEngin
   }
 
   private buildEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      if (v !== undefined) env[k] = v;
-    }
-    env.TERM = "xterm-256color";
-    return env;
+    // Route through the shared scrubber so cross-provider secrets and the JINN
+    // gateway/internal tokens never reach the engine subprocess (H7). Codex auth
+    // is its own subscription login (~/.codex), not env, so the denylist (which
+    // includes OPENAI_API_KEY) does not affect it — matching headless codex.
+    return buildEngineEnv({ TERM: "xterm-256color" }, { stripPrefixes: ["CLAUDECODE", "CLAUDE_CODE_"] });
   }
 
   private buildArgs(opts: EngineRunOpts, prompt?: string, resumeSessionId?: string): string[] {
