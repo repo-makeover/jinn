@@ -139,6 +139,9 @@ export class EmailService {
     try {
       const fetched = await this.client.fetchUnread(inbox);
       const results: EmailMessageRecord[] = [];
+      // Mark recorded (cached/ingested) messages \Seen so the unread set drains
+      // and they are not re-fetched every poll; errored ones stay unseen to retry.
+      const toMarkSeen: string[] = [];
       for (const message of fetched) {
         const existing = getEmailIngestState(inbox.id, message.providerMessageId);
         const existingMessage = existing?.emailMessageId ? getEmailMessage(existing.emailMessageId) : undefined;
@@ -174,6 +177,7 @@ export class EmailService {
               sessionId,
               error: null,
             });
+            toMarkSeen.push(message.providerMessageId);
             results.push(getEmailMessage(persisted.id) ?? persisted);
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
@@ -186,11 +190,18 @@ export class EmailService {
               sessionId: null,
               error,
             });
+            // Leave errored messages unseen so the next poll can retry them.
             results.push(getEmailMessage(persisted.id) ?? persisted);
           }
         } else {
+          toMarkSeen.push(message.providerMessageId);
           results.push(persisted);
         }
+      }
+      if (toMarkSeen.length > 0) {
+        await this.client.markSeen(inbox, toMarkSeen).catch((err) => {
+          logger.warn(`[email] Failed to mark messages seen in inbox ${inbox.id}: ${err instanceof Error ? err.message : err}`);
+        });
       }
       setEmailInboxHealth({
         inboxId: inbox.id,

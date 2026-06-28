@@ -45,6 +45,13 @@ export interface NormalizedEmailPayload {
   attachments: NormalizedAttachmentPayload[];
 }
 
+// Resource caps so a single (possibly hostile) email cannot exhaust memory/disk.
+export const MAX_RAW_MESSAGE_BYTES = 25 * 1024 * 1024; // 25 MB raw RFC822
+export const MAX_ATTACHMENTS = 20;
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB per attachment
+export const MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MB across attachments
+export const MAX_TEXT_BODY_CHARS = 200_000;
+
 function cleanAddressList(value: ParsedAddressList | undefined): string[] {
   return value?.value?.map((entry) => entry.address).filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0) ?? [];
 }
@@ -75,14 +82,26 @@ export async function normalizeEmail(
   raw: Buffer,
 ): Promise<NormalizedEmailPayload> {
   const mail = await simpleParser(raw) as ParsedMailLike;
-  const attachments: NormalizedAttachmentPayload[] = mail.attachments.map((attachment, index) => ({
-    id: attachmentId(providerMessageId, index, attachment.filename || `attachment-${index + 1}`),
-    filename: attachment.filename || `attachment-${index + 1}`,
-    contentType: attachment.contentType || "application/octet-stream",
-    size: attachment.size ?? attachment.content.length,
-    content: attachment.content,
-    contentId: attachment.cid ?? null,
-  }));
+  // Cap attachment count, per-attachment size, and total bytes so a hostile mail
+  // cannot fill disk/memory. Oversized or over-count attachments are dropped.
+  let totalAttachmentBytes = 0;
+  const attachments: NormalizedAttachmentPayload[] = [];
+  mail.attachments.forEach((attachment, index) => {
+    if (attachments.length >= MAX_ATTACHMENTS) return;
+    const size = attachment.size ?? attachment.content.length;
+    if (size > MAX_ATTACHMENT_BYTES) return;
+    if (totalAttachmentBytes + size > MAX_TOTAL_ATTACHMENT_BYTES) return;
+    totalAttachmentBytes += size;
+    attachments.push({
+      id: attachmentId(providerMessageId, index, attachment.filename || `attachment-${index + 1}`),
+      filename: attachment.filename || `attachment-${index + 1}`,
+      contentType: attachment.contentType || "application/octet-stream",
+      size,
+      content: attachment.content,
+      contentId: attachment.cid ?? null,
+    });
+  });
+  const textBody = (mail.text ?? "").slice(0, MAX_TEXT_BODY_CHARS);
   const recordId = emailMessageId(inbox.id, providerMessageId);
   const attachmentRecords: EmailAttachmentRecord[] = attachments.map((attachment) => ({
     id: attachment.id,
@@ -107,7 +126,7 @@ export async function normalizeEmail(
       ccAddresses: cleanAddressList(mail.cc),
       subject: mail.subject ?? null,
       receivedAt: mail.date ? mail.date.toISOString() : null,
-      textBody: mail.text ?? "",
+      textBody,
       htmlBody: typeof mail.html === "string" ? mail.html : null,
       headers: headerMap(mail),
       attachments: attachmentRecords,
