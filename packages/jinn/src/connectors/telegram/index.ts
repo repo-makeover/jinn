@@ -29,7 +29,7 @@ export class TelegramConnector implements Connector {
   name = "telegram";
   private bot: TelegramBot;
   private handler: ((msg: IncomingMessage) => void) | null = null;
-  private readonly allowedUsers: Set<number> | null;
+  private readonly allowedUsers: Set<number>;
   private readonly ignoreOldMessagesOnBoot: boolean;
   private readonly bootTimeMs = Date.now();
   private started = false;
@@ -50,10 +50,13 @@ export class TelegramConnector implements Connector {
   constructor(config: TelegramConnectorConfig) {
     this.bot = new TelegramBot(config.botToken, { polling: false });
     this.ignoreOldMessagesOnBoot = config.ignoreOldMessagesOnBoot !== false;
-    this.allowedUsers =
-      config.allowFrom && config.allowFrom.length > 0
-        ? new Set(config.allowFrom)
-        : null;
+    // Default-deny (matches the WhatsApp connector): without an allowFrom the
+    // bot ignores everyone, so an unrestricted bot can't be driven by arbitrary
+    // Telegram users. The operator must opt people in by numeric user id.
+    this.allowedUsers = new Set(config.allowFrom ?? []);
+    if (this.allowedUsers.size === 0) {
+      logger.warn("[telegram] No allowFrom configured — ignoring ALL inbound messages. Set connectors.telegram.allowFrom to authorize users.");
+    }
     this.sttConfig = config.stt;
   }
 
@@ -92,13 +95,11 @@ export class TelegramConnector implements Connector {
       }
 
       const userId = telegramMsg.from?.id;
-      if (this.allowedUsers) {
-        if (userId === undefined || !this.allowedUsers.has(userId)) {
-          logger.debug(
-            `[telegram] Ignoring message from unauthorized user ${userId}`,
-          );
-          return;
-        }
+      if (userId === undefined || !this.allowedUsers.has(userId)) {
+        logger.debug(
+          `[telegram] Ignoring message from unauthorized user ${userId}`,
+        );
+        return;
       }
 
       const sessionKey = deriveSessionKey(telegramMsg);

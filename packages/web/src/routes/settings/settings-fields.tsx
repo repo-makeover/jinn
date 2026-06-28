@@ -61,11 +61,13 @@ export function SettingsInput({
   onChange,
   type = "text",
   placeholder,
+  disabled = false,
 }: {
   value: string
   onChange: (v: string) => void
   type?: string
   placeholder?: string
+  disabled?: boolean
 }) {
   return (
     <input
@@ -73,6 +75,7 @@ export function SettingsInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      disabled={disabled}
       className="apple-input w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)]"
     />
   )
@@ -83,11 +86,13 @@ export function SettingsTextarea({
   onChange,
   placeholder,
   rows = 4,
+  disabled = false,
 }: {
   value: string
   onChange: (v: string) => void
   placeholder?: string
   rows?: number
+  disabled?: boolean
 }) {
   return (
     <textarea
@@ -95,6 +100,7 @@ export function SettingsTextarea({
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       rows={rows}
+      disabled={disabled}
       className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[8px] text-[length:var(--text-footnote)] text-[var(--text-primary)] resize-y"
     />
   )
@@ -104,15 +110,18 @@ export function SettingsSelect({
   value,
   onChange,
   options,
+  disabled = false,
 }: {
   value: string
   onChange: (v: string) => void
   options: { value: string; label: string }[]
+  disabled?: boolean
 }) {
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
       className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)] cursor-pointer"
     >
       {options.map((o) => (
@@ -127,16 +136,22 @@ export function SettingsSelect({
 export function ToggleSwitch({
   checked,
   onChange,
+  disabled = false,
 }: {
   checked: boolean
   onChange: (v: boolean) => void
+  disabled?: boolean
 }) {
   return (
     <button
       role="switch"
       aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="w-[44px] h-[24px] rounded-[12px] border-none cursor-pointer relative shrink-0 transition-[background] duration-200 ease-[var(--ease-smooth)]"
+      aria-disabled={disabled}
+      disabled={disabled}
+      onClick={() => {
+        if (!disabled) onChange(!checked)
+      }}
+      className="w-[44px] h-[24px] rounded-[12px] border-none cursor-pointer relative shrink-0 transition-[background] duration-200 ease-[var(--ease-smooth)] disabled:cursor-not-allowed disabled:opacity-60"
       style={{
         background: checked ? "var(--system-green)" : "var(--fill-primary)",
       }}

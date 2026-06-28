@@ -413,6 +413,7 @@ function validateEmailInbox(problems: string[], path: string, value: unknown): v
     "autoIngest",
     "unreadOnly",
     "maxMessagesPerPoll",
+    "allowFrom",
   ], path);
   if (typeof value.id !== "string" || !value.id.trim()) problems.push(`${path}.id must be a non-empty string`);
   if (value.label !== undefined) validateString(problems, `${path}.label`, value.label);
@@ -426,6 +427,7 @@ function validateEmailInbox(problems: string[], path: string, value: unknown): v
   if (value.autoIngest !== undefined) validateBoolean(problems, `${path}.autoIngest`, value.autoIngest);
   if (value.unreadOnly !== undefined) validateBoolean(problems, `${path}.unreadOnly`, value.unreadOnly);
   if (value.maxMessagesPerPoll !== undefined) validateNumber(problems, `${path}.maxMessagesPerPoll`, value.maxMessagesPerPoll);
+  if (value.allowFrom !== undefined) validateStringArray(problems, `${path}.allowFrom`, value.allowFrom);
 }
 
 function validateEmail(

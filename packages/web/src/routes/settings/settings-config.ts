@@ -47,3 +47,13 @@ export function parseFallbackChain(value: string): FallbackTarget[] | undefined 
 
   return chain.length > 0 ? chain : undefined
 }
+
+export function lockLegacyOrgOrchestration(config: Config): Config {
+  return {
+    ...config,
+    orchestration: {
+      ...(config.orchestration ?? {}),
+      enabled: false,
+    },
+  }
+}

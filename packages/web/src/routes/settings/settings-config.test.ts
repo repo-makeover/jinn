@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { formatFallbackChain, formatLineList, parseFallbackChain, parseLineList } from "./settings-config"
+import { formatFallbackChain, formatLineList, lockLegacyOrgOrchestration, parseFallbackChain, parseLineList } from "./settings-config"
 
 describe("settings-config helpers", () => {
   it("round-trips newline-separated workspace roots", () => {
@@ -19,5 +19,21 @@ describe("settings-config helpers", () => {
       { engine: "codex", model: "gpt-5.5", effortLevel: "high" },
       { engine: "claude", model: "claude-sonnet-4-6", reason: "balanced backup" },
     ])
+  })
+
+  it("forces orchestration off for the legacy org management path", () => {
+    expect(lockLegacyOrgOrchestration({
+      orchestration: {
+        enabled: true,
+        configDir: "/tmp/orchestration",
+        empiricalRouting: true,
+      },
+    })).toEqual({
+      orchestration: {
+        enabled: false,
+        configDir: "/tmp/orchestration",
+        empiricalRouting: true,
+      },
+    })
   })
 })

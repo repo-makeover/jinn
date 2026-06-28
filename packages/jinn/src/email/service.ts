@@ -15,6 +15,25 @@ export interface EmailServiceDeps {
   onAutoIngest?: (message: EmailMessageRecord) => Promise<string | null>;
 }
 
+/**
+ * Whether an email sender is allowed to auto-trigger an agent run. Fail-closed:
+ * if the inbox has no `allowFrom`, NO sender auto-ingests (messages are cached
+ * for manual review). Entries match a full address, a bare domain, or `@domain`.
+ */
+export function emailSenderAllowed(allowFrom: string[] | undefined, fromAddress: string | null): boolean {
+  if (!allowFrom || allowFrom.length === 0) return false;
+  if (!fromAddress) return false;
+  const addr = fromAddress.trim().toLowerCase();
+  const domain = addr.includes("@") ? addr.slice(addr.lastIndexOf("@") + 1) : "";
+  return allowFrom.some((raw) => {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) return false;
+    if (entry.startsWith("@")) return domain.length > 0 && domain === entry.slice(1);
+    if (!entry.includes("@")) return domain.length > 0 && domain === entry;
+    return addr === entry;
+  });
+}
+
 export interface EmailCheckResult {
   inboxId: string;
   checked: number;
@@ -142,7 +161,8 @@ export class EmailService {
           sessionId: existing?.sessionId ?? null,
           error: existing?.error ?? null,
         });
-        if (inbox.autoIngest !== false && existing?.status !== "ingested" && this.onAutoIngest) {
+        const senderAllowed = emailSenderAllowed(inbox.allowFrom, normalized.record.fromAddress);
+        if (inbox.autoIngest !== false && senderAllowed && existing?.status !== "ingested" && this.onAutoIngest) {
           try {
             const sessionId = await this.onAutoIngest(persisted);
             upsertEmailMessage({ ...persisted, status: "ingested", sessionId, error: null });

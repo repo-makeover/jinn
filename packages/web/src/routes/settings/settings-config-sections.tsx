@@ -361,6 +361,18 @@ export function EmailSettingsSection({
               placeholder="10"
             />
           </FieldRow>
+          <FieldRow label="Allow From">
+            <SettingsInput
+              value={(inbox.allowFrom ?? []).join(", ")}
+              onChange={(v) => updateInbox(index, {
+                allowFrom: v.split(",").map((s) => s.trim()).filter(Boolean),
+              })}
+              placeholder="alice@example.com, example.com"
+            />
+          </FieldRow>
+          <FieldHint>
+            Only mail from these senders (full address, bare domain, or @domain) auto-ingests into an agent session. Leave empty to cache everything for manual review.
+          </FieldHint>
         </div>
       ))}
 
@@ -717,17 +729,21 @@ export function OrchestrationSection({
   updateConfig,
   updateNumberConfig,
 }: SharedConfigProps) {
+  const disabled = true
+
   return (
     <Section title="Orchestration">
       <FieldRow label="Enabled">
         <ToggleSwitch
-          checked={config.orchestration?.enabled ?? false}
+          checked={false}
+          disabled={disabled}
           onChange={(v) => updateConfig(["orchestration", "enabled"], v)}
         />
       </FieldRow>
       <FieldRow label="Config Dir">
         <SettingsInput
           value={config.orchestration?.configDir ?? ""}
+          disabled={disabled}
           onChange={(v) => updateConfig(["orchestration", "configDir"], v.trim() || undefined)}
           placeholder="~/.jinn/orchestration"
         />
@@ -735,6 +751,7 @@ export function OrchestrationSection({
       <FieldRow label="DB Path">
         <SettingsInput
           value={config.orchestration?.dbPath ?? ""}
+          disabled={disabled}
           onChange={(v) => updateConfig(["orchestration", "dbPath"], v.trim() || undefined)}
           placeholder="~/.jinn/orchestration/orchestration.db"
         />
@@ -742,6 +759,7 @@ export function OrchestrationSection({
       <FieldRow label="Worktree Root">
         <SettingsInput
           value={config.orchestration?.worktreeRoot ?? ""}
+          disabled={disabled}
           onChange={(v) => updateConfig(["orchestration", "worktreeRoot"], v.trim() || undefined)}
           placeholder="~/.jinn/orchestration/worktrees"
         />
@@ -750,6 +768,7 @@ export function OrchestrationSection({
         <SettingsInput
           type="number"
           value={String(config.orchestration?.maxWorktrees ?? "")}
+          disabled={disabled}
           onChange={(v) => updateNumberConfig(["orchestration", "maxWorktrees"], v)}
           placeholder="12"
         />
@@ -757,17 +776,19 @@ export function OrchestrationSection({
       <FieldRow label="Same-family Reviewer Fallback">
         <ToggleSwitch
           checked={config.orchestration?.sameFamilyReviewerFallback ?? false}
+          disabled={disabled}
           onChange={(v) => updateConfig(["orchestration", "sameFamilyReviewerFallback"], v)}
         />
       </FieldRow>
       <FieldRow label="Empirical Routing">
         <ToggleSwitch
           checked={config.orchestration?.empiricalRouting ?? false}
+          disabled={disabled}
           onChange={(v) => updateConfig(["orchestration", "empiricalRouting"], v)}
         />
       </FieldRow>
       <FieldHint>
-        Turn this on to bind the orchestration runtime. The config directory should contain workers, roles, and coordinators definitions.
+        Matrix orchestration is locked off in Settings so Jinn stays on the legacy org structure and management flow. Use the Organization view for the classic hierarchy, and edit config files directly if you need to inspect orchestration paths.
       </FieldHint>
     </Section>
   )

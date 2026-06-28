@@ -28,6 +28,7 @@ import {
   OrchestrationSection,
   RecoveryFallbacksSection,
 } from "./settings-config-sections"
+import { lockLegacyOrgOrchestration } from "./settings-config"
 import { FieldRow, Section, SettingsInput, SettingsSelect, ToggleSwitch } from "./settings-fields"
 import { SttSettingsSection } from "./stt-section"
 
@@ -113,7 +114,7 @@ export default function SettingsPage() {
     setConfigLoading(true)
     api.getConfig()
       .then((data) => {
-        setConfig(data as Config)
+        setConfig(lockLegacyOrgOrchestration(data as Config))
         setConfigError(null)
       })
       .catch((err) => setConfigError(err.message))
@@ -182,7 +183,7 @@ export default function SettingsPage() {
   function handleSave() {
     setSaving(true)
     setFeedback(null)
-    api.updateConfig(config as Record<string, unknown>)
+    api.updateConfig(lockLegacyOrgOrchestration(config) as Record<string, unknown>)
       .then(() => setFeedback({ type: "success", message: "Settings saved successfully" }))
       .catch((err) => {
         setFeedback({
