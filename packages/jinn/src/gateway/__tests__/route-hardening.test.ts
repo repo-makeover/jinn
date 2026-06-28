@@ -306,6 +306,7 @@ describe("GET /api/status", () => {
           hermes: { bin: "__jinn_missing_hermes_for_status_test__", model: "openai-codex:gpt-5.5" },
           ollama: { bin: "__jinn_missing_ollama_for_status_test__", model: "gemma4" },
           kilo: { bin: "__jinn_missing_kilo_for_status_test__", model: "kilo-auto/free" },
+          aider: { bin: "__jinn_missing_aider_for_status_test__", model: "default" },
         },
       }),
       connectors: new Map(),

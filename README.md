@@ -3,7 +3,7 @@
 <p align="center"><b>Run your AI agents as a company.</b></p>
 
 <p align="center">
-  Jinn is the orchestration layer that runs any agent CLI - Claude Code, Codex, Hermes, Grok, Ollama, Kilo - as interchangeable engines, and coordinates them as a company of AI employees:
+  Jinn is the orchestration layer that runs any agent CLI - Claude Code, Codex, Hermes, Grok, Ollama, Kilo, Aider - as interchangeable engines, and coordinates them as a company of AI employees:
   hierarchy, delegation, cron, skills, and connectors.<br/>
   It doesn't replace your agents. <b>It gives them an org chart.</b>
 </p>
@@ -27,7 +27,7 @@
 
 You've already installed the best agent CLIs. Jinn turns that pile of terminals into a coordinated team.
 
-- **🎼 Conducts your agents - doesn't replace them.** Claude Code, Codex, Grok, Antigravity, Pi, Hermes, Kiro, Ollama, Kilo - whatever's on your `PATH` becomes a Jinn engine. Jinn adds **zero** AI logic of its own ("bus, not brain"); all the intelligence is your engines'. When they get better, Jinn gets better, for free.
+- **🎼 Conducts your agents - doesn't replace them.** Claude Code, Codex, Grok, Antigravity, Pi, Hermes, Kiro, Ollama, Kilo, Aider - whatever's on your `PATH` becomes a Jinn engine. Jinn adds **zero** AI logic of its own ("bus, not brain"); all the intelligence is your engines'. When they get better, Jinn gets better, for free.
 - **🏢 An AI org you design in YAML.** Named employees with personas, ranks, and departments - and a reporting hierarchy of any depth. A COO delegates work to managers, managers to their reports. Real chain of command, not a flat pool of anonymous agents.
 - **💸 Runs on your subscription, not a token meter.** Jinn drives the *official* Claude Code CLI inside a real terminal, so Claude turns bill against your flat-rate Max/Pro subscription - a whole org grinding all day is a fixed monthly cost, not a surprise API invoice.
 - **⏰ Works while you sleep.** Hot-reloadable cron schedules background research, content, monitoring, and support - output routed through your COO for review, then to you on Slack.
@@ -137,8 +137,9 @@ Jinn detects whichever agent CLIs are on your `PATH` and makes them interchangea
 | **hermes** | NousResearch Hermes - open-source, model-agnostic agent | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` | Chat (ACP streaming) · CLI (xterm view) | - |
 | **ollama** | Local Ollama CLI driving a pulled local model | install from [ollama.com](https://ollama.com/download), then `ollama pull <model>` | Chat | - |
 | **kilo** | Kilo Code CLI in autonomous terminal mode | `npm install -g @kilocode/cli` and run `kilo` once to `/connect` | Chat | provider-specific via `--variant` |
+| **aider** | [Aider](https://aider.chat) AI pair-programmer | `python -m pip install aider-install && aider-install` (or `pipx install aider-chat`), then set a provider API key | Chat · CLI (xterm) | - |
 
-The picker shows real model names out of the box (Opus 4.8, GPT-5.5, Gemini 3.x…). Those labels live in your `config.yaml`, so a fresh install looks polished day one - while Grok, Pi, and Hermes report their model lists live at session start.
+The picker shows real model names out of the box (Opus 4.8, GPT-5.5, Gemini 3.x…). Those labels live in your `config.yaml`, so a fresh install looks polished day one - while Grok, Pi, and Hermes report their model lists live at session start, and Aider surfaces the models for whichever provider API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) are present in the gateway env.
 
 > **Hermes cost note.** Unlike the subscription-wrapped engines, Hermes owns its own model loop and bills **per token** on the provider configured in `~/.hermes`. It streams over the Agent Client Protocol (ACP) and runs fully auto-approved. See [`docs/engines-hermes.md`](docs/engines-hermes.md).
 
@@ -191,7 +192,7 @@ Every department also has a **board**. Assign tickets to employees, watch work m
 
 ## Features
 
-- **🔌 Nine engines, one picker** - Claude Code, Codex, Grok, Antigravity, Pi, Hermes, Kiro, Ollama, Kilo; pick engine + model + effort per session or per employee, switchable mid-chat.
+- **🔌 Ten engines, one picker** - Claude Code, Codex, Grok, Antigravity, Pi, Hermes, Kiro, Ollama, Kilo, Aider; pick engine + model + effort per session or per employee, switchable mid-chat.
 - **🏢 AI org system** - employees, departments, ranks, managers, and a reporting hierarchy of any depth, all in editable YAML.
 - **🧩 Real delegation** - parent/child sessions with completion callbacks and a COO-review pattern that filters noise before it reaches you.
 - **⏰ Cron scheduling** - hot-reloadable background jobs with run history and optional failure alerts.
@@ -276,7 +277,7 @@ Everything is human-readable files you own - `cat` it, edit it, commit it.
 
 ## Roadmap
 
-Jinn is in active development. Shipped recently: nine-engine support, file attachments, in-app file viewer, agent-to-agent messaging, shared memory, mobile UI, live streaming. On deck:
+Jinn is in active development. Shipped recently: ten-engine support, file attachments, in-app file viewer, agent-to-agent messaging, shared memory, mobile UI, live streaming. On deck:
 
 - **Engines** - deeper local-model support (llama.cpp and richer local-agent adapters), engine fallback chains.
 - **Connectors** - iMessage, email (IMAP/SMTP), generic webhooks.

@@ -2,7 +2,7 @@ import type { EngineFailureReason } from "./types.js";
 import { validateKnowledge } from "./config-schema-knowledge.js";
 
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
-const ENGINE_NAMES = new Set(["claude", "codex", "antigravity", "grok", "pi", "kiro", "hermes", "ollama", "kilo"]);
+const ENGINE_NAMES = new Set(["claude", "codex", "antigravity", "grok", "pi", "kiro", "hermes", "ollama", "kilo", "aider"]);
 const FALLBACK_MODES = new Set(["auto", "ask_user", "never"]);
 const RETURN_POLICIES = new Set(["ask_user", "auto", "never", "stay_on_fallback"]);
 const ENGINE_FAILURE_REASONS = new Set<EngineFailureReason>([
@@ -138,7 +138,7 @@ function validateEngines(
     problems.push("engines must be a mapping with at least an engines.claude entry");
     return;
   }
-  pushUnknownKeys(problems, value, ["default", "claude", "codex", "antigravity", "grok", "pi", "kiro", "hermes", "ollama", "kilo"], "engines");
+  pushUnknownKeys(problems, value, ["default", "claude", "codex", "antigravity", "grok", "pi", "kiro", "hermes", "ollama", "kilo", "aider"], "engines");
   if (value.default !== undefined) validateString(problems, "engines.default", value.default);
   if (value.claude === undefined) {
     problems.push("engines.claude must be a mapping");
@@ -166,6 +166,7 @@ function validateEngines(
     if (kiro?.billingAnchorDay !== undefined) validateNumber(problems, "engines.kiro.billingAnchorDay", kiro.billingAnchorDay);
   }
   if (value.hermes !== undefined) validateEngineConfig(problems, "engines.hermes", value.hermes, ["bin", "model"]);
+  if (value.aider !== undefined) validateEngineConfig(problems, "engines.aider", value.aider, ["bin", "model"]);
 }
 
 function validateModels(

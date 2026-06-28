@@ -11,7 +11,7 @@ import { configureLogger, logger } from "../shared/logger.js";
 import { buildKnowledgeReadProvider } from "../knowledge/read/index.js";
 import { buildKnowledgeSink } from "../knowledge/sinks/index.js";
 import { knowledgeRelayOptions, relayPendingKnowledgeOutbox } from "../knowledge/outbox-service.js";
-import { invalidateModelRegistry, refreshGrokModels, refreshHermesModels, refreshPiModels } from "../shared/models.js";
+import { invalidateModelRegistry, refreshAiderModels, refreshGrokModels, refreshHermesModels, refreshPiModels } from "../shared/models.js";
 import { CLAUDE_SETTINGS_DIR, GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, JINN_HOME, ORG_DIR } from "../shared/paths.js";
 import { CodexEngine } from "../engines/codex.js";
 import { CodexInteractiveEngine } from "../engines/codex-interactive.js";
@@ -27,6 +27,8 @@ import { PiEngine } from "../engines/pi.js";
 import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { AntigravityEngine } from "../engines/antigravity.js";
+import { AiderEngine } from "../engines/aider.js";
+import { AiderInteractiveEngine } from "../engines/aider-interactive.js";
 import type { OrchestrationRuntime } from "../orchestration/runtime.js";
 import { initDb, clearAllPartialMessages, getInterruptedSessions, getSession, listSessions, recoverStaleQueueItems, recoverStaleSessions, updateSession } from "../sessions/registry.js";
 import { SessionManager } from "../sessions/manager.js";
@@ -156,6 +158,7 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
   let antigravityLifecycle: PtyLifecycleManager | undefined;
   let grokLifecycle: PtyLifecycleManager | undefined;
   let hermesLifecycle: PtyLifecycleManager | undefined;
+  let aiderLifecycle: PtyLifecycleManager | undefined;
 
   function refreshPtyPids(): void {
     try {
@@ -165,6 +168,7 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
         ...(antigravityLifecycle ? antigravityLifecycle.livePids() : []),
         ...(grokLifecycle ? grokLifecycle.livePids() : []),
         ...(hermesLifecycle ? hermesLifecycle.livePids() : []),
+        ...(aiderLifecycle ? aiderLifecycle.livePids() : []),
       ];
       updateGatewayPtyPids(GATEWAY_INFO_FILE, pids);
     } catch {
@@ -205,15 +209,22 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
     onCleanup: () => refreshPtyPids(),
   });
   const hermesInteractiveEngine = new HermesInteractiveEngine(hermesLifecycle);
+  aiderLifecycle = new PtyLifecycleManager({
+    maxLivePtys: claudeCfg.maxLivePtys!,
+    onAdopt: () => refreshPtyPids(),
+    onCleanup: () => refreshPtyPids(),
+  });
+  const aiderInteractiveEngine = new AiderInteractiveEngine(aiderLifecycle);
   const piEngine = new PiEngine();
   const kiroEngine = new KiroEngine({ configProvider: () => currentConfig });
   const ollamaEngine = new OllamaEngine();
   const kiloEngine = new KiloEngine();
-  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), hermes (headless + interactive PTY), pi, kiro (headless), ollama (headless), kilo (headless)");
+  logger.info("Engines initialized: claude (interactive PTY), codex (headless + interactive PTY), antigravity (interactive PTY), grok (headless + interactive PTY), hermes (headless + interactive PTY), pi, kiro (headless), ollama (headless), kilo (headless), aider (headless + interactive PTY)");
 
   const codexEngine = new CodexEngine();
   const grokEngine = new GrokEngine();
   const hermesEngine = new HermesAcpEngine();
+  const aiderEngine = new AiderEngine();
   const engines = new Map<string, Engine>();
   engines.set("claude", interactiveClaudeEngine);
   logger.info("Claude work turns: INTERACTIVE PTY (cc_entrypoint=cli, Max-subsidized)");
@@ -225,6 +236,7 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
   engines.set("kiro", kiroEngine);
   engines.set("ollama", ollamaEngine);
   engines.set("kilo", kiloEngine);
+  engines.set("aider", aiderEngine);
 
   const ptyViewEngines: Record<string, Engine & PtyViewEngine> = {
     claude: interactiveClaudeEngine,
@@ -232,6 +244,7 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
     antigravity: antigravityEngine,
     grok: grokInteractiveEngine,
     hermes: hermesInteractiveEngine,
+    aider: aiderInteractiveEngine,
   };
 
   const connectorNames: string[] = [];
@@ -287,7 +300,7 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
   };
 
   const refreshDynamicModels = (cfg: JinnConfig): void => {
-    void Promise.all([refreshPiModels(cfg), refreshGrokModels(cfg), refreshHermesModels(cfg)])
+    void Promise.all([refreshPiModels(cfg), refreshGrokModels(cfg), refreshHermesModels(cfg), refreshAiderModels(cfg)])
       .finally(() => emit("engines:updated", {}));
   };
   refreshDynamicModels(currentConfig);
@@ -304,6 +317,7 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
     antigravityEngine.killIdle();
     grokInteractiveEngine.killIdle();
     hermesInteractiveEngine.killIdle();
+    aiderInteractiveEngine.killIdle();
     orchestrationRuntime = refreshOrchestrationRuntimeForOrgReload(
       apiContext,
       currentConfig,
@@ -528,6 +542,8 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
       kiroEngine.killAll();
       ollamaEngine.killAll();
       kiloEngine.killAll();
+      aiderEngine.killAll();
+      aiderInteractiveEngine.killAll();
     },
     orchestrationRuntime,
     ptyWss: transports.ptyWss,

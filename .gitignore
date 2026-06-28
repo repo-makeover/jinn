@@ -24,3 +24,4 @@ logs/
 
 # Superpowers SDD scratch (briefs, reports, ledger, diffs)
 .superpowers/
+.aider*
