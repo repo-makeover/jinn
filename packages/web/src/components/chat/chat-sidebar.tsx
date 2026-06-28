@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { Search, X } from "lucide-react"
 import { api, type Employee, type SessionsResponse } from "@/lib/api"
-import { groupSessionsByDepartment } from "@/lib/rooms/grouping"
+import { groupSessionsByDepartment, roomSelectionId } from "@/lib/rooms/grouping"
 import type { DepartmentRoom, RoomEmployee, RoomSession } from "@/lib/rooms/types"
 import { useOrg } from "@/hooks/use-employees"
 import {
@@ -90,6 +90,7 @@ export function ChatSidebar({
   onEmployeeSessionsAvailable,
   onOrderComputed,
   onContactEmployee,
+  onSelectRoom,
 }: ChatSidebarProps) {
   const { settings } = useSettings()
   const portalName = settings.portalName ?? "Jinn"
@@ -127,9 +128,11 @@ export function ChatSidebar({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [olderExpanded, setOlderExpanded] = useState(false)
-  const [focusMode, setFocusMode] = useState<FocusMode>("all")
+  const [viewMode, setViewMode] = useState<ViewMode>("rooms")
+  const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set())
   const [loadingMore, setLoadingMore] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<SidebarDeleteTarget | null>(null)
+  const [archiveTarget, setArchiveTarget] = useState<ArchiveDialogTarget | null>(null)
   const deleteButtonRef = useRef<HTMLButtonElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [listScrolled, setListScrolled] = useState(false)
@@ -160,10 +163,11 @@ export function ChatSidebar({
     setPinnedSessions(getPinnedSessions())
     setCollapsed(loadCollapsedState())
     setExpanded(loadExpandedState())
+    setExpandedRooms(loadExpandedRooms())
     try {
       setOlderExpanded(localStorage.getItem(OLDER_EXPANDED_STORAGE_KEY) === "true")
       const stored = localStorage.getItem(FOCUS_MODE_STORAGE_KEY)
-      if (stored === "focused" || stored === "all") setFocusMode(stored)
+      if (stored === "rooms" || stored === "focused" || stored === "all") setViewMode(stored)
     } catch {}
   }, [])
 
@@ -182,11 +186,21 @@ export function ChatSidebar({
     if (searchOpen) searchInputRef.current?.focus()
   }, [searchOpen])
 
-  const selectFocusMode = useCallback((mode: FocusMode) => {
-    setFocusMode(mode)
+  const selectViewMode = useCallback((mode: ViewMode) => {
+    setViewMode(mode)
     try {
       localStorage.setItem(FOCUS_MODE_STORAGE_KEY, mode)
     } catch {}
+  }, [])
+
+  const toggleRoomExpanded = useCallback((roomId: string) => {
+    setExpandedRooms((prev) => {
+      const next = new Set(prev)
+      if (next.has(roomId)) next.delete(roomId)
+      else next.add(roomId)
+      saveExpandedRooms(next)
+      return next
+    })
   }, [])
 
   const toggleOlderExpanded = useCallback(() => {
@@ -258,6 +272,32 @@ export function ChatSidebar({
     })
   }, [])
 
+  // After the archive dialog confirms, drop the archived sessions' pins and, if
+  // the active session/room was archived, fall back to a fresh chat.
+  const handleArchiveComplete = useCallback((sessionIds: string[]) => {
+    setPinnedSessions((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      for (const id of sessionIds) {
+        if (next.delete(id)) changed = true
+      }
+      if (archiveTarget?.kind === "room" && archiveTarget.sourceRef) {
+        if (next.delete(`room:${archiveTarget.sourceRef}`)) changed = true
+      }
+      if (changed) savePinnedSessions(next)
+      return changed ? next : prev
+    })
+
+    startTransition(() => {
+      const archivedSelectedSession = !!selectedId && sessionIds.includes(selectedId)
+      const archivedSelectedRoom =
+        archiveTarget?.kind === "room" &&
+        !!archiveTarget.sourceRef &&
+        selectedId === roomSelectionId(archiveTarget.sourceRef)
+      if (archivedSelectedSession || archivedSelectedRoom) onNewChat()
+    })
+  }, [archiveTarget, selectedId, onNewChat])
+
   async function handleDeleteEmployee(employeeName: string, employeeSessions: Session[]) {
     const ids = employeeSessions.map((session) => session.id)
     try {
@@ -299,8 +339,16 @@ export function ChatSidebar({
     portalName,
     pinnedSessions,
     counts,
-    viewMode: focusMode,
-  }), [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, focusMode])
+    viewMode,
+  }), [sessions, search, searchResults, employeeData, portalSlug, portalName, pinnedSessions, counts, viewMode])
+
+  // Rooms view-mode: group the loaded non-cron sessions into department
+  // project-rooms (pure layer in lib/rooms). Computed only in "rooms" mode.
+  const rooms = useMemo<DepartmentRoom[]>(() => {
+    if (viewMode !== "rooms") return []
+    const employees = (orgData?.employees ?? []) as RoomEmployee[]
+    return groupSessionsByDepartment(sessions as unknown as RoomSession[], employees)
+  }, [viewMode, sessions, orgData])
 
   const cronCollapsed = collapsed.has("cron")
 
@@ -316,8 +364,8 @@ export function ChatSidebar({
   const allFlatIds = useMemo(() => buildSidebarOrder({
     searching,
     searchRows,
-    viewMode: focusMode,
-    rooms: [],
+    viewMode,
+    rooms,
     sortedCron,
     pinnedFlat,
     unpinnedFlat,
@@ -331,7 +379,8 @@ export function ChatSidebar({
   }), [
     searching,
     searchRows,
-    focusMode,
+    viewMode,
+    rooms,
     sortedCron,
     pinnedFlat,
     unpinnedFlat,
@@ -407,6 +456,7 @@ export function ChatSidebar({
     togglePin,
     handleDuplicate,
     setDeleteTarget,
+    setArchiveTarget,
     setRenamingSessionId,
     updateSessionTitle,
   }), [
@@ -430,9 +480,9 @@ export function ChatSidebar({
   const virtualItems = useMemo(() => buildVirtualItems({
     searching,
     searchRows,
-    viewMode: focusMode,
-    rooms: [],
-    expandedRooms: new Set(),
+    viewMode,
+    rooms,
+    expandedRooms,
     cronSessions,
     cronCollapsed,
     sortedCron,
@@ -450,7 +500,9 @@ export function ChatSidebar({
   }), [
     searching,
     searchRows,
-    focusMode,
+    viewMode,
+    rooms,
+    expandedRooms,
     cronSessions,
     cronCollapsed,
     sortedCron,
@@ -489,6 +541,8 @@ export function ChatSidebar({
           return 28
         case "flat":
           return 52
+        case "room-header":
+          return 56
         default:
           return 64
       }
@@ -554,15 +608,21 @@ export function ChatSidebar({
             aria-hidden={searchOpen}
           >
             <div className="flex items-center gap-0.5 rounded-full bg-[var(--fill-tertiary)] p-0.5 text-[11px] font-medium">
-              {(["focused", "all"] as const).map((mode) => (
+              {(["rooms", "focused", "all"] as const).map((mode) => (
                 <button
                   key={mode}
-                  onClick={() => selectFocusMode(mode)}
-                  aria-pressed={focusMode === mode}
-                  title={mode === "focused" ? "Only chats you started" : "Include automated & delegated sessions"}
+                  onClick={() => selectViewMode(mode)}
+                  aria-pressed={viewMode === mode}
+                  title={
+                    mode === "rooms"
+                      ? "Group chats into department rooms"
+                      : mode === "focused"
+                        ? "Only chats you started"
+                        : "Include automated & delegated sessions"
+                  }
                   className={cn(
                     "rounded-full px-2.5 py-1 capitalize transition-all",
-                    focusMode === mode
+                    viewMode === mode
                       ? "bg-[var(--bg-secondary)] text-foreground shadow-[var(--shadow-subtle)]"
                       : "text-muted-foreground hover:text-foreground",
                   )}
@@ -623,11 +683,15 @@ export function ChatSidebar({
       <SidebarListSurface
         loading={loading}
         search={search}
-        focusMode={focusMode}
+        viewMode={viewMode}
         hiddenAutomated={hiddenAutomated}
-        selectFocusMode={selectFocusMode}
+        selectViewMode={selectViewMode}
         virtualItems={virtualItems}
         sharedRowProps={sharedRowProps}
+        selectedId={selectedId}
+        expandedRooms={expandedRooms}
+        toggleRoomExpanded={toggleRoomExpanded}
+        onSelectRoom={onSelectRoom}
         expanded={expanded}
         handleEmployeeClick={handleEmployeeClick}
         handleMarkAllRead={handleMarkAllRead}
@@ -691,6 +755,12 @@ export function ChatSidebar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ArchiveDialog
+        target={archiveTarget}
+        onOpenChange={(open) => { if (!open) setArchiveTarget(null) }}
+        onArchived={handleArchiveComplete}
+      />
 
       <style>{`
         @keyframes sidebar-pulse {
