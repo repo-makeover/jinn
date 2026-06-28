@@ -7,6 +7,7 @@ import { api } from "@/lib/api"
 import type { AuthState, PairedDevice, PairingCode } from "@/lib/auth"
 import { ACCENT_PRESETS } from "./settings-constants"
 import { Section } from "./settings-fields"
+import { officeAvatarPath } from "@/lib/office-avatar-pool"
 
 const LANGUAGE_OPTIONS = [
   "English",
@@ -171,8 +172,17 @@ export function CooEmojiSection({
           <button
             onClick={() => setShowEmojiPicker(!showEmojiPicker)}
             className="text-4xl cursor-pointer bg-transparent border-none p-0"
+            style={{ width: 48, height: 48, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
           >
-            {portalEmoji ?? "\u{1F9DE}"}
+            {portalEmoji?.startsWith("office:") ? (
+              <img
+                src={officeAvatarPath(portalEmoji.slice("office:".length)) ?? ""}
+                alt={portalEmoji}
+                width={40}
+                height={40}
+                style={{ objectFit: "contain" }}
+              />
+            ) : (portalEmoji ?? "\u{1F9DE}")}
           </button>
           <div>
             <div className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
@@ -184,7 +194,7 @@ export function CooEmojiSection({
           </div>
           {showEmojiPicker && (
             <EmojiPicker
-              current={portalEmoji ?? "\u{1F9DE}"}
+              current={portalEmoji?.startsWith("office:") ? "" : (portalEmoji ?? "\u{1F9DE}")}
               onSelect={(emoji) => {
                 setPortalEmoji(emoji)
                 setShowEmojiPicker(false)
