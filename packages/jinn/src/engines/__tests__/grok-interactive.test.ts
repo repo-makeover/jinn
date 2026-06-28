@@ -39,13 +39,20 @@ function makeFakePty(): FakePty {
   return p;
 }
 
-vi.mock("node-pty", () => ({
-  spawn: vi.fn((bin: string, args: string[], opts: any) => {
-    const proc = makeFakePty();
-    spawnCalls.push({ bin, args, opts, proc });
-    return proc as unknown as import("node-pty").IPty;
-  }),
-}));
+// grok-interactive now spawns via the lazy pty-stream.spawnPty loader (so a
+// node-pty ABI failure can't crash boot). Mock that path; keep pty-stream's
+// real createPtyHandle/setCapped/PtyStreamManager.
+vi.mock("../pty-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pty-stream.js")>();
+  return {
+    ...actual,
+    spawnPty: vi.fn((bin: string, args: string[], opts: any) => {
+      const proc = makeFakePty();
+      spawnCalls.push({ bin, args, opts, proc });
+      return proc as unknown as import("node-pty").IPty;
+    }),
+  };
+});
 
 const osMockState = vi.hoisted(() => ({ home: "" }));
 vi.mock("node:os", async (importOriginal) => {

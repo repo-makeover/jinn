@@ -1,11 +1,11 @@
-import * as pty from "node-pty";
+import type * as pty from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { buildEngineEnv } from "../shared/engine-env.js";
 import { PtyLifecycleManager } from "./pty-lifecycle.js";
-import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
+import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
 
 // ── Pure helpers (exported for testing) ──────────────────────────────────────
@@ -121,7 +121,7 @@ export class HermesInteractiveEngine implements InterruptibleEngine, PtyViewEngi
     const args = buildHermesInteractiveArgs();
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`HermesInteractiveEngine spawning ${bin} (geom: ${geom ? `${geom.cols}x${geom.rows}` : "default"})`);
-    const proc = pty.spawn(bin, args, {
+    const proc = spawnPty(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,

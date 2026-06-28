@@ -1,8 +1,9 @@
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { SESSIONS_DB } from '../../shared/paths.js';
 import { logger } from '../../shared/logger.js';
+import { isSqliteCorruptionError, quarantineCorruptDb } from '../../shared/sqlite-corruption.js';
 import type { JsonObject, ReplyContext, Session } from '../../shared/types.js';
 import { installBaseSchema, installPostMigrationSchema } from './schema.js';
 import { migrateApprovalsSchema, migrateExternalOutboxSchema, migrateFilesSchema, migrateMessagesSchema, migrateSessionsSchema } from './migrations.js';
@@ -66,23 +67,37 @@ export function setMeta(database: Database.Database, key: string, value: string)
     .run(key, value);
 }
 
+function openAndInitDb(): Database.Database {
+  const database = new Database(SESSIONS_DB, { timeout: 5000 });
+  database.pragma('journal_mode = WAL');
+  installBaseSchema(database);
+  migrateMessagesSchema(database);
+  migrateFtsSchema(database);
+  try {
+    backfillFtsSync(database);
+  } catch (err) {
+    disableFtsForProcess(database, err);
+  }
+  migrateSessionsSchema(database);
+  installPostMigrationSchema(database);
+  migrateFilesSchema(database);
+  migrateApprovalsSchema(database);
+  migrateExternalOutboxSchema(database);
+  return database;
+}
+
 export function initDb(): Database.Database {
   if (db) return db;
   mkdirSync(path.dirname(SESSIONS_DB), { recursive: true });
-  db = new Database(SESSIONS_DB, { timeout: 5000 });
-  db.pragma('journal_mode = WAL');
-  installBaseSchema(db);
-  migrateMessagesSchema(db);
-  migrateFtsSchema(db);
   try {
-    backfillFtsSync(db);
+    db = openAndInitDb();
   } catch (err) {
-    disableFtsForProcess(db, err);
+    // A corrupt registry.db must not be a fatal, unrecoverable boot failure
+    // (the orchestration store already self-heals this way). Quarantine the bad
+    // file and start fresh. Other errors (permissions, disk) still propagate.
+    if (!isSqliteCorruptionError(err) || !existsSync(SESSIONS_DB)) throw err;
+    quarantineCorruptDb(SESSIONS_DB);
+    db = openAndInitDb();
   }
-  migrateSessionsSchema(db);
-  installPostMigrationSchema(db);
-  migrateFilesSchema(db);
-  migrateApprovalsSchema(db);
-  migrateExternalOutboxSchema(db);
   return db;
 }

@@ -10,6 +10,7 @@ import { logger } from "../shared/logger.js";
 import type { JinnConfig } from "../shared/types.js";
 import { startGateway } from "./server.js";
 import { loadConfig } from "../shared/config.js";
+import { installProcessErrorHandlers } from "./process-guards.js";
 
 const MIN_NODE_MAJOR = 24;
 
@@ -100,6 +101,9 @@ function fnmCandidates(home: string): string[] {
 }
 
 export async function startForeground(config: JinnConfig): Promise<void> {
+  // Covers the interactive `jinn start` and the systemd unit (both run this path,
+  // not daemon-entry.ts) — without this, one unhandled rejection kills the org.
+  installProcessErrorHandlers();
   const cleanup = await startGateway(config);
 
   let shuttingDown = false;

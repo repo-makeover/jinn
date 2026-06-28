@@ -4,20 +4,12 @@
  */
 import { loadConfig } from "../shared/config.js";
 import { startForeground } from "./lifecycle.js";
-import { logger } from "../shared/logger.js";
+import { installProcessErrorHandlers } from "./process-guards.js";
 
-// Safety-net: log uncaught exceptions / unhandled rejections instead of letting them
-// silently kill the daemon process (stdio is ignored in daemon mode, so these would
-// otherwise disappear with no trace).
-process.on("uncaughtException", (err) => {
-  logger.error(`Uncaught exception: ${err?.stack ?? err}`);
-  // Do NOT re-throw or exit — keep the daemon alive.
-});
-
-process.on("unhandledRejection", (reason) => {
-  const msg = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
-  logger.error(`Unhandled promise rejection: ${msg}`);
-});
+// Safety-net for the daemon child (stdio is ignored here, so an unhandled
+// error would otherwise vanish). startForeground installs these too, covering
+// the foreground `jinn start` and systemd paths.
+installProcessErrorHandlers();
 
 const config = loadConfig();
 startForeground(config).catch((err) => {

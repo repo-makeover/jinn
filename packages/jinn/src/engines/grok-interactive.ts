@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as pty from "node-pty";
+import type * as pty from "node-pty";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult } from "../shared/types.js";
 import { buildEngineEnv } from "../shared/engine-env.js";
 import { logger } from "../shared/logger.js";
@@ -8,7 +8,7 @@ import { JINN_HOME } from "../shared/paths.js";
 import { resolveBin } from "../shared/resolve-bin.js";
 import { neutralizeForPaste } from "../shared/skill-commands.js";
 import { PtyLifecycleManager, type PtyHandle } from "./pty-lifecycle.js";
-import { PtyStreamManager, createPtyHandle, setCapped } from "./pty-stream.js";
+import { PtyStreamManager, createPtyHandle, setCapped, spawnPty } from "./pty-stream.js";
 import { tailTranscriptLines, type TranscriptTailer } from "./transcript-tailer.js";
 import type { PtyControlEvent, PtyIdleSpawnOpts, PtyViewEngine } from "./pty-view-engine.js";
 import {
@@ -369,7 +369,7 @@ export class GrokInteractiveEngine implements InterruptibleEngine, PtyViewEngine
     const args = buildGrokInteractiveArgs(opts, grokSessionId, systemPromptOverride);
     const geom = this.lastGeom.get(jinnSessionId);
     logger.info(`GrokInteractiveEngine spawning ${bin} (session: ${grokSessionId ?? "new"}, geom: ${geom ? `${geom.cols}x${geom.rows}` : "default"})`);
-    const proc = pty.spawn(bin, args, {
+    const proc = spawnPty(bin, args, {
       name: "xterm-256color",
       cols: geom?.cols ?? 120,
       rows: geom?.rows ?? 40,
