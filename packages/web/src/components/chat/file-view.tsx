@@ -116,13 +116,13 @@ export function FileView({
   const [loading, setLoading] = useState(true);
 
   // Resolve whether to use a dark or light highlighter theme. ThemeProvider
-  // sets data-theme on <html>; "light" is the only light variant.
+  // sets data-theme on <html>; only "dark" uses the dark highlighter.
   const isDark = useMemo(() => {
     if (typeof document !== "undefined") {
       const attr = document.documentElement.getAttribute("data-theme");
-      if (attr) return attr !== "light";
+      if (attr) return attr === "dark";
     }
-    return theme !== "light";
+    return theme === "dark";
   }, [theme]);
 
   useEffect(() => {
