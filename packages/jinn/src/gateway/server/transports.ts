@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
-import { authenticateGatewayRequest, authRequiredForRequest, isAuthenticatedRequest } from "../auth.js";
+import { authenticateGatewayRequest, authRequiredForRequest, isAuthenticatedRequest, isLoopbackHost } from "../auth.js";
 import { logger } from "../../shared/logger.js";
 import type { ApiContext } from "../api.js";
 import { attachPtyWebSocket } from "../pty-ws.js";
@@ -11,6 +11,11 @@ import { startWsHeartbeat, trackHeartbeat } from "../ws-heartbeat.js";
 import type { Engine } from "../../shared/types.js";
 import type { PtyViewEngine } from "../../engines/pty-view-engine.js";
 import { serveStatic, setCorsHeaders } from "./http-static.js";
+import { isBlockedCrossSiteWrite, isHostAllowed, isPtyUpgradeAllowed } from "./request-guards.js";
+
+function headerStr(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 interface GatewayTransportDeps {
   apiContext: ApiContext;
@@ -43,14 +48,30 @@ export function createGatewayTransports({
   webDir,
   wsClients,
 }: GatewayTransportDeps) {
+  const boundLoopback = isLoopbackHost(host);
   const server = http.createServer(async (req, res) => {
     const url = req.url || "/";
     const corsAllowed = setCorsHeaders(req, res);
 
-    if (url.startsWith("/api/") && !corsAllowed) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Origin not allowed" }));
-      return;
+    if (url.startsWith("/api/")) {
+      // DNS-rebinding guard before anything else: refuse non-loopback Host when
+      // bound to loopback.
+      if (!isHostAllowed(boundLoopback, req.headers.host)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Host not allowed" }));
+        return;
+      }
+      if (!corsAllowed) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      // Defense-in-depth CSRF guard on state-changing requests.
+      if (isBlockedCrossSiteWrite(req.method, headerStr(req.headers["sec-fetch-site"]))) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Cross-site request blocked" }));
+        return;
+      }
     }
 
     if (req.method === "OPTIONS") {
@@ -122,6 +143,12 @@ export function createGatewayTransports({
   server.on("upgrade", (req, socket, head) => {
     const reqUrl = req.url || "";
     const pathname = reqUrl.split("?")[0];
+    // DNS-rebinding guard for WebSocket upgrades (they bypass CORS entirely).
+    if (!isHostAllowed(boundLoopback, req.headers.host)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     if (authRequiredNow() && authRequiredForRequest("GET", pathname)) {
       const auth = authenticateGatewayRequest(req, gatewayAuthToken, jinnHome);
       if (!auth.ok) {
@@ -140,12 +167,36 @@ export function createGatewayTransports({
       });
       return;
     }
-    const ptyMatch = reqUrl.split("?")[0].match(/^\/ws\/pty\/([^/]+)$/);
+    const ptyMatch = pathname.match(/^\/ws\/pty\/([^/]+)$/);
     if (ptyMatch) {
       let sessionId: string;
       try {
         sessionId = decodeURIComponent(ptyMatch[1]);
       } catch {
+        socket.destroy();
+        return;
+      }
+      // WebSockets are not subject to CORS, so a malicious page could otherwise
+      // open a live terminal to the loopback gateway. Require a same-origin
+      // Origin and a valid, session-bound PTY access token (minted at
+      // POST /api/sessions/:id/pty-token with the gateway api token as secret).
+      let ptyToken = "";
+      try {
+        ptyToken = new URL(reqUrl, "http://localhost").searchParams.get("token") || "";
+      } catch {
+        ptyToken = "";
+      }
+      if (
+        !isPtyUpgradeAllowed({
+          boundLoopback,
+          reqHost: req.headers.host,
+          origin: headerStr(req.headers.origin),
+          sessionId,
+          token: ptyToken,
+          secret: gatewayAuthToken,
+        })
+      ) {
+        socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
         socket.destroy();
         return;
       }

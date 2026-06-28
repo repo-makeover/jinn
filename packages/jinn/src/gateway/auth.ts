@@ -165,9 +165,16 @@ export function shouldRequireGatewayAuth(config: Pick<JinnConfig, "gateway">): b
     authRequired?: boolean;
     authDisabled?: boolean;
   };
+  // Explicit opt-out only. The gateway control plane can spawn agents, read
+  // files, and drive live terminals, so any client that reaches the listener —
+  // including another local process or a malicious web page that resolves to the
+  // loopback port — must present a credential. Auth is therefore required by
+  // default on every binding (loopback included) and is disabled only when the
+  // operator explicitly sets gateway.authDisabled. (validateGatewayExposure still
+  // refuses authDisabled on a network host unless insecureAllowUnauthenticatedNetwork
+  // is also set.)
   if (gateway.authDisabled === true) return false;
-  if (gateway.authRequired === true) return true;
-  return isNetworkHost(gateway.host);
+  return true;
 }
 
 export function validateGatewayExposure(config: Pick<JinnConfig, "gateway">): { ok: true } | { ok: false; error: string } {

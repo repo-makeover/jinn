@@ -56,15 +56,19 @@ describe("gateway auth", () => {
     expect(authRequiredForRequest("GET", "/api/internal/hook")).toBe(true);
   });
 
-  it("requires auth for remote/network exposure but not default loopback unless explicitly enabled", () => {
+  it("requires auth on every binding by default, including loopback, unless explicitly disabled", () => {
     expect(isLoopbackHost("localhost:7777")).toBe(true);
     expect(isLoopbackHost("127.0.0.1:7777")).toBe(true);
     expect(isLoopbackHost("[::1]:7777")).toBe(true);
     expect(isLoopbackHost("100.95.1.62:7777")).toBe(false);
-    expect(shouldRequireGatewayAuth({ gateway: { host: "127.0.0.1" } } as any)).toBe(false);
+    // Default loopback now requires auth (closes the unauthenticated local
+    // control plane: any local process / malicious web page could otherwise drive it).
+    expect(shouldRequireGatewayAuth({ gateway: { host: "127.0.0.1" } } as any)).toBe(true);
     expect(shouldRequireGatewayAuth({ gateway: { host: "0.0.0.0" } } as any)).toBe(true);
     expect(shouldRequireGatewayAuth({ gateway: { host: "192.168.1.10" } } as any)).toBe(true);
     expect(shouldRequireGatewayAuth({ gateway: { host: "127.0.0.1", authRequired: true } } as any)).toBe(true);
+    // Explicit opt-out is the only way to run without auth.
+    expect(shouldRequireGatewayAuth({ gateway: { host: "127.0.0.1", authDisabled: true } } as any)).toBe(false);
   });
 
   it("refuses unauthenticated network binds unless the explicit insecure escape hatch is set", () => {
