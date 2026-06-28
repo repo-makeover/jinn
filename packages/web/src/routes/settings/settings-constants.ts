@@ -46,6 +46,7 @@ export interface Config {
       autoIngest?: boolean
       unreadOnly?: boolean
       maxMessagesPerPoll?: number
+      allowFrom?: string[]
     }>
   }
   workspaces?: {

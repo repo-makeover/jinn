@@ -51,6 +51,9 @@ describe("EmailService", () => {
         password: "secret",
         imapHost: "imap.example.com",
         autoIngest: true,
+        // Auto-ingest now requires an allowlisted sender (C5). The fixture mail
+        // is from support@example.com.
+        allowFrom: ["example.com"],
       }],
     }, { client, onAutoIngest });
 

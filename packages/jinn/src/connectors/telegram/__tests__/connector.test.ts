@@ -38,8 +38,10 @@ describe("TelegramConnector", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Connectors now default-deny: an allowFrom is required for messages to route.
     connector = new TelegramConnector({
       botToken: "123456:ABC-DEF",
+      allowFrom: [67890],
     });
   });
 
