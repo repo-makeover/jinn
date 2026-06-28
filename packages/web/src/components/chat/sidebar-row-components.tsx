@@ -79,6 +79,7 @@ export const EmployeeRow = React.memo(function EmployeeRow({
   handleMarkAllRead,
   handleEmployeeClick,
   setDeleteTarget,
+  setArchiveTarget,
   onLoadMore,
   loadingMore,
   setRenamingSessionId,
@@ -116,6 +117,7 @@ export const EmployeeRow = React.memo(function EmployeeRow({
     togglePin,
     handleDuplicate,
     setDeleteTarget,
+    setArchiveTarget,
     setRenamingSessionId,
     updateSessionTitle,
   }

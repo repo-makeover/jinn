@@ -3,6 +3,8 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { Search, X } from "lucide-react"
 import { api, type Employee, type SessionsResponse } from "@/lib/api"
+import { groupSessionsByDepartment } from "@/lib/rooms/grouping"
+import type { DepartmentRoom, RoomEmployee, RoomSession } from "@/lib/rooms/types"
 import { useOrg } from "@/hooks/use-employees"
 import {
   useBulkDeleteSessions,
@@ -25,16 +27,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { ArchiveDialog, type ArchiveDialogTarget } from "./archive-dialog"
 import { SidebarListSurface } from "./sidebar-list-surface"
 import type { SidebarDeleteTarget, SidebarSharedRowProps } from "./sidebar-row-components"
 import {
   getPinnedSessions,
   getReadSessions,
   loadCollapsedState,
+  loadExpandedRooms,
   loadExpandedState,
   markAllReadForEmployee,
   markSessionRead,
   saveCollapsedState,
+  saveExpandedRooms,
   saveExpandedState,
   savePinnedSessions,
 } from "./sidebar-storage"
@@ -68,9 +73,9 @@ interface ChatSidebarProps {
   onEmployeeSessionsAvailable?: (sessions: Session[]) => void
   onOrderComputed?: (order: SidebarOrder) => void
   onContactEmployee?: (name: string) => void
+  /** Open a department project-room's merged timeline (Rooms view-mode). */
+  onSelectRoom?: (roomId: string) => void
 }
-
-type FocusMode = Extract<ViewMode, "focused" | "all">
 
 const OLDER_EXPANDED_STORAGE_KEY = "jinn-sidebar-older-expanded"
 const FOCUS_MODE_STORAGE_KEY = "jinn-sidebar-focus-mode"

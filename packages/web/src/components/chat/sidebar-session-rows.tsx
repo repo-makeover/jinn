@@ -23,6 +23,7 @@ import {
   getStatusDot,
 } from "./sidebar-session-helpers"
 import type { Session } from "./sidebar-types"
+import type { ArchiveDialogTarget } from "./archive-dialog"
 
 export interface SidebarDeleteTarget {
   type: "session" | "employee"
@@ -45,6 +46,8 @@ export interface SidebarSharedRowProps {
   setDeleteTarget: (target: SidebarDeleteTarget | null) => void
   setRenamingSessionId: (id: string | null) => void
   updateSessionTitle: (id: string, title: string) => void
+  /** Open the archive dialog for a target; omitted when archiving is unwired. */
+  setArchiveTarget?: (target: ArchiveDialogTarget | null) => void
 }
 
 export function StatusDot({
@@ -78,6 +81,7 @@ function SessionActionsMenu({
   onRename,
   onTogglePin,
   onDuplicate,
+  onArchive,
   onDelete,
   label,
 }: {
@@ -85,6 +89,7 @@ function SessionActionsMenu({
   onRename: () => void
   onTogglePin: () => void
   onDuplicate: () => void
+  onArchive?: () => void
   onDelete: () => void
   label: string
 }) {
@@ -104,6 +109,7 @@ function SessionActionsMenu({
           <DropdownMenuItem onClick={onRename}>Rename</DropdownMenuItem>
           <DropdownMenuItem onClick={onTogglePin}>{pinned ? "Unpin" : "Pin"}</DropdownMenuItem>
           <DropdownMenuItem onClick={onDuplicate}>Duplicate...</DropdownMenuItem>
+          {onArchive ? <DropdownMenuItem onClick={onArchive}>Archive...</DropdownMenuItem> : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={onDelete}>
             Delete session
@@ -119,6 +125,7 @@ function SessionContextMenu({
   onRename,
   onTogglePin,
   onDuplicate,
+  onArchive,
   onDelete,
   children,
 }: {
@@ -126,6 +133,7 @@ function SessionContextMenu({
   onRename: () => void
   onTogglePin: () => void
   onDuplicate: () => void
+  onArchive?: () => void
   onDelete: () => void
   children: React.ReactNode
 }) {
@@ -136,6 +144,7 @@ function SessionContextMenu({
         <ContextMenuItem onClick={onRename}>Rename</ContextMenuItem>
         <ContextMenuItem onClick={onTogglePin}>{pinned ? "Unpin" : "Pin"}</ContextMenuItem>
         <ContextMenuItem onClick={onDuplicate}>Duplicate...</ContextMenuItem>
+        {onArchive ? <ContextMenuItem onClick={onArchive}>Archive...</ContextMenuItem> : null}
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={onDelete}>
           <span className="flex-1">Delete session</span>
@@ -165,6 +174,7 @@ export const SessionRow = React.memo(function SessionRow({
   togglePin,
   handleDuplicate,
   setDeleteTarget,
+  setArchiveTarget,
   setRenamingSessionId,
   updateSessionTitle,
 }: SessionRowProps) {
@@ -183,6 +193,9 @@ export const SessionRow = React.memo(function SessionRow({
     },
     onTogglePin: () => togglePin(session.id),
     onDuplicate: () => handleDuplicate(session.id),
+    onArchive: setArchiveTarget
+      ? () => setArchiveTarget({ kind: "chat", title: cleanPreview(sessionTitle) || "Untitled", sessionIds: [session.id], sourceRef: session.id, sessions: [session] })
+      : undefined,
     onDelete: () => setDeleteTarget({ type: "session", id: session.id, label: cleanPreview(sessionTitle) || "Untitled" }),
   }
 
@@ -295,6 +308,7 @@ export const FlatSessionRow = React.memo(function FlatSessionRow({
   togglePin,
   handleDuplicate,
   setDeleteTarget,
+  setArchiveTarget,
   setRenamingSessionId,
   updateSessionTitle,
 }: FlatSessionRowProps) {
@@ -315,6 +329,9 @@ export const FlatSessionRow = React.memo(function FlatSessionRow({
     },
     onTogglePin: () => togglePin(session.id),
     onDuplicate: () => handleDuplicate(session.id),
+    onArchive: setArchiveTarget
+      ? () => setArchiveTarget({ kind: "chat", title: displayTitle, sessionIds: [session.id], sourceRef: session.id, sessions: [session] })
+      : undefined,
     onDelete: () => setDeleteTarget({ type: "session", id: session.id, label: displayTitle }),
   }
 

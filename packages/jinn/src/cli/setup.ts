@@ -91,7 +91,9 @@ function runVersion(bin: string): string | null {
 
 function ensureDir(dir: string): boolean {
   if (fs.existsSync(dir)) return false;
-  fs.mkdirSync(dir, { recursive: true });
+  // 0o700: ~/.jinn holds tokens, connector creds, config, sessions, and other
+  // operator state — it must not be traversable by other local users.
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return true;
 }
 

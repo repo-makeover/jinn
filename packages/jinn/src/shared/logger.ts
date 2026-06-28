@@ -27,7 +27,11 @@ export function configureLogger(opts: {
 
 function log(level: LogLevel, message: string) {
   if (LEVELS[level] < LEVELS[minLevel]) return;
-  const safeMessage = redactText(message);
+  // Redact secrets, then neutralize log-injection: untrusted content (chat/email
+  // text) with embedded newlines must not forge new "TIMESTAMP [LEVEL] ..." lines.
+  // Continuation lines are tab-indented so they can never start at column 0 like a
+  // real entry, while multi-line content (stack traces) stays readable.
+  const safeMessage = redactText(message).replace(/\r\n?/g, "\n").replace(/\n/g, "\n\t");
   const line = `${new Date().toISOString()} [${level.toUpperCase()}] ${safeMessage}`;
   if (writeToStdout) console.log(line);
   if (logStream) logStream.write(line + "\n");

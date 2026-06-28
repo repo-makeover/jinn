@@ -51,9 +51,10 @@ async function persistAttachment(messageId: string, attachment: {
   const artifactId = crypto.randomUUID();
   const filename = sanitizeUploadFilename(attachment.filename);
   const dir = path.join(FILES_DIR, artifactId);
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const filePath = path.join(dir, filename);
-  fs.writeFileSync(filePath, attachment.content);
+  // 0o600: email attachments may carry PII; not world-readable on a shared host.
+  fs.writeFileSync(filePath, attachment.content, { mode: 0o600 });
   insertFile({
     id: artifactId,
     filename,

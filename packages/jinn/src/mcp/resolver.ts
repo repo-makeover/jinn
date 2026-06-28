@@ -181,9 +181,11 @@ export function codexMcpConfigFlagsFromFile(configPath: string | undefined): str
  */
 export function writeMcpConfigFile(config: ResolvedMcpConfig, sessionId: string): string {
   const tmpDir = path.join(JINN_HOME, "tmp", "mcp");
-  fs.mkdirSync(tmpDir, { recursive: true });
+  fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
   const filePath = path.join(tmpDir, `${sessionId}.json`);
-  safeWriteFile(filePath, JSON.stringify(config, null, 2)); // atomic + fsync (resolved MCP config read by the engine)
+  // 0o600: the resolved MCP config contains substituted secrets (API keys, server
+  // env) — must not be world-readable on a multi-user host.
+  safeWriteFile(filePath, JSON.stringify(config, null, 2), { mode: 0o600 }); // atomic + fsync
   return filePath;
 }
 
