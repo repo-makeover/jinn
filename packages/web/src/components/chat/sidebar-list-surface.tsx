@@ -1,7 +1,10 @@
 import React from "react"
 import type { Employee } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { ChevronDown, Clock3 } from "lucide-react"
+import { ChevronDown, Clock3, Layers } from "lucide-react"
+import { formatTime } from "./sidebar-session-helpers"
+import { roomSelectionId } from "@/lib/rooms/grouping"
+import type { ViewMode } from "./sidebar-types"
 import {
   ContactRow,
   EmployeeRow,
@@ -18,11 +21,15 @@ import type { VirtualItem } from "./sidebar-view-model"
 interface SidebarListSurfaceProps {
   loading: boolean
   search: string
-  focusMode: "focused" | "all"
+  viewMode: ViewMode
   hiddenAutomated: number
-  selectFocusMode: (mode: "focused" | "all") => void
+  selectViewMode: (mode: ViewMode) => void
   virtualItems: VirtualItem[]
   sharedRowProps: SidebarSharedRowProps
+  selectedId: string | null
+  expandedRooms: Set<string>
+  toggleRoomExpanded: (roomId: string) => void
+  onSelectRoom?: (roomId: string) => void
   expanded: Record<string, boolean>
   handleEmployeeClick: SidebarEmployeeRowProps["handleEmployeeClick"]
   handleMarkAllRead: SidebarEmployeeRowProps["handleMarkAllRead"]
@@ -48,11 +55,15 @@ interface SidebarListSurfaceProps {
 export function SidebarListSurface({
   loading,
   search,
-  focusMode,
+  viewMode,
   hiddenAutomated,
-  selectFocusMode,
+  selectViewMode,
   virtualItems,
   sharedRowProps,
+  selectedId,
+  expandedRooms,
+  toggleRoomExpanded,
+  onSelectRoom,
   expanded,
   handleEmployeeClick,
   handleMarkAllRead,
@@ -155,8 +166,59 @@ export function SidebarListSurface({
             {loadingMore.has("__cron__") ? "Loading…" : `+${cronTotal - cronSessionsLength} more`}
           </button>
         )
-      case "room-header":
-        return null
+      case "room-header": {
+        const room = item.room
+        const isActive = selectedId === roomSelectionId(room.id)
+        const isExpanded = expandedRooms.has(room.id)
+        const lastActive = formatTime(room.lastActivity)
+        return (
+          <div
+            className={cn(
+              "relative flex w-full items-center border-l-2 transition-colors",
+              isActive
+                ? "border-l-[var(--accent)] bg-[var(--fill-secondary)]"
+                : "border-l-transparent hover:bg-[var(--fill-tertiary)]",
+            )}
+          >
+            <button
+              onClick={() => toggleRoomExpanded(room.id)}
+              aria-label={isExpanded ? `Collapse ${room.name} agents` : `Show ${room.name} agents`}
+              aria-expanded={isExpanded}
+              className="ml-1 flex size-7 shrink-0 items-center justify-center rounded text-[var(--text-quaternary)] transition-colors hover:text-[var(--text-secondary)]"
+            >
+              <ChevronDown className={cn("size-3.5 transition-transform", !isExpanded && "-rotate-90")} />
+            </button>
+            <button
+              onClick={() => onSelectRoom?.(room.id)}
+              title={`Open ${room.name} room`}
+              aria-current={isActive ? "true" : undefined}
+              className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 text-left"
+            >
+              <Layers className="size-4 shrink-0 text-[var(--text-tertiary)]" />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "truncate text-[13px] font-semibold tracking-[-0.2px]",
+                      isActive ? "text-foreground" : "text-[var(--text-secondary)]",
+                    )}
+                  >
+                    {room.name}
+                  </span>
+                  {room.status === "active" && (
+                    <span className="size-1.5 shrink-0 rounded-full bg-[var(--accent)]" aria-label="active" />
+                  )}
+                </span>
+                <span className="block truncate text-[11px] text-[var(--text-tertiary)]">
+                  {room.participantCount} {room.participantCount === 1 ? "agent" : "agents"}
+                  {lastActive ? ` · ${lastActive}` : ""}
+                </span>
+              </span>
+              <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-quaternary)]">{room.sessionCount}</span>
+            </button>
+          </div>
+        )
+      }
       default:
         return null
     }
@@ -166,10 +228,10 @@ export function SidebarListSurface({
     <div className="px-4 py-8 text-center text-xs text-[var(--text-quaternary)]">
       {search.trim() ? (
         "No matching chats"
-      ) : focusMode === "focused" && hiddenAutomated > 0 ? (
+      ) : viewMode === "focused" && hiddenAutomated > 0 ? (
         <>
           No personal chats here.{" "}
-          <button onClick={() => selectFocusMode("all")} className="text-[var(--accent)] hover:underline">
+          <button onClick={() => selectViewMode("all")} className="text-[var(--accent)] hover:underline">
             View all ({hiddenAutomated} automated)
           </button>
         </>

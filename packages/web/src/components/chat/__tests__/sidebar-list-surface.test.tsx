@@ -41,11 +41,15 @@ function renderSurface(props?: Partial<React.ComponentProps<typeof SidebarListSu
     <SidebarListSurface
       loading={false}
       search=""
-      focusMode="all"
+      viewMode="all"
       hiddenAutomated={0}
-      selectFocusMode={vi.fn()}
+      selectViewMode={vi.fn()}
       virtualItems={[]}
       sharedRowProps={makeSharedRowProps()}
+      selectedId={null}
+      expandedRooms={new Set()}
+      toggleRoomExpanded={vi.fn()}
+      onSelectRoom={vi.fn()}
       expanded={{}}
       handleEmployeeClick={vi.fn()}
       handleMarkAllRead={vi.fn()}
@@ -77,15 +81,15 @@ describe("SidebarListSurface", () => {
   })
 
   it("renders the focused empty state CTA", () => {
-    const selectFocusMode = vi.fn()
+    const selectViewMode = vi.fn()
     renderSurface({
-      focusMode: "focused",
+      viewMode: "focused",
       hiddenAutomated: 3,
-      selectFocusMode,
+      selectViewMode,
     })
 
     fireEvent.click(screen.getByText("View all (3 automated)"))
-    expect(selectFocusMode).toHaveBeenCalledWith("all")
+    expect(selectViewMode).toHaveBeenCalledWith("all")
   })
 
   it("renders the scheduled section and load-more button wiring", () => {
@@ -129,6 +133,41 @@ describe("SidebarListSurface", () => {
     expect(screen.getByText("Today")).toBeTruthy()
     expect(screen.getByText("flat:Jinn")).toBeTruthy()
     expect(screen.getByText("session:cron-1")).toBeTruthy()
+  })
+
+  it("renders a department room header and wires expand + open", () => {
+    const toggleRoomExpanded = vi.fn()
+    const onSelectRoom = vi.fn()
+    const items: VirtualItem[] = [
+      {
+        kind: "room-header",
+        room: {
+          id: "platform",
+          name: "Platform",
+          departmentId: "platform",
+          isUnassigned: false,
+          sessions: [],
+          participants: [],
+          sessionCount: 4,
+          participantCount: 2,
+          lastActivity: undefined,
+          runningCount: 1,
+          status: "active",
+        },
+      },
+    ]
+
+    renderSurface({ virtualItems: items, toggleRoomExpanded, onSelectRoom })
+
+    expect(screen.getByText("Platform")).toBeTruthy()
+    expect(screen.getByText("2 agents")).toBeTruthy()
+    expect(screen.getByText("4")).toBeTruthy()
+
+    fireEvent.click(screen.getByText("Platform"))
+    expect(onSelectRoom).toHaveBeenCalledWith("platform")
+
+    fireEvent.click(screen.getByLabelText("Show Platform agents"))
+    expect(toggleRoomExpanded).toHaveBeenCalledWith("platform")
   })
 
   it("renders team contact rows when provided", () => {

@@ -52,6 +52,7 @@ interface ChatPageShellProps {
   onEmployeeSessionsAvailable: (sessions: Array<{ id: string; title?: string; lastActivity?: string; createdAt?: string }>) => void
   onOrderComputed: (order: SidebarOrder) => void
   onContactEmployee: (name: string) => void
+  onSelectRoom: (roomId: string) => void
   onFileBack: () => void
   onSessionCreated: (newId: string, pending?: Message) => void
   onSessionMetaChange: (meta: { title?: string; employee?: string; engine?: string; engineSessionId?: string; model?: string }) => void
@@ -77,7 +78,7 @@ export function ChatPageShell(props: ChatPageShellProps) {
             >
               <div className="h-full w-[280px]">
                 <ChatSidebar
-                  selectedId={props.selectedId}
+                  selectedId={props.selectedRoomId ? roomSelectionId(props.selectedRoomId) : props.selectedId}
                   onSelect={props.onSelect}
                   onNewChat={props.onNewChat}
                   onDelete={props.onDeleteSession}
@@ -86,6 +87,7 @@ export function ChatPageShell(props: ChatPageShellProps) {
                   onEmployeeSessionsAvailable={props.onEmployeeSessionsAvailable}
                   onOrderComputed={props.onOrderComputed}
                   onContactEmployee={props.onContactEmployee}
+                  onSelectRoom={props.onSelectRoom}
                 />
               </div>
             </div>
@@ -126,6 +128,7 @@ export function ChatPageShell(props: ChatPageShellProps) {
                 onEmployeeSessionsAvailable={props.onEmployeeSessionsAvailable}
                 onOrderComputed={props.onOrderComputed}
                 onContactEmployee={props.onContactEmployee}
+                onSelectRoom={props.onSelectRoom}
               />
             </div>
 

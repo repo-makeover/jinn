@@ -239,6 +239,17 @@ function ChatPage() {
     [chatTabs]
   )
 
+  // Open a department project-room's merged read-only timeline. Mutually
+  // exclusive with a session selection; tabs are session-scoped so a room
+  // doesn't open one.
+  const handleSelectRoom = useCallback((roomId: string) => {
+    newChatIntentRef.current = false
+    setSelectedRoomId(roomId)
+    setSelectedId(null)
+    setSessionMeta(null)
+    setMobileView('chat')
+  }, [])
+
   // Auto-focus the input on any session change (sidebar click, tab switch,
   // keyboard nav, "+ New"). Effect runs after ChatPane (key=selectedId)
   // remounts, so the bumped focusTrigger reaches the fresh ChatInput.
@@ -567,6 +578,7 @@ function ChatPage() {
       onEmployeeSessionsAvailable={handleEmployeeSessionsAvailable}
       onOrderComputed={handleOrderComputed}
       onContactEmployee={contactEmployee}
+      onSelectRoom={handleSelectRoom}
       onFileBack={handleFileBack}
       onSessionCreated={handleSessionCreated}
       onSessionMetaChange={handleSessionMetaChange}
