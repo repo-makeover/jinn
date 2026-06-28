@@ -100,7 +100,7 @@ Routes are defined in `packages/web/src/main.tsx`:
 - `/logs`: runtime log inspection
 - `/limits`: usage/rate-limit visibility
 - `/org`: organization and employee configuration
-- `/settings`: gateway/engine/connector settings
+- `/settings`: gateway/engine/connector/email settings
 - `/skills`: local skill browsing and management
 - `/file`: file viewer
 
@@ -109,6 +109,13 @@ Routes are defined in `packages/web/src/main.tsx`:
 Jinn reads instance configuration from the active Jinn home, normally `~/.jinn`.
 Engine CLIs keep their own authentication state. Jinn does not replace engine
 sign-in flows; run each engine once and authenticate before routing work to it.
+
+### Email inboxes
+
+- Operators can configure up to 3 IMAP inboxes in `/settings`.
+- Jinn polls configured inboxes, caches normalized messages plus
+  attachments, and can auto-ingest new mail into COO-owned sessions.
+- Email is inbound-only in this version. It does not send or reply to email.
 
 ## Persistence And Files
 

@@ -137,6 +137,12 @@ export function loadConfig(): JinnConfig {
   config.gateway = normalizeGatewayConfig(config.gateway);
   config.boardWorker = normalizeBoardWorkerConfig(config.boardWorker);
   config.knowledge = normalizeKnowledgeConfig(config.knowledge);
+  config.email = config.email ?? {};
+  config.email = {
+    enabled: config.email.enabled ?? false,
+    pollIntervalSeconds: config.email.pollIntervalSeconds ?? 60,
+    inboxes: config.email.inboxes ?? [],
+  };
   return config;
 }
 
