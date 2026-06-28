@@ -177,6 +177,7 @@ export function isNetworkHost(host: string | undefined): boolean {
 
 export function authRequiredForRequest(method: string | undefined, pathname: string): boolean {
   if (pathname === "/api/status") return false;
+  if (pathname === "/api/healthz") return false;
   if (pathname === "/api/auth/state" && (method || "GET").toUpperCase() === "GET") return false;
   if (pathname === "/api/auth/bootstrap" && (method || "GET").toUpperCase() === "POST") return false;
   if (pathname === "/api/auth/pair" && (method || "GET").toUpperCase() === "POST") return false;

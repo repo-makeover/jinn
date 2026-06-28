@@ -23,6 +23,13 @@ vi.mock("../../shared/logger.js", () => ({
   },
 }));
 
+// Stub the sessions registry — runCronJob reads the resulting session's terminal
+// status to decide success vs error (R1). Tests control what getSession returns.
+let mockSessionStatus: { status: string; lastError?: string } | undefined = { status: "idle" };
+vi.mock("../../sessions/registry.js", () => ({
+  getSession: vi.fn(() => mockSessionStatus),
+}));
+
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
     id: "test-job",
@@ -70,6 +77,7 @@ function makeMockSessionManager(delayMs = 0) {
 describe("runCronJob — latency alerting", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockSessionStatus = { status: "idle" };
   });
 
   it("sends a Slack alert when job duration exceeds alertThresholdMs", async () => {
@@ -125,6 +133,27 @@ describe("runCronJob — latency alerting", () => {
     expect(appendRunLog).toHaveBeenCalledWith(
       "test-job",
       expect.objectContaining({ status: "success" }),
+    );
+  });
+
+  it("records status=error and alerts when the engine turn ends in error (R1)", async () => {
+    const { appendRunLog } = await import("../jobs.js");
+    mockSessionStatus = { status: "error", lastError: "engine refused the task" };
+    const connector = makeMockConnector();
+    const connectors = new Map<string, Connector>([["slack", connector]]);
+    const sessionManager = makeMockSessionManager(0); // route() resolves fine...
+    const config = makeConfig();
+
+    await runCronJob(makeJob(), sessionManager, config, connectors);
+
+    // ...but the session ended in error, so the run must NOT be logged as success.
+    expect(appendRunLog).toHaveBeenCalledWith(
+      "test-job",
+      expect.objectContaining({ status: "error", error: "engine refused the task" }),
+    );
+    expect(connector.sendMessage).toHaveBeenCalledWith(
+      { channel: "#cron-alerts" },
+      expect.stringContaining("failed"),
     );
   });
 
