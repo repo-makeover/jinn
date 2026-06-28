@@ -24,6 +24,7 @@ import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyD
 import type { SessionNotificationSink } from "./notification-sink.js";
 import { buildContext } from "./context.js";
 import { createScopedSessionToken } from "../gateway/auth.js";
+import { isUntrustedSource, wrapUntrustedMessage } from "./untrusted-input.js";
 import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
@@ -294,7 +295,11 @@ export class SessionManager {
       // If we previously switched engines while rate-limited, inject a sync transcript
       // so the original engine can resume with full context when it comes back online.
       const syncSinceIso = (session.transportMeta as any)?.claudeSyncSince;
-      let promptToRun = msg.text;
+      // H8: wrap attacker-influenced inbound text (connectors/email) in an
+      // untrusted-data envelope so the engine treats it as data, not instructions.
+      let promptToRun = isUntrustedSource(session.source)
+        ? wrapUntrustedMessage(msg.text, { user: msg.user, source: session.source })
+        : msg.text;
       const syncSinceMs = typeof syncSinceIso === "string" ? new Date(syncSinceIso).getTime() : NaN;
       const syncRequested = session.engine === "claude" && typeof syncSinceIso === "string" && Number.isFinite(syncSinceMs);
       if (syncRequested) {

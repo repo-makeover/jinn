@@ -4,6 +4,7 @@ import type { Employee, JinnConfig } from "../shared/types.js";
 import { JINN_HOME, ORG_DIR, CRON_JOBS, DOCS_DIR } from "../shared/paths.js";
 import { gatewayBaseUrl } from "../gateway/gateway-info.js";
 import { getAllParents } from "../gateway/org-hierarchy.js";
+import { INBOUND_MESSAGE_SAFETY_CONTEXT, isUntrustedSource } from "./untrusted-input.js";
 
 /**
  * Token budget strategy:
@@ -208,6 +209,18 @@ export function buildContext(opts: {
       tier: Tier.ESSENTIAL,
       marker: "## Internet evidence safety",
       content: buildInternetEvidenceSafetyContext(gatewayUrl),
+      summary: "", // always included
+    });
+  }
+
+  // ── ESSENTIAL: Inbound (connector/email) message trust boundary ──
+  // Sessions that can receive attacker-influenced messages get the rule that
+  // text inside [BEGIN/END UNTRUSTED MESSAGE] markers is data, not instructions.
+  if (!noToolEmployee && ((opts.connectors && opts.connectors.length > 0) || isUntrustedSource(opts.source))) {
+    sections.push({
+      tier: Tier.ESSENTIAL,
+      marker: "## Inbound message safety",
+      content: INBOUND_MESSAGE_SAFETY_CONTEXT,
       summary: "", // always included
     });
   }
