@@ -5,10 +5,14 @@ import type { IncomingMessage, Target } from "../../../shared/types.js";
 import { TMP_DIR } from "../../../shared/paths.js";
 import { redactText } from "../../../shared/redact.js";
 import { WhatsAppConnector } from "../../../connectors/whatsapp/index.js";
+import { getSession } from "../../../sessions/registry.js";
+import type { GatewayPrincipal } from "../../auth.js";
 import { readJsonBody } from "../../http-helpers.js";
 import type { ApiContext } from "../context.js";
 import { matchRoute } from "../match-route.js";
 import { badRequest, json, notFound } from "../responses.js";
+
+type RequestWithPrincipal = HttpRequest & { jinnPrincipal?: GatewayPrincipal };
 
 export async function handleConnectorRoutes(
   method: string,
@@ -140,6 +144,18 @@ export async function handleConnectorRoutes(
     if (!connector) {
       notFound(res);
       return true;
+    }
+    // H4: a session-scoped agent may only send through the connector its own
+    // session is bound to. This stops a prompt-injected agent from using the
+    // org's outbound channels to exfiltrate to an attacker-controlled connector.
+    // Operator (admin) and unbound (web/cron) sessions are unaffected.
+    const principal = (req as RequestWithPrincipal).jinnPrincipal;
+    if (principal?.kind === "session") {
+      const callerSession = getSession(principal.sessionId);
+      if (!callerSession || (callerSession.connector && callerSession.connector !== params.name)) {
+        json(res, { error: "This session may not send through that connector" }, 403);
+        return true;
+      }
     }
     const parsed = await readJsonBody(req, res);
     if (!parsed.ok) return true;

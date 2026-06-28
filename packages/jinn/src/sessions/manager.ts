@@ -23,6 +23,7 @@ import {
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
 import type { SessionNotificationSink } from "./notification-sink.js";
 import { buildContext } from "./context.js";
+import { createScopedSessionToken } from "../gateway/auth.js";
 import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
@@ -62,15 +63,19 @@ export class SessionManager {
   private connectorProvider: () => Map<string, Connector> = () => new Map();
   private notificationSink: SessionNotificationSink | undefined;
   private knowledgeSink: KnowledgeSink | undefined;
+  /** Gateway secret used to mint per-session scoped agent credentials. */
+  private apiToken: string | undefined;
 
   constructor(
     config: JinnConfig,
     engines: Map<string, Engine>,
     connectorNames: string[] = [],
+    apiToken?: string,
   ) {
     this.config = config;
     this.engines = engines;
     this.connectorNames = connectorNames;
+    this.apiToken = apiToken;
   }
 
   setConnectorProvider(provider: () => Map<string, Connector>): void {
@@ -250,6 +255,7 @@ export class SessionManager {
         connectors: this.connectorNames,
         config: this.config,
         sessionId: session.id,
+        sessionToken: this.apiToken ? createScopedSessionToken(session.id, this.apiToken) : undefined,
         channelName: (msg.transportMeta?.channelName as string) || undefined,
         hierarchy,
       });

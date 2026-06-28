@@ -257,7 +257,7 @@ export async function startGateway(config: JinnConfig): Promise<GatewayCleanup> 
   if (config.connectors?.telegram?.botToken) connectorNames.push("telegram");
   if (config.connectors?.whatsapp) connectorNames.push("whatsapp");
 
-  const sessionManager = new SessionManager(config, engines, connectorNames);
+  const sessionManager = new SessionManager(config, engines, connectorNames, gatewayAuthToken);
   let employeeRegistry = scanOrg();
   logger.info(`Loaded ${employeeRegistry.size} employee(s) from org directory`);
 

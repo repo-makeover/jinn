@@ -10,6 +10,8 @@ import {
   consumePairingCode,
   createAuthState,
   createPairingCode,
+  createPtyAccessToken,
+  createScopedSessionToken,
   ensureGatewayAuthToken,
   listAuthSessions,
   isLoopbackHost,
@@ -18,9 +20,11 @@ import {
   issuePairingCode,
   normalizePairingCode,
   revokeAuthSession,
+  scopedTokenForbidden,
   shouldRequireGatewayAuth,
   validateGatewayExposure,
   verifyAuthSession,
+  verifyScopedSessionToken,
 } from "../auth.js";
 
 function req(headers: Record<string, string | undefined>, remoteAddress = "127.0.0.1") {
@@ -168,6 +172,46 @@ describe("gateway auth", () => {
 
     revokeAuthSession(home, created.device.id);
     expect(verifyAuthSession(home, created.device.id, created.secret)).toBe(false);
+  });
+
+  it("mints and verifies scoped per-session agent tokens, rejecting forgery/expiry/cross-use", () => {
+    const secret = "gateway-secret-aaaaaaaaaaaaaaaaaaaaaaaa";
+    const token = createScopedSessionToken("sess-1", secret);
+    expect(verifyScopedSessionToken(token, secret)).toBe("sess-1");
+    // Wrong secret, garbage, and a (different-shaped) pty token are all rejected.
+    expect(verifyScopedSessionToken(token, "other-secret")).toBeNull();
+    expect(verifyScopedSessionToken("session:sess-1:9999999999999.deadbeef", secret)).toBeNull();
+    expect(verifyScopedSessionToken("garbage", secret)).toBeNull();
+    expect(verifyScopedSessionToken(createPtyAccessToken("sess-1", secret), secret)).toBeNull();
+    // Expired token rejected.
+    const expired = createScopedSessionToken("sess-1", secret, 1_000);
+    expect(verifyScopedSessionToken(expired, secret, 1_000 + 31 * 24 * 60 * 60 * 1000)).toBeNull();
+  });
+
+  it("authenticates admin (bearer) vs session-scoped (agent) principals distinctly", () => {
+    const secret = "tok-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    expect(authenticateGatewayRequest(req({ authorization: `Bearer ${secret}` }), secret).principal).toEqual({ kind: "admin" });
+    const scoped = createScopedSessionToken("sess-9", secret);
+    expect(authenticateGatewayRequest(req({ authorization: `Bearer ${scoped}` }), secret).principal).toEqual({ kind: "session", sessionId: "sess-9" });
+    expect(authenticateGatewayRequest(req({ authorization: "Bearer nope" }), secret).ok).toBe(false);
+  });
+
+  it("forbids the operator control plane to session-scoped agent tokens but allows their working set", () => {
+    // Forbidden: config / system / auth / logs / instances / connector bridge / org mutations.
+    expect(scopedTokenForbidden("PUT", "/api/config")).toBe(true);
+    expect(scopedTokenForbidden("GET", "/api/system/info")).toBe(true);
+    expect(scopedTokenForbidden("POST", "/api/auth/pair")).toBe(true);
+    expect(scopedTokenForbidden("GET", "/api/logs")).toBe(true);
+    expect(scopedTokenForbidden("GET", "/api/instances")).toBe(true);
+    expect(scopedTokenForbidden("POST", "/api/connectors/discord/incoming")).toBe(true);
+    expect(scopedTokenForbidden("POST", "/api/connectors/discord/proxy")).toBe(true);
+    expect(scopedTokenForbidden("PATCH", "/api/org/employees/ceo")).toBe(true);
+    // Allowed working set: spawn/message/read sessions, scoped send, read org/email/status.
+    expect(scopedTokenForbidden("POST", "/api/sessions")).toBe(false);
+    expect(scopedTokenForbidden("POST", "/api/sessions/abc/message")).toBe(false);
+    expect(scopedTokenForbidden("POST", "/api/connectors/slack/send")).toBe(false);
+    expect(scopedTokenForbidden("GET", "/api/org")).toBe(false);
+    expect(scopedTokenForbidden("GET", "/api/email/inboxes")).toBe(false);
   });
 
   it("keeps repeated local bootstrap sessions separately revocable", () => {

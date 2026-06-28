@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
-import { authenticateGatewayRequest, authRequiredForRequest, isAuthenticatedRequest, isLoopbackHost } from "../auth.js";
+import { authenticateGatewayRequest, authRequiredForRequest, isAuthenticatedRequest, isLoopbackHost, scopedTokenForbidden, type GatewayPrincipal } from "../auth.js";
 import { logger } from "../../shared/logger.js";
 import type { ApiContext } from "../api.js";
 import { attachPtyWebSocket } from "../pty-ws.js";
@@ -12,6 +12,8 @@ import type { Engine } from "../../shared/types.js";
 import type { PtyViewEngine } from "../../engines/pty-view-engine.js";
 import { serveStatic, setCorsHeaders } from "./http-static.js";
 import { isBlockedCrossSiteWrite, isHostAllowed, isPtyUpgradeAllowed } from "./request-guards.js";
+
+type RequestWithPrincipal = http.IncomingMessage & { jinnPrincipal?: GatewayPrincipal };
 
 function headerStr(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -86,6 +88,17 @@ export function createGatewayTransports({
       if (!auth.ok) {
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: auth.reason || "Unauthorized" }));
+        return;
+      }
+      // Expose the authenticated principal to route handlers (e.g. connector
+      // send uses it for per-session channel scoping).
+      (req as RequestWithPrincipal).jinnPrincipal = auth.principal;
+      // Agents (session-scoped tokens) are confined to their own working set —
+      // the operator control plane (config/system/auth/org-write/bridge) is off
+      // limits even though the token is otherwise authenticated.
+      if (auth.principal?.kind === "session" && scopedTokenForbidden(req.method, pathname)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "This endpoint is not available to session-scoped agents" }));
         return;
       }
     }
