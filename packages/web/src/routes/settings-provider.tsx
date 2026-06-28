@@ -28,6 +28,7 @@ interface SettingsContextValue {
   setEmojiOnly: (emojiOnly: boolean) => void
   setOperatorName: (name: string | null) => void
   setLanguage: (language: string) => void
+  setNavOrder: (order: string[]) => void
   setEmployeeOverride: (employeeId: string, override: EmployeeOverride) => void
   clearEmployeeOverride: (employeeId: string) => void
   getEmployeeDisplay: (employee: { name: string; emoji: string; id: string }) => EmployeeDisplay
@@ -35,7 +36,7 @@ interface SettingsContextValue {
 }
 
 const SettingsContext = createContext<SettingsContextValue>({
-  settings: { accentColor: null, portalName: null, portalSubtitle: null, portalEmoji: null, portalIcon: null, iconBgHidden: false, emojiOnly: false, operatorName: null, language: "English", employeeOverrides: {} },
+  settings: { ...DEFAULTS },
   setAccentColor: () => {},
   setPortalName: () => {},
   setPortalSubtitle: () => {},
@@ -45,6 +46,7 @@ const SettingsContext = createContext<SettingsContextValue>({
   setEmojiOnly: () => {},
   setOperatorName: () => {},
   setLanguage: () => {},
+  setNavOrder: () => {},
   setEmployeeOverride: () => {},
   clearEmployeeOverride: () => {},
   getEmployeeDisplay: (employee) => ({ emoji: employee.emoji }),
@@ -165,6 +167,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     [update],
   )
 
+  const setNavOrder = useCallback(
+    (order: string[]) => {
+      update((prev) => ({ ...prev, navOrder: order }))
+    },
+    [update],
+  )
+
   const setEmployeeOverride = useCallback(
     (employeeId: string, override: EmployeeOverride) => {
       update((prev) => {
@@ -215,6 +224,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       operatorName: null,
       language: "English",
       employeeOverrides: {},
+      navOrder: [],
     }))
   }, [update])
 
@@ -231,6 +241,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setEmojiOnly,
         setOperatorName,
         setLanguage,
+        setNavOrder,
         setEmployeeOverride,
         clearEmployeeOverride,
         getEmployeeDisplay,

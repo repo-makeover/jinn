@@ -14,6 +14,8 @@ export interface JinnSettings {
   operatorName: string | null
   language: string
   employeeOverrides: Record<string, EmployeeOverride>
+  /** Custom order of the left nav rail, as a list of item hrefs. [] = default order. */
+  navOrder: string[]
 }
 
 export const DEFAULTS: JinnSettings = {
@@ -27,6 +29,7 @@ export const DEFAULTS: JinnSettings = {
   operatorName: null,
   language: "English",
   employeeOverrides: {},
+  navOrder: [],
 }
 
 const STORAGE_KEY = 'jinn-settings'
