@@ -1,10 +1,16 @@
 import React from "react"
 import type { Employee } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { ChevronDown, Clock3, Layers } from "lucide-react"
+import { Archive as ArchiveIcon, ChevronDown, Clock3, EllipsisVertical, Layers } from "lucide-react"
 import { formatTime } from "./sidebar-session-helpers"
 import { roomSelectionId } from "@/lib/rooms/grouping"
 import type { ViewMode } from "./sidebar-types"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   ContactRow,
   EmployeeRow,
@@ -16,6 +22,8 @@ import {
   type SidebarEmployeeRowProps,
   type SidebarSharedRowProps,
 } from "./sidebar-row-components"
+import type { ArchiveDialogTarget } from "./archive-dialog"
+import type { Session } from "./sidebar-types"
 import type { VirtualItem } from "./sidebar-view-model"
 
 interface SidebarListSurfaceProps {
@@ -42,7 +50,10 @@ interface SidebarListSurfaceProps {
   toggleCronCollapsed: () => void
   cronTotal: number
   cronSessionsLength: number
+  cronSessions: Session[]
+  setArchiveTarget: (target: ArchiveDialogTarget | null) => void
   contactableEmployees: Employee[]
+  managerEmployees: Employee[]
   onContactEmployee?: (name: string) => void
   scrollContainerRef: React.RefObject<HTMLDivElement | null>
   handleListScroll: (event: React.UIEvent<HTMLDivElement>) => void
@@ -76,7 +87,10 @@ export function SidebarListSurface({
   toggleCronCollapsed,
   cronTotal,
   cronSessionsLength,
+  cronSessions,
+  setArchiveTarget,
   contactableEmployees,
+  managerEmployees,
   onContactEmployee,
   scrollContainerRef,
   handleListScroll,
@@ -86,14 +100,41 @@ export function SidebarListSurface({
   measureElement,
 }: SidebarListSurfaceProps) {
   const cronHeader = (
-    <button
-      onClick={toggleCronCollapsed}
-      className="flex w-full items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-[var(--fill-tertiary)]"
-    >
-      <span className={SECTION_LABEL_CLASS}>Scheduled</span>
-      <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{cronTotal}</span>
-      <ChevronDown className={cn("size-3.5 shrink-0 text-[var(--text-quaternary)] transition-transform", cronCollapsed && "-rotate-90")} />
-    </button>
+    <div className="group/cron flex w-full items-center transition-colors hover:bg-[var(--fill-tertiary)]">
+      <button
+        onClick={toggleCronCollapsed}
+        className="flex min-w-0 flex-1 items-center gap-2 px-4 py-2 pr-1 text-left"
+      >
+        <span className={SECTION_LABEL_CLASS}>Scheduled</span>
+        <span className={cn("ml-auto", SECTION_COUNT_CLASS)}>{cronTotal}</span>
+        <ChevronDown className={cn("size-3.5 shrink-0 text-[var(--text-quaternary)] transition-transform", cronCollapsed && "-rotate-90")} />
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            onClick={(event) => event.stopPropagation()}
+            aria-label="Scheduled actions"
+            className="mr-1 flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/cron:lg:flex group-has-[[data-state=open]]/cron:lg:flex"
+          >
+            <EllipsisVertical className="size-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onClick={() => setArchiveTarget({
+              kind: "scheduled",
+              title: "Scheduled",
+              sessionIds: cronSessions.map((session) => session.id),
+              sourceRef: "scheduled",
+              sessions: cronSessions,
+            })}
+          >
+            <ArchiveIcon />
+            Archive past runs...
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   )
 
   const renderItem = (item: VirtualItem): React.ReactNode => {
@@ -174,7 +215,7 @@ export function SidebarListSurface({
         return (
           <div
             className={cn(
-              "relative flex w-full items-center border-l-2 transition-colors",
+              "group/room relative flex w-full items-center border-l-2 transition-colors",
               isActive
                 ? "border-l-[var(--accent)] bg-[var(--fill-secondary)]"
                 : "border-l-transparent hover:bg-[var(--fill-tertiary)]",
@@ -216,6 +257,31 @@ export function SidebarListSurface({
               </span>
               <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-quaternary)]">{room.sessionCount}</span>
             </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  onClick={(event) => event.stopPropagation()}
+                  aria-label={`${room.name} actions`}
+                  className="mr-1 flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground lg:size-7 lg:hidden group-hover/room:lg:flex group-has-[[data-state=open]]/room:lg:flex"
+                >
+                  <EllipsisVertical className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => setArchiveTarget({
+                    kind: "room",
+                    title: room.name,
+                    sessionIds: room.sessions.map((session) => session.id),
+                    sourceRef: room.id,
+                    sessions: room.sessions as unknown as Session[],
+                  })}
+                >
+                  <ArchiveIcon />
+                  Archive room...
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )
       }
@@ -298,6 +364,18 @@ export function SidebarListSurface({
             ))}
           </>
         )}
+
+        {/* Managers — quick access to leadership ABOVE Team. A manager may also
+            appear in Team below (intentional dup); this section is always present
+            regardless of whether they have sessions. */}
+        {!loading && onContactEmployee && managerEmployees.length > 0 ? (
+          <div className="mt-3 pt-1">
+            <SectionLabel label="Managers" count={managerEmployees.length} />
+            {managerEmployees.map((emp) => (
+              <ContactRow key={emp.name} emp={emp} onContact={onContactEmployee} />
+            ))}
+          </div>
+        ) : null}
 
         {!loading && onContactEmployee && contactableEmployees.length > 0 ? (
           <div className="mt-3 pt-1">

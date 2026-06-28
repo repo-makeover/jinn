@@ -46,6 +46,7 @@ import {
 import type { FlatItem, Session, SidebarOrder, ViewMode } from "./sidebar-types"
 import {
   buildContactableEmployees,
+  buildManagerEmployees,
   buildSidebarCollections,
   buildSidebarOrder,
   buildVirtualItems,
@@ -360,6 +361,16 @@ export function ChatSidebar({
     employeeData,
     portalSlug,
   }), [search, pinnedFlat, unpinnedFlat, orgEmployees, employeeData, portalSlug])
+
+  // Managers + executives — a quick-access roster rendered ABOVE Team. Shown
+  // regardless of whether they already have sessions (so all leadership is one
+  // tap away); they may also appear in Team. Executives first, then by name.
+  // Hidden during search (the flat results span everything already).
+  const managerEmployees = useMemo(() => buildManagerEmployees({
+    search,
+    orgEmployees,
+    portalSlug,
+  }), [search, orgEmployees, portalSlug])
 
   const allFlatIds = useMemo(() => buildSidebarOrder({
     searching,
@@ -704,7 +715,10 @@ export function ChatSidebar({
         toggleCronCollapsed={toggleCronCollapsed}
         cronTotal={cronTotal}
         cronSessionsLength={cronSessions.length}
+        cronSessions={cronSessions}
+        setArchiveTarget={setArchiveTarget}
         contactableEmployees={contactableEmployees}
+        managerEmployees={managerEmployees}
         onContactEmployee={onContactEmployee}
         scrollContainerRef={scrollContainerRef}
         handleListScroll={handleListScroll}
