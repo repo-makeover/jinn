@@ -312,6 +312,12 @@ export function validateEmployeeUpdate(
     if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
       return { ok: false, error: "cliFlags must be an array of strings" };
     }
+    // Flags are spread into engine argv; reject control chars / newlines so a
+    // malformed entry cannot smuggle additional arguments past review.
+    // eslint-disable-next-line no-control-regex
+    if ((v as string[]).some((x) => /[\u0000-\u001f]/.test(x))) {
+      return { ok: false, error: "cliFlags must not contain control characters" };
+    }
     updates.cliFlags = v as string[];
   }
 
@@ -401,6 +407,10 @@ export function validateEmployeeCreate(
 
   const department = typeof body.department === "string" ? body.department.trim() : "";
   if (!department) return { ok: false, error: "department must be a non-empty string" };
+  // `department` becomes a directory under ORG_DIR; forbid path traversal / absolute paths.
+  if (path.isAbsolute(department) || department.split(/[/\\]/).some((seg) => seg === "..")) {
+    return { ok: false, error: "department must be a relative path without '..'" };
+  }
 
   const persona = typeof body.persona === "string" ? body.persona.trim() : "";
   if (!persona) return { ok: false, error: "persona must be a non-empty string" };
@@ -544,6 +554,15 @@ export function updateEmployeeYaml(
 
 export function createEmployeeYaml(employee: EmployeeCreate): boolean {
   const departmentDir = path.join(ORG_DIR, employee.department);
+  // Defense in depth: `department` becomes a directory under ORG_DIR. Never let a
+  // traversal (`../`) or absolute path escape ORG_DIR, even if upstream
+  // validation is bypassed. (createEmployee already rejects such departments.)
+  const resolvedRoot = path.resolve(ORG_DIR);
+  const resolvedDir = path.resolve(departmentDir);
+  if (resolvedDir !== resolvedRoot && !resolvedDir.startsWith(resolvedRoot + path.sep)) {
+    logger.warn(`Refusing to create employee outside org dir (department="${employee.department}")`);
+    return false;
+  }
   const filePath = path.join(departmentDir, `${employee.name}.yaml`);
   if (fs.existsSync(filePath)) return false;
 

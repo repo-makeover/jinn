@@ -59,6 +59,23 @@ function validateString(problems: string[], path: string, value: unknown): void 
   if (typeof value !== "string") problems.push(`${path} must be a string (got ${typeof value})`);
 }
 
+// Defense-in-depth for config values that become an executed program (engine
+// `bin`, MCP server `command`). Config writes are operator-only (gateway auth +
+// session tokens are denied /api/config), but we still reject control chars /
+// newlines so a malformed or CSRF-shaped write cannot smuggle a multi-line or
+// terminator-laden program path past review.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+function validateExecString(problems: string[], path: string, value: unknown): void {
+  if (typeof value !== "string") {
+    problems.push(`${path} must be a string (got ${typeof value})`);
+    return;
+  }
+  if (CONTROL_CHARS.test(value)) {
+    problems.push(`${path} must not contain control characters or newlines`);
+  }
+}
+
 function validateBoolean(problems: string[], path: string, value: unknown): void {
   if (typeof value !== "boolean") problems.push(`${path} must be a boolean (got ${typeof value})`);
 }
@@ -123,7 +140,7 @@ function validateEngineConfig(
     return null;
   }
   pushUnknownKeys(problems, value, allowed, path);
-  if (value.bin !== undefined) validateString(problems, `${path}.bin`, value.bin);
+  if (value.bin !== undefined) validateExecString(problems, `${path}.bin`, value.bin);
   if (value.model !== undefined) validateString(problems, `${path}.model`, value.model);
   if (value.effortLevel !== undefined) validateString(problems, `${path}.effortLevel`, value.effortLevel);
   if (value.childEffortOverride !== undefined) validateString(problems, `${path}.childEffortOverride`, value.childEffortOverride);
@@ -512,7 +529,7 @@ function validateMcp(
         }
         pushUnknownKeys(problems, server, ["enabled", "command", "args", "env", "type", "url", "headers"], `mcp.custom.${name}`);
         if (server.enabled !== undefined) validateBoolean(problems, `mcp.custom.${name}.enabled`, server.enabled);
-        if (server.command !== undefined) validateString(problems, `mcp.custom.${name}.command`, server.command);
+        if (server.command !== undefined) validateExecString(problems, `mcp.custom.${name}.command`, server.command);
         if (server.args !== undefined) validateStringArray(problems, `mcp.custom.${name}.args`, server.args);
         if (server.type !== undefined) validateString(problems, `mcp.custom.${name}.type`, server.type);
         if (server.url !== undefined) validateString(problems, `mcp.custom.${name}.url`, server.url);

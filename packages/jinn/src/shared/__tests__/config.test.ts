@@ -89,6 +89,21 @@ describe("validateConfigShape", () => {
     expect(validateConfigShape({ engines: { claude: { bin: "claude", model: "opus" } } })).toEqual([]);
   });
 
+  it("rejects control characters / newlines in an engine bin (executed-program defense-in-depth)", () => {
+    const problems = validateConfigShape({ engines: { claude: { bin: "claude\n/tmp/evil", model: "opus" } } });
+    expect(problems.some((p) => p.includes("engines.claude.bin") && p.includes("control"))).toBe(true);
+    // A normal path-bearing bin override is still allowed (legit cross-machine resolution).
+    expect(validateConfigShape({ engines: { claude: { bin: "/usr/local/bin/claude", model: "opus" } } })).toEqual([]);
+  });
+
+  it("rejects control characters in a custom MCP server command", () => {
+    const problems = validateConfigShape({
+      engines: { claude: { bin: "claude", model: "opus" } },
+      mcp: { custom: { evil: { command: "/bin/sh\nrm -rf /" } } },
+    });
+    expect(problems.some((p) => p.includes("mcp.custom.evil.command") && p.includes("control"))).toBe(true);
+  });
+
   it("accepts a full default-shaped config", () => {
     expect(validateConfigShape({
       jinn: { version: "1.0.0" },
