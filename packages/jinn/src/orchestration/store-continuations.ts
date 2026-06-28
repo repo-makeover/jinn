@@ -197,8 +197,11 @@ export function getQueuePauseStateFromDb(db: Database.Database): QueuePauseState
       pauseReason: typeof parsed.pauseReason === "string" ? parsed.pauseReason : null,
     };
   } catch {
-    logger.warn("orchestration DB has corrupt queue pause metadata; treating queue as unpaused");
-    return { queuePaused: false, pausedAt: null, pauseReason: null };
+    // Fail closed: a control flag we cannot read must default to the SAFE state
+    // (paused), not resume dispatching an agent fleet against the operator's
+    // deliberate pause. Surface it via the pause reason.
+    logger.error("orchestration DB has corrupt queue pause metadata; failing closed (treating queue as PAUSED)");
+    return { queuePaused: true, pausedAt: null, pauseReason: "corrupt pause metadata (failed closed)" };
   }
 }
 

@@ -7,8 +7,8 @@ import type {
 } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import {
+  claimPendingExternalOutboxItems,
   enqueueExternalOutboxItem,
-  listPendingExternalOutboxItems,
   markExternalOutboxDelivered,
   markExternalOutboxFailed,
 } from "../sessions/registry.js";
@@ -45,10 +45,22 @@ export async function flushKnowledgeOutboxBatch(input: {
   retryBaseDelayMs: number;
   retryMaxDelayMs: number;
 }): Promise<{ attempted: number; delivered: number; failed: number }> {
-  const items = listPendingExternalOutboxItems(input.batchSize);
+  // Claim the rows (pending -> sending) before emitting so a concurrent relay
+  // can't pick the same items and double-deliver.
+  const items = claimPendingExternalOutboxItems(input.batchSize);
   if (items.length === 0) return { attempted: 0, delivered: 0, failed: 0 };
 
-  const result = await input.sink.emit(items.map((item) => item.envelope));
+  let result: Awaited<ReturnType<typeof input.sink.emit>>;
+  try {
+    result = await input.sink.emit(items.map((item) => item.envelope));
+  } catch (err) {
+    // The sink call itself failed — release every claimed item back to pending
+    // (with backoff) so they retry next cycle instead of stranding in 'sending'.
+    const message = err instanceof Error ? err.message : String(err);
+    const retryAt = nextAttemptAt(1, input.retryBaseDelayMs, input.retryMaxDelayMs);
+    for (const item of items) markExternalOutboxFailed(item.id, message, retryAt);
+    throw err;
+  }
   let delivered = 0;
   let failed = 0;
   for (let index = 0; index < items.length; index += 1) {

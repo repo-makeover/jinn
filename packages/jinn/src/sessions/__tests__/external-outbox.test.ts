@@ -65,4 +65,26 @@ describe("external outbox registry", () => {
       remoteId: "remote-1",
     }));
   });
+
+  it("claims items once (no double-claim) and caps retries to a terminal failed state (R7)", () => {
+    const item = reg.enqueueExternalOutboxItem({
+      sinkName: "noop",
+      envelope: {
+        envelopeId: "env-claim", producer: "jinn", schemaVersion: "1",
+        topic: "jinn.checkpoint.decision.v1", occurredAt: "2026-06-26T00:00:00.000Z",
+        idempotencyKey: "idem-claim", partitionKey: null, workspace: null, actor: null,
+        sourceRef: "web:test", payload: { kind: "checkpoint" },
+      },
+    });
+
+    // First claim picks it (pending -> sending); a second concurrent claim does not.
+    expect(reg.claimPendingExternalOutboxItems(10).map((i) => i.id)).toContain(item.id);
+    expect(reg.claimPendingExternalOutboxItems(10).map((i) => i.id)).not.toContain(item.id);
+
+    // Failing past the attempt cap moves it to terminal 'failed' (no more retries).
+    const past = "2000-01-01T00:00:00.000Z";
+    for (let i = 0; i < 10; i += 1) reg.markExternalOutboxFailed(item.id, "sink down", past);
+    expect(reg.getExternalOutboxItem(item.id)?.status).toBe("failed");
+    expect(reg.claimPendingExternalOutboxItems(10).map((i) => i.id)).not.toContain(item.id);
+  });
 });

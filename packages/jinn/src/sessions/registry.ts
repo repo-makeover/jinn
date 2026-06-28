@@ -38,6 +38,7 @@ export {
   type MessageSearchResult,
 } from './registry/search.js';
 export {
+  claimPendingExternalOutboxItems,
   enqueueExternalOutboxItem,
   getExternalOutboxItem,
   listExternalOutboxItems,
@@ -59,6 +60,7 @@ export {
   duplicateSession,
   getEmployeeSpendSince,
   getInterruptedSessions,
+  getOrCreateSessionByKey,
   getSession,
   getSessionBySessionKey,
   getSessionBySourceRef,

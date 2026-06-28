@@ -2,7 +2,10 @@ import { v4 as uuidv4 } from "uuid";
 import type { ExternalKnowledgeEnvelope } from "../../shared/types.js";
 import { initDb } from "./core.js";
 
-export type ExternalOutboxStatus = "pending" | "delivered";
+export type ExternalOutboxStatus = "pending" | "sending" | "delivered" | "failed";
+
+/** After this many delivery attempts an item is moved to the terminal 'failed' state. */
+export const EXTERNAL_OUTBOX_MAX_ATTEMPTS = 10;
 
 export interface ExternalOutboxItem {
   id: string;
@@ -85,6 +88,37 @@ export function listPendingExternalOutboxItems(limit = 25): ExternalOutboxItem[]
   return rows.map(rowToExternalOutboxItem);
 }
 
+/**
+ * Atomically claim eligible pending items for delivery (pending -> sending) so a
+ * second concurrent relay cannot pick the same rows and double-deliver. Returns
+ * only the rows this caller actually claimed. better-sqlite3 transactions are
+ * synchronous, so the claim is race-free against another in-process relay.
+ */
+export function claimPendingExternalOutboxItems(limit = 25): ExternalOutboxItem[] {
+  const db = initDb();
+  const now = new Date().toISOString();
+  const run = db.transaction(() => {
+    const rows = db.prepare(`
+      SELECT *
+      FROM external_outbox
+      WHERE status = 'pending'
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).all(now, limit) as Record<string, unknown>[];
+    const claim = db.prepare("UPDATE external_outbox SET status = 'sending', last_attempt_at = ? WHERE id = ? AND status = 'pending'");
+    const claimed: ExternalOutboxItem[] = [];
+    for (const row of rows) {
+      if (claim.run(now, row.id as string).changes === 1) {
+        row.status = "sending";
+        claimed.push(rowToExternalOutboxItem(row));
+      }
+    }
+    return claimed;
+  });
+  return run();
+}
+
 export function markExternalOutboxDelivered(id: string, remoteId?: string | null): ExternalOutboxItem | undefined {
   const db = initDb();
   const now = new Date().toISOString();
@@ -95,22 +129,30 @@ export function markExternalOutboxDelivered(id: string, remoteId?: string | null
         remote_id = ?,
         last_error = NULL,
         next_attempt_at = NULL
-    WHERE id = ?
+    WHERE id = ? AND status IN ('sending', 'pending')
   `).run(now, remoteId ?? null, id);
   return getExternalOutboxItem(id);
 }
 
-export function markExternalOutboxFailed(id: string, error: string, nextAttemptAt: string): ExternalOutboxItem | undefined {
+export function markExternalOutboxFailed(
+  id: string,
+  error: string,
+  nextAttemptAt: string,
+  maxAttempts: number = EXTERNAL_OUTBOX_MAX_ATTEMPTS,
+): ExternalOutboxItem | undefined {
   const db = initDb();
   const now = new Date().toISOString();
+  // Release the claim back to 'pending' for retry, or move to terminal 'failed'
+  // once the attempt cap is reached (no more unbounded retry of a poison item).
   db.prepare(`
     UPDATE external_outbox
     SET attempt_count = attempt_count + 1,
         last_attempt_at = ?,
         last_error = ?,
-        next_attempt_at = ?
+        next_attempt_at = ?,
+        status = CASE WHEN attempt_count + 1 >= ? THEN 'failed' ELSE 'pending' END
     WHERE id = ?
-  `).run(now, error, nextAttemptAt, id);
+  `).run(now, error, nextAttemptAt, maxAttempts, id);
   return getExternalOutboxItem(id);
 }
 

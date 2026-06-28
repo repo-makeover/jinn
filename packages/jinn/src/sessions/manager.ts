@@ -14,6 +14,7 @@ import {
   accumulateSessionCost,
   createSession,
   deleteSession,
+  getOrCreateSessionByKey,
   getSession,
   getSessionBySessionKey,
   getMessages,
@@ -110,24 +111,26 @@ export class SessionManager {
   async route(msg: IncomingMessage, connector: Connector, opts: RouteOptions = {}): Promise<{ sessionId: string } | void> {
     if (await this.handleCommand(msg, connector)) return;
 
-    let session = getSessionBySessionKey(msg.sessionKey);
-    if (!session) {
-      session = createSession({
-        engine: opts.engine ?? opts.employee?.engine ?? this.config.engines.default,
-        source: msg.source,
-        sourceRef: msg.sessionKey,
-        connector: msg.connector,
-        sessionKey: msg.sessionKey,
-        replyContext: msg.replyContext,
-        messageId: msg.messageId,
-        transportMeta: msg.transportMeta,
-        employee: opts.employee?.name ?? undefined,
-        model: opts.model ?? opts.employee?.model ?? undefined,
-        effortLevel: opts.employee?.effortLevel ?? undefined,
-        title: opts.title,
-        prompt: msg.text,
-        portalName: this.config.portal?.portalName,
-      });
+    // Atomic lookup-or-create: prevents two concurrent inbound messages on the
+    // same thread from each creating a session (split-brain). See registry.
+    const { session: resolved, created } = getOrCreateSessionByKey(msg.sessionKey, {
+      engine: opts.engine ?? opts.employee?.engine ?? this.config.engines.default,
+      source: msg.source,
+      sourceRef: msg.sessionKey,
+      connector: msg.connector,
+      sessionKey: msg.sessionKey,
+      replyContext: msg.replyContext,
+      messageId: msg.messageId,
+      transportMeta: msg.transportMeta,
+      employee: opts.employee?.name ?? undefined,
+      model: opts.model ?? opts.employee?.model ?? undefined,
+      effortLevel: opts.employee?.effortLevel ?? undefined,
+      title: opts.title,
+      prompt: msg.text,
+      portalName: this.config.portal?.portalName,
+    });
+    let session = resolved;
+    if (created) {
       logger.info(
         `Created new session ${session.id} for ${msg.sessionKey}` +
         (opts.employee ? ` (employee: ${opts.employee.name})` : ""),

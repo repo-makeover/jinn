@@ -127,6 +127,25 @@ export function getSessionBySessionKey(sessionKey: string): Session | undefined 
   return row ? rowToSession(row) : undefined;
 }
 
+/**
+ * Atomic lookup-or-create keyed on sessionKey. better-sqlite3 transactions run
+ * synchronously and serialize at the JS level, so two concurrent inbound
+ * messages on the same thread cannot both observe "no session" and both create
+ * one — preventing split-brain duplicate sessions (the route() check-then-act race).
+ */
+export function getOrCreateSessionByKey(
+  sessionKey: string,
+  createOpts: CreateSessionOpts & { prompt?: string; portalName?: string },
+): { session: Session; created: boolean } {
+  const db = initDb();
+  const run = db.transaction(() => {
+    const existing = getSessionBySessionKey(sessionKey);
+    if (existing) return { session: existing, created: false };
+    return { session: createSession(createOpts), created: true };
+  });
+  return run();
+}
+
 export interface UpdateSessionFields {
   engine?: string;
   engineSessionId?: string | null;
