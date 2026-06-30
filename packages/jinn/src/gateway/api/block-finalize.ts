@@ -42,6 +42,10 @@ export function shouldPersistFinalAssistantMessage(options: {
   return options.resultText.trim().length > 0 || options.finalBlockCount > 0;
 }
 
+export function formatEngineErrorAssistantMessage(error: string): string {
+  return `⛔ ${error}`;
+}
+
 export function finalBlocksForAssistantMessage(blocks: ChatBlock[], preservedBlockIds: Set<string>): ChatBlock[] {
   if (preservedBlockIds.size === 0) return blocks;
   return blocks.filter((block) => !preservedBlockIds.has(block.id));

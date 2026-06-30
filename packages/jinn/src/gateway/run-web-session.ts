@@ -30,6 +30,7 @@ import { deliverConnectorReply } from "./connector-reply.js";
 import { isTurnSuperseded, clearSupersededTurnMeta } from "./session-turn-state.js";
 import { resultAlreadyInStreamedBlocks, shouldPreserveStreamedBlocks } from "./streamed-blocks.js";
 import type { ApiContext } from "./api/context.js";
+import { formatEngineErrorAssistantMessage } from "./api/block-finalize.js";
 import { parseLeaseTransportMeta } from "../orchestration/lease-meta.js";
 import { emitSessionSummaryBestEffort, knowledgeRelayOptions } from "../knowledge/outbox-service.js";
 import { positiveNumberOr, resolveTurnStallWatchdogConfig, shouldRetrySameEngineAfterStall } from "./turn-stall-policy.js";
@@ -697,6 +698,8 @@ export async function runWebSession(
 
     if (result.result && !resultAlreadyPersisted && !quietPreempted) {
       insertMessage(currentSession.id, "assistant", result.result);
+    } else if (!quietPreempted && result.error && !result.result.trim()) {
+      insertMessage(currentSession.id, "assistant", formatEngineErrorAssistantMessage(result.error));
     }
 
     if (currentSession.source === "talk") {

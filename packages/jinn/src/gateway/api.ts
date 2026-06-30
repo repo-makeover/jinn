@@ -26,7 +26,7 @@ import { handleStatusRoutes } from "./api/routes/status.js";
 import { handleSystemRoutes } from "./api/routes/system.js";
 
 export type { ApiContext } from "./api/context.js";
-export { normalizeBlockDeltaForTurn, shouldPersistFinalAssistantMessage, finalBlocksForAssistantMessage } from "./api/block-finalize.js";
+export { normalizeBlockDeltaForTurn, shouldPersistFinalAssistantMessage, formatEngineErrorAssistantMessage, finalBlocksForAssistantMessage } from "./api/block-finalize.js";
 export { matchRoute } from "./api/match-route.js";
 export { serializeSession, isSessionLiveRunning } from "./api/serialize-session.js";
 export { resumePendingWebQueueItems } from "./api/session-dispatch.js";
